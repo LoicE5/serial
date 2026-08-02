@@ -1,4 +1,8 @@
 import { and, eq, inArray } from "drizzle-orm";
+import {
+  FEED_ADD_MAX_DISCOVERED_FEEDS,
+  FEED_INGESTION_CONCURRENCY,
+} from "@serial/bookmark-capture";
 import { checkFeedItemIsVerticalFromUrl } from "../checkFeedItemIsVertical";
 import { feedItems, feeds } from "../db/schema";
 import { buildConflictUpdateColumns } from "../db/utils";
@@ -16,6 +20,7 @@ import {
 import { computeItemHash } from "./hash";
 import { boundFeedItems } from "./feedBounds";
 import { readFeedHttp } from "./feedHttp";
+import { isAuthorizedTestRssUrl } from "./testRssOrigin";
 import type { ApplicationFeedItem, DatabaseFeed } from "../db/schema";
 import type { db as Database } from "../db";
 import type {
@@ -33,13 +38,14 @@ import { workerPool } from "~/lib/workerPool";
 
 /** How long to back off a feed after a fetch error, to avoid cascading retries. */
 const ERROR_BACKOFF_MS = 60 * 60 * 1000; // 1 hour
-export const FEED_INGESTION_CONCURRENCY = 4;
-const MAX_DISCOVERED_FEED_URLS = 8;
+export { FEED_INGESTION_CONCURRENCY } from "@serial/bookmark-capture";
 const MAX_CHANNEL_DISCOVERY_BYTES = 5 * 1024 * 1024;
 
 export type FetchFeedsStatus = "success" | "empty" | "error" | "skipped";
 
 function assertValidFeedUrl(url: string) {
+  if (isAuthorizedTestRssUrl(url)) return;
+
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -106,7 +112,7 @@ export async function fetchNewFeedDetails(
 
   const feedDetailList: NewFeedDetails[] = [];
   for await (const feedDetails of workerPool(
-    urls.slice(0, MAX_DISCOVERED_FEED_URLS),
+    urls.slice(0, FEED_ADD_MAX_DISCOVERED_FEEDS),
     FEED_INGESTION_CONCURRENCY,
     async (feedUrl) => {
       assertValidFeedUrl(feedUrl);

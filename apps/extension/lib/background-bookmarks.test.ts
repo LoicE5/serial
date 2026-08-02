@@ -1,6 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { EXTENSION_FEED_ADD_REQUEST_TIMEOUT_MS } from "@serial/bookmark-capture";
 
 import {
+  handleBookmarkMessage,
   isConnectedInstancePage,
   parseWorkspace,
 } from "./background-bookmarks";
@@ -61,6 +63,35 @@ describe("extension Bookmark Feed discovery", () => {
     expect(workspace?.feeds).toEqual(serverFeeds);
   });
 
+  it("uses the complete bounded Feed-add timeout without changing ordinary requests", async () => {
+    const fetchFromInstance = vi.fn(() =>
+      Promise.resolve(Response.json({}, { status: 201 })),
+    );
+
+    await handleBookmarkMessage(
+      { type: "bookmark.add-feed", url: "https://example.com/feed.xml" },
+      {
+        readStoredSession: vi.fn(() =>
+          Promise.resolve({
+            version: 1,
+            instance: "https://serial.example",
+            token: "serial_ext_test",
+            expiresAt: Date.now() + 60_000,
+            user: { id: "user-one", name: "User", email: "u@example.com" },
+          } as never),
+        ),
+        clearSession: vi.fn(),
+        fetchFromInstance,
+      },
+    );
+
+    expect(fetchFromInstance).toHaveBeenCalledWith(
+      "https://serial.example/api/extension/feeds",
+      expect.objectContaining({ method: "POST" }),
+      { timeoutMs: EXTENSION_FEED_ADD_REQUEST_TIMEOUT_MS },
+    );
+  });
+
   it("retains page-declared Feeds for an older compatible response", () => {
     const localFeeds = [
       { url: "https://example.com/local.xml", title: "Local Feed" },
@@ -69,5 +100,17 @@ describe("extension Bookmark Feed discovery", () => {
     expect(parseWorkspace(workspacePayload(), localFeeds)?.feeds).toEqual(
       localFeeds,
     );
+  });
+
+  it("rejects an unknown capture failure reason", () => {
+    expect(
+      parseWorkspace(
+        {
+          ...workspacePayload(),
+          capture: { status: "unavailable", reason: "future_reason" },
+        },
+        [],
+      ),
+    ).toBeNull();
   });
 });

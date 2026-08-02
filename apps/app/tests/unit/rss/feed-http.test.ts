@@ -1,7 +1,20 @@
 import { createServer } from "node:http";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import type { Server } from "node:http";
 import { readFeedHttp } from "~/server/rss/feedHttp";
+
+const LOCAL_HTTP_DEPENDENCIES = {
+  validateTarget: (value: string) => new URL(value),
+  resolveAddresses: () =>
+    Promise.resolve([{ address: "127.0.0.1", family: 4 }]),
+};
+
+function readLocalFeedHttp(
+  url: string,
+  options: Parameters<typeof readFeedHttp>[1] = {},
+) {
+  return readFeedHttp(url, options, LOCAL_HTTP_DEPENDENCIES);
+}
 
 let server: Server;
 let baseUrl: string;
@@ -81,39 +94,72 @@ afterAll(() => {
   server.close();
 });
 
+afterEach(() => {
+  delete process.env.SERIAL_TEST_RSS_ALLOW_LOOPBACK;
+  delete process.env.SERIAL_TEST_RSS_ORIGIN;
+});
+
 describe("readFeedHttp", () => {
+  it("rejects private-network targets before opening a connection", async () => {
+    await expect(readFeedHttp("http://127.0.0.1/feed.xml")).rejects.toThrow(
+      "not public",
+    );
+  });
+
+  it("rejects a configured loopback RSS origin without the test-runner capability", async () => {
+    process.env.SERIAL_TEST_RSS_ORIGIN = baseUrl;
+
+    await expect(readFeedHttp(`${baseUrl}/feed`)).rejects.toThrow(
+      "not allowed",
+    );
+  });
+
+  it("allows only the exact loopback RSS origin authorized by the test runner", async () => {
+    process.env.SERIAL_TEST_RSS_ALLOW_LOOPBACK = "1";
+    process.env.SERIAL_TEST_RSS_ORIGIN = baseUrl;
+
+    await expect(readFeedHttp(`${baseUrl}/feed`)).resolves.toMatchObject({
+      status: 200,
+      text: "<rss />",
+    });
+    await expect(readFeedHttp("http://127.0.0.1:9/feed.xml")).rejects.toThrow(
+      "not allowed",
+    );
+    await expect(readFeedHttp("not a URL")).rejects.toThrow("invalid");
+  });
+
   it("rejects a chunked response once its body exceeds the byte budget", async () => {
     await expect(
-      readFeedHttp(`${baseUrl}/oversized`, { maxBodyBytes: 64 }),
+      readLocalFeedHttp(`${baseUrl}/oversized`, { maxBodyBytes: 64 }),
     ).rejects.toThrow("Feed response body exceeds 64 bytes");
   });
 
   it("rejects an oversized declared response before reading its body", async () => {
     await expect(
-      readFeedHttp(`${baseUrl}/declared-oversized`, { maxBodyBytes: 64 }),
+      readLocalFeedHttp(`${baseUrl}/declared-oversized`, { maxBodyBytes: 64 }),
     ).rejects.toThrow("Feed response Content-Length exceeds 64 bytes");
   });
 
   it("rejects redirect chains beyond the configured budget", async () => {
     await expect(
-      readFeedHttp(`${baseUrl}/redirect-a`, { maxRedirects: 1 }),
+      readLocalFeedHttp(`${baseUrl}/redirect-a`, { maxRedirects: 1 }),
     ).rejects.toThrow("Feed request exceeded 1 redirect");
   });
 
   it("aborts the whole redirect-and-body attempt at its duration budget", async () => {
     await expect(
-      readFeedHttp(`${baseUrl}/slow`, { totalDurationMs: 20 }),
+      readLocalFeedHttp(`${baseUrl}/slow`, { totalDurationMs: 20 }),
     ).rejects.toThrow("Feed request exceeded 20ms total duration");
   });
 
   it("rejects response headers beyond the configured budget", async () => {
     await expect(
-      readFeedHttp(`${baseUrl}/large-headers`, { maxHeaderBytes: 64 }),
+      readLocalFeedHttp(`${baseUrl}/large-headers`, { maxHeaderBytes: 64 }),
     ).rejects.toThrow("Feed response headers exceed 64 bytes");
   });
 
   it("preserves a bodyless 304 with a representation Content-Length", async () => {
-    const response = await readFeedHttp(`${baseUrl}/not-modified`, {
+    const response = await readLocalFeedHttp(`${baseUrl}/not-modified`, {
       maxBodyBytes: 64,
     });
     expect(response.status).toBe(304);

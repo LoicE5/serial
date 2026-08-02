@@ -207,7 +207,12 @@ describe("extension Bookmark HTTP contract", () => {
 
     expect(discoverFeedsFromUrl).toHaveBeenCalledWith(
       "https://example.com/article",
-      { methods: ["platform", "html", "headers", "guess"] },
+      expect.objectContaining({
+        methods: ["platform", "html", "headers", "guess"],
+        concurrency: 2,
+        maxUris: 8,
+        fetchFn: expect.any(Function),
+      }),
     );
     await expect(response.json()).resolves.toMatchObject({
       feeds: [
@@ -217,6 +222,33 @@ describe("extension Bookmark HTTP contract", () => {
         },
       ],
     });
+  });
+
+  it("does not start fallback discovery until the Bookmark save is accepted", async () => {
+    let acceptSave: (() => void) | undefined;
+    const saveAccepted = new Promise<void>((resolve) => {
+      acceptSave = resolve;
+    });
+    const discover = vi.fn(() => Promise.resolve([]));
+    const deps = dependencies();
+    deps.save.mockImplementation(async () => {
+      await saveAccepted;
+      return successfulResult("created");
+    });
+
+    const responsePromise = saveExtensionBookmark(
+      bookmarkRequest(supportedRequest({ feeds: [] })),
+      { ...deps, discover },
+    );
+    await Promise.resolve();
+    expect(discover).not.toHaveBeenCalled();
+
+    acceptSave?.();
+    await responsePromise;
+    expect(discover).toHaveBeenCalledWith(
+      "user-one",
+      "https://example.com/article",
+    );
   });
 
   it("prefers page-declared Feeds without running server discovery", async () => {
@@ -300,7 +332,7 @@ describe("extension Bookmark HTTP contract", () => {
     expect(deps.setTag).not.toHaveBeenCalled();
   });
 
-  it("creates and assigns a View through the extension editor", async () => {
+  it("creates a View independently from Bookmark assignment", async () => {
     const deps = {
       authenticate: vi.fn(() => Promise.resolve({ id: "user-one" }) as never),
       setView: vi.fn(() => Promise.resolve()),
@@ -313,7 +345,7 @@ describe("extension Bookmark HTTP contract", () => {
         () =>
           Promise.resolve({
             id: "bookmark-one",
-            viewIds: [14],
+            viewIds: [],
             tagIds: [],
           }) as never,
       ),
@@ -335,13 +367,7 @@ describe("extension Bookmark HTTP contract", () => {
         name: "Essays",
       }),
     );
-    expect(deps.setView).toHaveBeenCalledWith(
-      expect.objectContaining({
-        bookmarkId: "bookmark-one",
-        viewId: 14,
-        assigned: true,
-      }),
-    );
+    expect(deps.setView).not.toHaveBeenCalled();
     await expect(response.json()).resolves.toMatchObject({
       createdOption: {
         kind: "view",
@@ -350,7 +376,7 @@ describe("extension Bookmark HTTP contract", () => {
     });
   });
 
-  it("creates and assigns a Tag through the extension editor", async () => {
+  it("creates a Tag independently from Bookmark assignment", async () => {
     const deps = {
       authenticate: vi.fn(() => Promise.resolve({ id: "user-one" }) as never),
       setView: vi.fn(() => Promise.resolve()),
@@ -364,7 +390,7 @@ describe("extension Bookmark HTTP contract", () => {
           Promise.resolve({
             id: "bookmark-one",
             viewIds: [],
-            tagIds: [21],
+            tagIds: [],
           }) as never,
       ),
     };
@@ -385,13 +411,7 @@ describe("extension Bookmark HTTP contract", () => {
         name: "Research",
       }),
     );
-    expect(deps.setTag).toHaveBeenCalledWith(
-      expect.objectContaining({
-        bookmarkId: "bookmark-one",
-        tagId: 21,
-        assigned: true,
-      }),
-    );
+    expect(deps.setTag).not.toHaveBeenCalled();
     await expect(response.json()).resolves.toMatchObject({
       createdOption: {
         kind: "tag",
