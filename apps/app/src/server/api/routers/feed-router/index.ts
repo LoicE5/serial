@@ -1,5 +1,4 @@
 import { and, eq, inArray, notInArray, sql } from "drizzle-orm";
-import { discoverFeeds as discoverFeedsFromUrl } from "feedscout";
 import { z } from "zod";
 import {
   findExistingFeedThatMatches,
@@ -32,6 +31,8 @@ import {
 } from "~/server/subscriptions/helpers";
 import { getEffectivePlanConfig } from "~/server/subscriptions/plans";
 import { VIEW_LAYOUT_ITEM_TYPE } from "~/server/db/constants";
+import { createFeedsForUser } from "~/server/feeds/create";
+import { discoverFeeds as discoverFeedsForUrl } from "~/server/feeds/discovery";
 import {
   boundedNumberIdsSchema,
   boundedStringsSchema,
@@ -51,121 +52,21 @@ type BulkImportFromFileError = {
 export type BulkImportFromFileResult =
   BulkImportFromFileError | BulkImportFromFileSuccess;
 
+const createFeedInputSchema = z.object({
+  url: z.string().min(5),
+  categoryIds: boundedNumberIdsSchema,
+  viewIds: boundedNumberIdsSchema.optional(),
+});
+
 export const create = protectedProcedure
-  .input(
-    z.object({
-      url: z.string().min(5),
-      categoryIds: boundedNumberIdsSchema,
-      viewIds: boundedNumberIdsSchema.optional(),
+  .input(createFeedInputSchema)
+  .handler(({ context, input }) =>
+    createFeedsForUser({
+      database: context.db,
+      userId: context.user.id,
+      ...input,
     }),
-  )
-  .handler(async ({ context, input }) => {
-    const newFeedDetails = await fetchNewFeedDetails(input.url);
-    if (!newFeedDetails.length) {
-      throw new Error("Unsupported feed URL");
-    }
-
-    // Check activation budget upfront
-    const { remainingSlots, maxActiveFeeds } = await getFeedsActivationBudget(
-      context.db,
-      context.user.id,
-    );
-
-    const results = await context.db.transaction(async (tx) => {
-      const [categoriesOwned, viewsOwned] = await Promise.all([
-        verifyContentCategoriesOwnedByUser({
-          categoryIds: input.categoryIds,
-          userId: context.user.id,
-          db: tx,
-        }),
-        verifyViewsOwnedByUser({
-          viewIds: input.viewIds ?? [],
-          userId: context.user.id,
-          db: tx,
-        }),
-      ]);
-
-      if (!categoriesOwned) {
-        throw new Error(
-          "Unauthorized: One or more categories do not belong to user",
-        );
-      }
-      if (!viewsOwned) {
-        throw new Error(
-          "Unauthorized: One or more views do not belong to user",
-        );
-      }
-
-      return await Promise.all(
-        newFeedDetails.map(async (newFeed, index) => {
-          if (!newFeed.url) return { error: "No feed url found." };
-
-          const existingFeed = await findExistingFeedThatMatches(tx, {
-            feedUrl: newFeed.url,
-            userId: context.user.id,
-          });
-
-          if (existingFeed) {
-            return { error: "Feed already exists" };
-          }
-
-          const isActive = index < remainingSlots;
-
-          const insertedFeeds = await tx
-            .insert(feeds)
-            .values({
-              userId: context.user.id,
-              ...newFeed,
-              isActive,
-              openLocation: PLATFORM_DEFAULT_OPEN_LOCATION[newFeed.platform],
-            })
-            .returning();
-
-          const newFeedRow = insertedFeeds[0];
-
-          if (!!input.categoryIds.length && !!newFeedRow) {
-            await tx.insert(feedCategories).values(
-              input.categoryIds.map((categoryId) => ({
-                feedId: Number(newFeedRow.id),
-                categoryId,
-              })),
-            );
-          }
-
-          if (input.viewIds?.length && newFeedRow) {
-            await tx.insert(viewFeeds).values(
-              input.viewIds.map((viewId) => ({
-                viewId,
-                feedId: Number(newFeedRow.id),
-              })),
-            );
-          }
-
-          return { feed: newFeedRow };
-        }),
-      );
-    });
-
-    const errors = results.filter((r): r is { error: string } => "error" in r);
-    if (errors.length === newFeedDetails.length) {
-      throw new Error(errors[0]?.error ?? "Failed to create feed");
-    }
-
-    const createdFeeds = results
-      .filter(
-        (r): r is { feed: typeof feeds.$inferSelect } =>
-          "feed" in r && !!r.feed,
-      )
-      .map((r) => r.feed);
-
-    const deactivatedCount = Math.max(0, createdFeeds.length - remainingSlots);
-
-    return {
-      feeds: parseArrayOfSchema(createdFeeds, feedsSchema),
-      deactivatedCount,
-      maxActiveFeeds,
-    };
-  });
+  );
 
 export const createFromSubscriptionImport = protectedProcedure
   .input(
@@ -491,47 +392,6 @@ export const update = protectedProcedure
     });
   });
 
-async function discoverYouTubeFeeds(url: string) {
-  if (!url.includes("youtube.com/@") && !url.includes("youtube.com/channel/")) {
-    return null;
-  }
-
-  try {
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(
-        `Failed to fetch YouTube channel page: ${response.status} ${response.statusText}`,
-      );
-    }
-    const text = await response.text();
-
-    const rssFeedUrlMatches = text.matchAll(
-      /<link rel="alternate" type="application\/rss\+xml" title="RSS" href="(https:\/\/www\.youtube\.com\/feeds\/videos\.xml\?channel_id=[^&]{24})">/gm,
-    );
-
-    const channelNameMatch =
-      /<meta property="og:title" content="([^"]+)">/.exec(text);
-    const channelName = channelNameMatch?.[1];
-
-    const feedUrls = Array.from(rssFeedUrlMatches).flatMap((match) =>
-      match[1] ? [match[1]] : [],
-    );
-
-    if (feedUrls.length === 0) {
-      return null;
-    }
-
-    return feedUrls.map((feedUrl) => ({
-      url: feedUrl,
-      title: channelName,
-      format: "atom" as const,
-    }));
-  } catch (e) {
-    captureException(e, { context: "youtube-feed-discovery", url });
-    return null;
-  }
-}
-
 export const bulkDelete = protectedProcedure
   .input(z.object({ feedIds: boundedNumberIdsSchema }))
   .handler(async ({ context, input }) => {
@@ -667,52 +527,4 @@ export const bulkSetActive = protectedProcedure
 
 export const discoverFeeds = protectedProcedure
   .input(z.object({ url: z.url() }))
-  .handler(async ({ input }) => {
-    const [youtubeResult, feedscoutResult] = await Promise.allSettled([
-      discoverYouTubeFeeds(input.url),
-      discoverFeedsFromUrl(input.url, {
-        methods: ["platform", "html", "headers", "guess"],
-      }),
-    ]);
-
-    const discoveredFeeds: Array<{
-      url: string;
-      title?: string;
-      format?: string;
-    }> = [];
-
-    if (youtubeResult.status === "fulfilled" && youtubeResult.value) {
-      discoveredFeeds.push(...youtubeResult.value);
-    } else if (youtubeResult.status === "rejected") {
-      captureException(youtubeResult.reason, {
-        context: "feed-discovery-youtube",
-        url: input.url,
-      });
-    }
-
-    if (feedscoutResult.status === "fulfilled") {
-      const feedscoutFeeds = feedscoutResult.value.filter((f) => f.isValid);
-      discoveredFeeds.push(...feedscoutFeeds);
-    } else if (feedscoutResult.status === "rejected") {
-      captureException(feedscoutResult.reason, {
-        context: "feed-discovery-feedscout",
-        url: input.url,
-      });
-    }
-
-    // Deduplicate by URL and filter out invalid YouTube feeds
-    const seen = new Set<string>();
-    return discoveredFeeds.filter((feed) => {
-      if (seen.has(feed.url)) return false;
-      seen.add(feed.url);
-
-      // Filter out YouTube feeds without channel_id
-      if (
-        feed.url.includes("youtube.com") &&
-        !feed.url.includes("channel_id=")
-      ) {
-        return false;
-      }
-      return true;
-    });
-  });
+  .handler(({ input }) => discoverFeedsForUrl(input.url));

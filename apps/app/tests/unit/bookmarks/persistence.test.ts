@@ -8,9 +8,14 @@ import type {
 } from "~/server/bookmarks/contracts";
 import { buildUrlFallbackObservation } from "~/server/bookmarks/extract";
 import {
+  createExtensionBookmarkTag,
+  createExtensionBookmarkView,
+} from "~/server/bookmarks/extensionOrganization";
+import {
   deleteBookmark,
   getBookmarkCapture,
   persistBookmarkSave,
+  saveBookmarkFromExtension,
   setBookmarkTag,
   setBookmarkView,
   updateBookmarksReadState,
@@ -132,6 +137,78 @@ beforeEach(async () => {
 afterEach(() => cleanup());
 
 describe("Bookmark persistence", () => {
+  it("persists extracted preview icons and thumbnails", async () => {
+    const sourceUrl = "https://example.com/preview";
+    const result = await saveCaptured("user-one", sourceUrl);
+    const stored = await database.query.bookmarks.findFirst({
+      where: eq(bookmarks.id, result.bookmark.id),
+    });
+
+    const expectedPreview = {
+      iconUrl: "https://example.com/icon.png",
+      thumbnailUrl: "https://example.com/image.jpg",
+    };
+    expect(result.bookmark).toMatchObject(expectedPreview);
+    expect(stored).toMatchObject(expectedPreview);
+  });
+
+  it("creates extension organization only for an owned Bookmark", async () => {
+    const own = await saveCaptured(
+      "user-one",
+      "https://example.com/organization",
+    );
+    const view = await createExtensionBookmarkView({
+      database,
+      userId: "user-one",
+      bookmarkId: own.bookmark.id,
+      name: "Essays",
+    });
+    const tag = await createExtensionBookmarkTag({
+      database,
+      userId: "user-one",
+      bookmarkId: own.bookmark.id,
+      name: "Research",
+    });
+
+    expect(view).toMatchObject({ name: "Essays", tagIds: [] });
+    expect(tag).toMatchObject({ name: "Research" });
+    await expect(
+      createExtensionBookmarkView({
+        database,
+        userId: "user-two",
+        bookmarkId: own.bookmark.id,
+        name: "Unauthorized",
+      }),
+    ).rejects.toThrow("Bookmark not found");
+  });
+
+  it("keeps the extension preflight failure reason on a URL-only save", async () => {
+    const url = "https://example.com/oversized";
+    const result = await saveBookmarkFromExtension({
+      database,
+      userId: "user-one",
+      sourceUrl: url,
+      captureFailureReason: "too_large",
+      capture: {
+        effectiveUrl: url,
+        title: "Oversized article",
+        descriptor: {
+          platform: "website",
+          contentType: "text",
+          orientation: null,
+          contentId: null,
+          classifierVersion: 1,
+        },
+      },
+    });
+
+    expect(result.capture).toEqual({
+      status: "unavailable",
+      reason: "too_large",
+    });
+    expect(result.bookmark.title).toBe("Oversized article");
+  });
+
   it("scopes canonical uniqueness and refresh hints to the authenticated user", async () => {
     const url = "https://example.com/article";
     const first = await persistBookmarkSave({

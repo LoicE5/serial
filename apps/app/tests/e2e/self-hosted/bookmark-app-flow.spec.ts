@@ -143,7 +143,10 @@ test.describe("Bookmark Serial-app flow", () => {
     await expect(page.getByRole("button", { name: "Unsave" })).toBeVisible();
     await expect(
       page.getByRole("link", { name: "Open in Website" }),
-    ).toBeVisible();
+    ).toHaveCount(0);
+    await expect(
+      page.locator("header > span").last().getByRole("button"),
+    ).toHaveCount(2);
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth <= window.innerWidth,
@@ -245,11 +248,14 @@ test.describe("Bookmark Serial-app flow", () => {
     await expect(bookmarkOption).toBeVisible({ timeout: 10_000 });
     await bookmarkOption.click();
 
-    await expect(
-      dialog.getByText(/previous Page capture is still available/i),
-    ).toBeVisible({
-      timeout: 20_000,
+    const captureStatus = dialog.getByRole("button", {
+      name: /previous Page capture is still available/i,
     });
+    await expect(captureStatus).toBeVisible({ timeout: 20_000 });
+    await captureStatus.focus();
+    await expect(page.getByRole("tooltip")).toContainText(
+      /previous Page capture is still available/i,
+    );
     await expect(
       dialog
         .locator('[data-slot="selectable-chip-list"][data-label="Views"]')
