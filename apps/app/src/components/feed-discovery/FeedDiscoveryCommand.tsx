@@ -1,4 +1,10 @@
-import { Loader2Icon, RssIcon, SearchIcon, SearchXIcon } from "lucide-react";
+import {
+  BookmarkIcon,
+  Loader2Icon,
+  RefreshCwIcon,
+  RssIcon,
+  SearchIcon,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import {
   normalizeFeedSearchUrl,
@@ -7,6 +13,7 @@ import {
 import type { Ref } from "react";
 import type { DiscoveredFeed } from "./FeedDiscoveryResults";
 import type { StaticFeedSearchOption } from "./feedSearchOptions";
+import type { ContentPlatform } from "~/lib/content/descriptor";
 import {
   Command,
   CommandEmpty,
@@ -15,7 +22,6 @@ import {
   CommandItem,
   CommandList,
 } from "~/components/ui/command";
-import { Button } from "~/components/ui/button";
 
 function StaticFeedResult({
   option,
@@ -47,21 +53,33 @@ interface FeedDiscoveryCommandProps {
   onUrlChange: (url: string) => void;
   onDiscover: (url?: string) => void;
   onSelectFeed: (feed: DiscoveredFeed) => void;
+  onSelectBookmark: (url: string) => void;
+  bookmarkPlatform: ContentPlatform;
   discoveredFeeds: DiscoveredFeed[];
   state: "input" | "discovering" | "no-results" | "select" | "adding";
   inputRef?: Ref<HTMLInputElement>;
+  loadingLabel?: string;
 }
 
 const AUTO_DISCOVERY_DELAY_MS = 500;
+const BOOKMARK_ACTION_LABEL: Record<ContentPlatform, string> = {
+  website: "Bookmark page to read later",
+  youtube: "Bookmark video to watch later",
+  peertube: "Bookmark video to watch later",
+  nebula: "Bookmark video to watch later",
+};
 
 export function FeedDiscoveryCommand({
   url,
   onUrlChange,
   onDiscover,
   onSelectFeed,
+  onSelectBookmark,
+  bookmarkPlatform,
   discoveredFeeds,
   state,
   inputRef,
+  loadingLabel = "Adding feed…",
 }: FeedDiscoveryCommandProps) {
   const commandRef = useRef<HTMLDivElement>(null);
   const normalizedUrl = normalizeFeedSearchUrl(url);
@@ -77,7 +95,6 @@ export function FeedDiscoveryCommand({
     !isDiscovering &&
     !isSelecting &&
     lastAutoDiscoveredUrl !== normalizedUrl;
-
   useEffect(() => {
     if (
       !normalizedUrl ||
@@ -153,57 +170,91 @@ export function FeedDiscoveryCommand({
         }}
       />
       <CommandList className="relative flex max-h-none min-h-0 flex-1 flex-col sm:max-h-[min(60dvh,32rem,calc(100dvh-5.5rem))] sm:min-h-[min(20rem,60dvh,calc(100dvh-5.5rem))] sm:flex-none">
-        {isAddingFeed ? (
-          <CommandGroup>
-            <CommandItem className="gap-2" disabled value="adding">
-              <Loader2Icon className="size-4 animate-spin" />
-              Adding feed…
-            </CommandItem>
-          </CommandGroup>
-        ) : isDiscovering || isAutoDiscoveryPending ? (
-          <CommandGroup>
-            <CommandItem className="gap-2" disabled value="discovering">
-              <Loader2Icon className="size-4 animate-spin" />
-              Finding feeds…
-            </CommandItem>
-          </CommandGroup>
-        ) : isSelecting ? (
-          <CommandGroup>
-            {discoveredFeeds.map((feed) => (
-              <CommandItem
-                className="gap-2"
-                key={feed.url}
-                value={`${feed.title ?? ""} ${feed.url}`}
-                onSelect={() => onSelectFeed(feed)}
-              >
-                <RssIcon className="text-muted-foreground size-4" />
-                <div className="min-w-0">
-                  <p className="truncate">{feed.title || feed.url}</p>
-                  <p className="text-muted-foreground truncate text-xs">
-                    {feed.url}
-                  </p>
-                </div>
-              </CommandItem>
-            ))}
-          </CommandGroup>
-        ) : hasNoResults ? (
-          <div className="text-muted-foreground absolute inset-0 px-6 py-6 text-center text-sm sm:flex sm:items-center sm:justify-center">
-            <div
-              className="absolute top-1/3 left-1/2 flex w-[calc(100%-3rem)] -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-3 sm:static sm:w-auto sm:translate-x-0 sm:translate-y-0"
-              data-testid="feed-discovery-failure-state"
+        {normalizedUrl ? (
+          <>
+            <CommandGroup
+              className={
+                isAddingFeed || isDiscovering || isAutoDiscoveryPending
+                  ? undefined
+                  : "hidden"
+              }
             >
-              <SearchXIcon className="size-8" strokeWidth={1.5} />
-              <span role="status">No feeds found for URL.</span>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => onDiscover()}
-              >
-                Retry
-              </Button>
-            </div>
-          </div>
+              {(isAddingFeed || isDiscovering || isAutoDiscoveryPending) && (
+                <CommandItem
+                  className="gap-2"
+                  disabled
+                  value={isAddingFeed ? "adding" : "discovering"}
+                >
+                  <Loader2Icon className="size-4 animate-spin" />
+                  {isAddingFeed ? loadingLabel : "Finding feeds…"}
+                </CommandItem>
+              )}
+            </CommandGroup>
+            <CommandGroup
+              heading="Feeds"
+              className={isSelecting || hasNoResults ? undefined : "hidden"}
+            >
+              {hasNoResults && (
+                <CommandItem
+                  className="gap-2"
+                  value={`Retry finding feeds ${normalizedUrl}`}
+                  onSelect={() => onDiscover()}
+                >
+                  <span className="bg-primary/10 text-primary flex size-8 shrink-0 items-center justify-center rounded">
+                    <RefreshCwIcon className="size-4" />
+                  </span>
+                  <div className="min-w-0">
+                    <p className="truncate">Retry finding feeds</p>
+                    <p className="text-muted-foreground truncate text-xs">
+                      No feeds found for URL.
+                    </p>
+                  </div>
+                </CommandItem>
+              )}
+              {discoveredFeeds.map((feed) => (
+                <CommandItem
+                  className="gap-2"
+                  key={feed.url}
+                  value={`${feed.title ?? ""} ${feed.url}`}
+                  onSelect={() => onSelectFeed(feed)}
+                >
+                  <span className="bg-primary/10 text-primary flex size-8 shrink-0 items-center justify-center rounded">
+                    <RssIcon className="size-4" />
+                  </span>
+                  <div className="min-w-0">
+                    <p className="truncate">{feed.title || feed.url}</p>
+                    <p className="text-muted-foreground truncate text-xs">
+                      {feed.url}
+                    </p>
+                  </div>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+            <CommandGroup
+              heading="Bookmark"
+              className={isSelecting || hasNoResults ? undefined : "hidden"}
+            >
+              {(isSelecting || hasNoResults) && (
+                <CommandItem
+                  className="gap-2"
+                  value={`${BOOKMARK_ACTION_LABEL[bookmarkPlatform]} ${normalizedUrl}`}
+                  onSelect={() => onSelectBookmark(normalizedUrl)}
+                >
+                  <span className="bg-muted text-muted-foreground flex size-8 shrink-0 items-center justify-center rounded">
+                    <BookmarkIcon className="size-4" />
+                  </span>
+                  <div className="min-w-0">
+                    <p className="truncate">
+                      {BOOKMARK_ACTION_LABEL[bookmarkPlatform]}
+                    </p>
+                    <p className="text-muted-foreground truncate text-xs">
+                      {normalizedUrl}
+                    </p>
+                  </div>
+                </CommandItem>
+              )}
+            </CommandGroup>
+          </>
         ) : (
           <>
             <CommandEmpty className="text-muted-foreground absolute inset-0 px-6 py-6 text-center sm:flex sm:items-center sm:justify-center">

@@ -6,15 +6,15 @@ import { ManageFeedsButton } from "./ManageFeedsButton";
 import { OpenRightSidebarButton } from "./OpenRightSidebarButton";
 import { RefetchItemsButton } from "./RefetchItemsButton";
 import { ButtonWithShortcut } from "~/components/ButtonWithShortcut";
-import { Button } from "~/components/ui/button";
 import { SHORTCUT_KEYS } from "~/lib/constants/shortcuts";
 import { PLATFORM_TO_FORMATTED_NAME_MAP } from "~/lib/data/feeds/utils";
 import { useFeedItemValue } from "~/lib/data/store";
-import { useFeedItemActions } from "~/lib/hooks/useFeedItemActions";
+import { useBookmarkValue } from "~/lib/data/bookmarks";
+import { useContentItemActions } from "~/lib/hooks/useContentItemActions";
 import { useShortcut } from "~/lib/hooks/useShortcut";
 
 function CopyUrlButton({ contentId }: { contentId: string }) {
-  const { copyUrl } = useFeedItemActions(contentId);
+  const { copyUrl } = useContentItemActions(contentId);
 
   useShortcut(SHORTCUT_KEYS.COPY_URL, (event) => {
     event.preventDefault();
@@ -35,35 +35,20 @@ function CopyUrlButton({ contentId }: { contentId: string }) {
   );
 }
 
-function OpenInYouTubeButton() {
+function OpenOriginalButton() {
   const { pathname } = useLocation();
   const videoId = pathname.split("/watch/")[1]!;
   const contentId = pathname.split("/read/")[1]!;
 
   const feedItem = useFeedItemValue(videoId || contentId || "");
+  const bookmark = useBookmarkValue(videoId || contentId || "");
+  const originalUrl = bookmark?.sourceUrl ?? feedItem?.url;
+  const platform = bookmark?.platform ?? feedItem?.platform;
 
-  // If not a Serial item, assume YouTube
-  if (!feedItem) {
-    return (
-      <a
-        href={`https://www.youtube.com/watch?v=${videoId}`}
-        target="_blank"
-        rel="noopener noreferrer"
-      >
-        <Button
-          data-serial-reader-right-boundary
-          variant="outline"
-          size="icon md:default"
-        >
-          <span className="hidden pr-1.5 md:block">YouTube</span>
-          <ExternalLinkIcon size={16} />
-        </Button>
-      </a>
-    );
-  }
+  if (!originalUrl || !platform) return null;
 
   return (
-    <a href={feedItem.url} target="_blank" rel="noopener noreferrer">
+    <a href={originalUrl} target="_blank" rel="noopener noreferrer">
       <ButtonWithShortcut
         data-serial-reader-right-boundary
         variant="outline"
@@ -71,7 +56,7 @@ function OpenInYouTubeButton() {
         size="icon md:default"
       >
         <span className="hidden pr-1.5 md:block">
-          {PLATFORM_TO_FORMATTED_NAME_MAP[feedItem.platform]}
+          {PLATFORM_TO_FORMATTED_NAME_MAP[platform]}
         </span>
         <ExternalLinkIcon size={16} />
       </ButtonWithShortcut>
@@ -89,7 +74,7 @@ export function TopRightHeaderContent() {
     return (
       <div className="flex items-center gap-2">
         {contentId && <CopyUrlButton contentId={contentId} />}
-        <OpenInYouTubeButton />
+        <OpenOriginalButton />
       </div>
     );
   }

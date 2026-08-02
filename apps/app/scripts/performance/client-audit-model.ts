@@ -29,6 +29,7 @@ import {
   getBoundedItemWindow,
   selectPersistedPages,
 } from "~/lib/data/page-retention";
+import { projectLocalMixedContentOrder } from "~/lib/data/mixed-content/bookmarkProjection";
 
 const PAGE_SIZE = 30;
 const VISIBILITIES: VisibilityFilter[] = ["unread", "read", "later"];
@@ -96,6 +97,7 @@ export type ClientAuditResult = {
     bookmarkBurstSeparateFrames: ClientAuditOperation;
     coldSynchronization: ClientAuditOperation;
     warmSynchronization: ClientAuditOperation;
+    localViewProjection: ClientAuditOperation;
     normalizedPersistenceMutation: ClientAuditOperation;
   };
 };
@@ -294,7 +296,14 @@ function makeBookmark(index: number): ApplicationBookmark {
     id: `audit-bookmark-${index}`,
     userId: "audit-user",
     sourceUrl: `https://bookmarks.serial.test/${index}`,
+    effectiveUrl: `https://bookmarks.serial.test/${index}`,
     canonicalUrl: `https://bookmarks.serial.test/${index}`,
+    platform: "website",
+    contentType: "text",
+    orientation: null,
+    contentId: null,
+    classificationSource: "url",
+    classifierVersion: 1,
     isSaved: index % 5 === 0,
     isRead: index % 5 > 2,
     progress: index % 101,
@@ -305,11 +314,13 @@ function makeBookmark(index: number): ApplicationBookmark {
     createdAt: date,
     updatedAt: date,
     title: `Audit bookmark ${index}`,
+    description: null,
     author: "Serial audit",
+    siteName: "bookmarks.serial.test",
     publishedAt: date,
-    effectiveUrl: `https://bookmarks.serial.test/${index}`,
     iconUrl: null,
-    representativeImageUrl: null,
+    thumbnailUrl: null,
+    previewSource: "url",
     captureHash: `bookmark-hash-${index}`,
     capturedAt: date,
     viewIds: [index % 25],
@@ -329,11 +340,12 @@ function makeFeedItem(index: number): ApplicationFeedItem {
     thumbnail: "",
     content: `<p>Audit body ${index}</p>`,
     contentSnippet: `Audit summary ${index}`,
+    contentType: "text",
     isWatched: index % 5 > 2,
     isWatchLater: index % 5 === 0,
     progress: index % 101,
     duration: 100,
-    orientation: "horizontal",
+    orientation: null,
     platform: "website",
     postedAt: date,
     createdAt: date,
@@ -351,8 +363,7 @@ function makeView(index: number): ApplicationView {
     name: `Audit view ${index}`,
     daysWindow: 0,
     readStatus: 0,
-    orientation: "horizontal",
-    contentType: "all",
+    contentFilter: 7,
     layout: "list",
     placement: index,
     createdAt: FIXTURE_TIME,
@@ -641,6 +652,24 @@ export function runClientAuditProfile(
 ): ClientAuditResult {
   let fixture = seedClientFixture(profileName);
   const profile = fixture.profile;
+  const localProjectionView = fixture.views.at(-1)!;
+  const localProjectionFeedItemIds = fixture.feedItems
+    .filter(
+      (item) =>
+        item.isWatchLater && localProjectionView.feedIds.includes(item.feedId),
+    )
+    .map((item) => item.id);
+  const localViewProjection = measure(() => {
+    projectLocalMixedContentOrder({
+      feedItemIds: localProjectionFeedItemIds,
+      feedItems: feedItemsStore.getState().feedItemsDict,
+      bookmarks: bookmarksStore.getState().snapshot(),
+      scope: { type: "view", viewId: localProjectionView.id },
+      views: fixture.views,
+      visibility: "later",
+    });
+    return 0;
+  });
   const bookmarkSave = measure(
     () =>
       processPublishedChunks([
@@ -838,6 +867,7 @@ export function runClientAuditProfile(
       bookmarkBurstSeparateFrames,
       coldSynchronization,
       warmSynchronization,
+      localViewProjection,
       normalizedPersistenceMutation,
     },
   };

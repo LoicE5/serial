@@ -12,7 +12,10 @@ import {
   useFeedItemsListProjection,
 } from "../store";
 import { useFeedCategories } from "../feed-categories/store";
-import { useCustomViewsData } from "../views";
+import { useCustomViewsData, useViews } from "../views";
+import { getMixedScopeKey, mixedContentStore } from "../mixed-content/store";
+import { bookmarksStore } from "../bookmarks/store";
+import { projectLocalMixedContentOrder } from "../mixed-content/bookmarkProjection";
 import {
   createFeedItemFilterIndex,
   createFeedItemFilterPredicate,
@@ -28,10 +31,7 @@ import {
   sortFeedItemsOrderByWatchedAt,
 } from "~/lib/sortFeedItems";
 
-export {
-  getContentTypeFromItem,
-  isFeedCompatibleWithContentType,
-} from "./filters";
+export { isFeedCompatibleWithContentFilter } from "./filters";
 export {
   createFeedItemFilterIndex,
   createFeedItemFilterPredicate,
@@ -232,6 +232,58 @@ export const useFilteredFeedItemsOrder = () => {
     filterIndex,
     scopedFeedItemsOrder,
     viewFilter,
+    visibilityFilter,
+  ]);
+};
+
+export const useFilteredContentOrder = () => {
+  const feedItemsOrder = useFilteredFeedItemsOrder();
+  const feedItemsProjection = useFeedItemsListProjection();
+  const feedCategories = useFeedCategories();
+  const visibilityFilter = useAtomValue(visibilityFilterAtom);
+  const categoryFilter = useAtomValue(categoryFilterAtom);
+  const feedFilter = useAtomValue(feedFilterAtom);
+  const viewFilter = useAtomValue(viewFilterAtom);
+  const mixedScopes = mixedContentStore.useScopes();
+  const { views } = useViews();
+  const bookmarkRevision = bookmarksStore.useRevision();
+  const bookmarks = useMemo(() => {
+    void bookmarkRevision;
+    return { ...bookmarksStore.getState().snapshot() };
+  }, [bookmarkRevision]);
+
+  return useMemo(() => {
+    if (feedFilter >= 0) return feedItemsOrder;
+    const scope =
+      categoryFilter >= 0
+        ? ({ type: "tag", tagId: categoryFilter } as const)
+        : viewFilter
+          ? ({ type: "view", viewId: viewFilter.id } as const)
+          : null;
+    if (!scope) return feedItemsOrder;
+    const loadedScope = mixedScopes[getMixedScopeKey(scope, visibilityFilter)];
+    if (loadedScope) {
+      return loadedScope.references.map((reference) => reference.entityId);
+    }
+    return projectLocalMixedContentOrder({
+      feedItemIds: feedItemsOrder,
+      feedItems: feedItemsProjection.getItems(),
+      bookmarks,
+      scope,
+      views,
+      visibility: visibilityFilter,
+      feedCategories,
+    });
+  }, [
+    bookmarks,
+    categoryFilter,
+    feedFilter,
+    feedItemsOrder,
+    feedItemsProjection,
+    feedCategories,
+    mixedScopes,
+    viewFilter,
+    views,
     visibilityFilter,
   ]);
 };

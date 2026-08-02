@@ -6,6 +6,7 @@ import {
 } from "../fixtures/ports";
 import { cleanupUser, seedViewLayoutData } from "../fixtures/seed-db";
 import { signIn } from "../fixtures/auth";
+import { openSidebar } from "../fixtures/sidebar";
 import type { Locator } from "@playwright/test";
 
 test.describe("view subview sections", () => {
@@ -43,23 +44,8 @@ test.describe("view subview sections", () => {
       timeout: 30000,
     });
 
-    const ensureSidebarOpen = async () => {
-      const leftSidebar = page
-        .locator('[data-slot="sidebar"][data-side="left"]')
-        .first();
-      const sidebarState = await leftSidebar.getAttribute("data-state");
-      if (sidebarState !== "collapsed") return;
-
-      const menuButton = page.getByRole("button", { name: /menu/i }).first();
-      await expect(menuButton).toBeVisible({ timeout: 3000 });
-      await menuButton.click();
-      await expect(leftSidebar).toHaveAttribute("data-state", "expanded", {
-        timeout: 3000,
-      });
-    };
-
     // ── 2. Create a view with all 3 feeds and 2 tags ───────────────
-    await ensureSidebarOpen();
+    await openSidebar(page);
     const viewsSection = page.locator('[data-sidebar="group"]').filter({
       hasText: "Views",
     });
@@ -199,16 +185,16 @@ test.describe("view subview sections", () => {
         .click();
     };
 
-    // 1st item (Tech Feed) -> Large List
-    await selectSectionLayout(viewSectionRows.nth(0), "Default", "Large List");
+    // 1st item (Tech Feed) -> Grid
+    await selectSectionLayout(viewSectionRows.nth(0), "Default", "Grid");
 
-    // 2nd item (News Feed) -> Default (already default, no change needed)
+    // 2nd item (News Feed) -> List
+    await selectSectionLayout(viewSectionRows.nth(1), "Default", "List");
 
     // 3rd item (#Tech) -> List
     await selectSectionLayout(viewSectionRows.nth(2), "Default", "List");
 
-    // Uncategorized -> Grid
-    await selectSectionLayout(viewSectionRows.nth(3), "Large List", "Grid");
+    // Uncategorized -> Large List (already the inherited layout)
 
     // ── 6. Save the view ─────────────────────────────────────────────
     await dialog.getByRole("button", { name: /add view/i }).click();
@@ -299,20 +285,22 @@ test.describe("view subview sections", () => {
     });
     await page.waitForTimeout(150);
 
-    const renderedItemIdsBeforeNavigation = await getRenderedItemIds(
-      page.locator("[data-item-id]"),
-    );
+    // A grid in one subsection must not make list navigation in another
+    // subsection jump by the grid's column count.
+    const newsSectionForNavigation = sectionByHeading("News Feed");
+    const newsItemsForNavigation =
+      newsSectionForNavigation.locator("[data-item-id]");
+    const firstNewsItem = newsItemsForNavigation.nth(0);
+    const secondNewsItem = newsItemsForNavigation.nth(1);
+    const firstNewsItemId = await firstNewsItem.getAttribute("data-item-id");
+    const secondNewsItemId = await secondNewsItem.getAttribute("data-item-id");
+    expect(firstNewsItemId).not.toBeNull();
+    expect(secondNewsItemId).not.toBeNull();
 
-    // Press arrow down to move selection from the current selection state.
+    await firstNewsItem.hover();
+    await expect.poll(getSelectedRenderedItemIds).toEqual([firstNewsItemId!]);
     await page.keyboard.press("ArrowDown");
-
-    await expect(async () => {
-      const selectedItemIds = await getSelectedRenderedItemIds();
-      expect(selectedItemIds).toHaveLength(1);
-      expect(renderedItemIdsBeforeNavigation).toContain(selectedItemIds[0]);
-    }).toPass({
-      timeout: 5000,
-    });
+    await expect.poll(getSelectedRenderedItemIds).toEqual([secondNewsItemId!]);
 
     // ── 10. Verify pagination in sectioned views ─────────────────────
     // Count total visible items after initial load (should be 30)
@@ -425,5 +413,89 @@ test.describe("view subview sections", () => {
     await expect(page.getByText("View updated!")).toBeVisible({
       timeout: 10000,
     });
+  });
+
+  test("keeps a tag subsection outside the View content filters", async ({
+    page,
+  }) => {
+    const { email, password } = await seedViewLayoutData(
+      SELF_HOSTED_TURSO_PORT,
+      SELF_HOSTED_APP_PORT,
+      SELF_HOSTED_RSS_SERVER_PORT,
+    );
+    testEmail = email;
+    const viewName = "Empty Tag Subsection View";
+    const tagName = "Unassigned Tag";
+
+    await signIn({ page, email, password });
+    await openSidebar(page);
+
+    const viewsSection = page.locator('[data-sidebar="group"]').filter({
+      has: page.locator('[data-sidebar="group-label"]', { hasText: "Views" }),
+    });
+    await viewsSection
+      .locator('[data-sidebar="group-label"] [data-sidebar="menu-button"]')
+      .nth(1)
+      .click();
+
+    const addDialog = page.getByRole("dialog", { name: "Add View" });
+    await expect(addDialog).toBeVisible();
+    await addDialog.getByPlaceholder("My View").fill(viewName);
+    await addDialog.getByRole("button", { name: "Add View" }).click();
+    await expect(page.getByText("View added!")).toBeVisible({
+      timeout: 10_000,
+    });
+
+    await openSidebar(page);
+    const viewButton = viewsSection
+      .locator('[data-sidebar="menu-button"]')
+      .filter({ hasText: viewName })
+      .first();
+    const viewMenuItem = viewButton.locator(
+      'xpath=ancestor::*[@data-sidebar="menu-item"]',
+    );
+    await viewMenuItem.locator('[data-sidebar="menu-button"]').nth(1).click();
+
+    const editDialog = page.getByRole("dialog", { name: "Edit View" });
+    await expect(editDialog).toBeVisible();
+    await editDialog.getByRole("tab", { name: "Display" }).click();
+    const viewSectionsLabel = editDialog.getByText("View sections", {
+      exact: true,
+    });
+    await viewSectionsLabel.locator("..").getByRole("button").first().click();
+    const sectionSearch = page
+      .getByPlaceholder("Search feeds or tags...")
+      .filter({ visible: true });
+    await sectionSearch.fill(tagName);
+    await sectionSearch
+      .locator("xpath=ancestor::*[@cmdk-root]")
+      .getByRole("option", { name: `#${tagName}`, exact: true })
+      .click();
+
+    await editDialog.getByRole("button", { name: "Save" }).click();
+    await expect(page.getByText("View updated!")).toBeVisible({
+      timeout: 10_000,
+    });
+
+    await page.goto("/views");
+    await page.reload();
+    await expect(
+      page.getByRole("tab", { name: /views/i, selected: true }),
+    ).toBeVisible({ timeout: 30_000 });
+
+    const viewRow = page
+      .locator("main main")
+      .locator("button[type='button']")
+      .filter({ hasText: viewName });
+    await viewRow.locator("button").last().click();
+
+    const reloadedEditDialog = page.getByRole("dialog", { name: "Edit View" });
+    await expect(reloadedEditDialog).toBeVisible();
+    await reloadedEditDialog.getByRole("tab", { name: "Display" }).click();
+    await expect(
+      reloadedEditDialog
+        .locator("[data-view-section-row]")
+        .filter({ hasText: tagName }),
+    ).toHaveCount(1);
   });
 });

@@ -11,7 +11,9 @@ import {
   getMixedScopeKey,
   mixedContentStore,
 } from "~/lib/data/mixed-content/store";
+import { projectLocalMixedContentOrder } from "~/lib/data/mixed-content/bookmarkProjection";
 import { viewsStore } from "~/lib/data/views/store";
+import { INBOX_VIEW_ID } from "~/lib/data/views/constants";
 import { processPublishedChunks } from "~/lib/data/subscriptionCoordinator";
 import {
   partitionMixedReadTargets,
@@ -51,7 +53,14 @@ function bookmark(
     id: "bookmark-one",
     userId: "user-one",
     sourceUrl: "https://example.com/article",
+    effectiveUrl: "https://example.com/article",
     canonicalUrl: "https://example.com/article",
+    platform: "website",
+    contentType: "text",
+    orientation: null,
+    contentId: null,
+    classificationSource: "url",
+    classifierVersion: 1,
     isSaved: true,
     isRead: false,
     progress: 4,
@@ -62,11 +71,13 @@ function bookmark(
     createdAt: NOW,
     updatedAt: NOW,
     title: "Article",
+    description: null,
     author: "Writer",
+    siteName: "example.com",
     publishedAt: null,
-    effectiveUrl: "https://example.com/article",
     iconUrl: null,
-    representativeImageUrl: null,
+    thumbnailUrl: null,
+    previewSource: "url",
     captureHash: "capture-hash",
     capturedAt: NOW,
     viewIds: [10],
@@ -86,11 +97,12 @@ function feedItem(id: string, url: string): ApplicationFeedItem {
     thumbnail: "",
     content: "",
     contentSnippet: "",
+    contentType: "text",
     isWatched: false,
     isWatchLater: false,
     progress: 0,
     duration: 0,
-    orientation: "horizontal",
+    orientation: null,
     postedAt: NOW,
     createdAt: NOW,
     updatedAt: NOW,
@@ -108,8 +120,7 @@ function view(): ApplicationView {
     name: "Reading",
     daysWindow: 0,
     readStatus: 0,
-    orientation: "horizontal",
-    contentType: "longform",
+    contentFilter: 3,
     layout: "list",
     placement: 0,
     createdAt: NOW,
@@ -147,6 +158,114 @@ beforeEach(() => {
 });
 
 describe("Bookmark synchronization and local mixed reprojection", () => {
+  it("projects locally cached Bookmarks only into their owned Views", () => {
+    const assigned = bookmark({ id: "assigned", viewIds: [10] });
+    const unassigned = bookmark({ id: "unassigned", viewIds: [] });
+    const emptyView = { ...view(), id: 11, feedIds: [] };
+    const allViews = [view(), emptyView];
+
+    expect(
+      projectLocalMixedContentOrder({
+        feedItemIds: [],
+        feedItems: {},
+        bookmarks: { assigned, unassigned },
+        scope: { type: "view", viewId: 10 },
+        views: allViews,
+        visibility: "later",
+      }),
+    ).toEqual(["assigned"]);
+    expect(
+      projectLocalMixedContentOrder({
+        feedItemIds: [],
+        feedItems: {},
+        bookmarks: { assigned, unassigned },
+        scope: { type: "view", viewId: 11 },
+        views: allViews,
+        visibility: "later",
+      }),
+    ).toEqual([]);
+    expect(
+      projectLocalMixedContentOrder({
+        feedItemIds: [],
+        feedItems: {},
+        bookmarks: { assigned, unassigned },
+        scope: { type: "view", viewId: INBOX_VIEW_ID },
+        views: allViews,
+        visibility: "later",
+      }),
+    ).toEqual(["unassigned"]);
+  });
+
+  it("keeps local mixed Read projections ordered by View section", () => {
+    const sectionedView: ApplicationView = {
+      ...view(),
+      categoryIds: [100],
+      feedIds: [1, 2],
+      viewSections: [
+        {
+          id: 1,
+          viewId: 10,
+          placement: 0,
+          itemType: "feed",
+          itemId: 1,
+          layout: null,
+          createdAt: NOW,
+          updatedAt: NOW,
+        },
+        {
+          id: 2,
+          viewId: 10,
+          placement: 1,
+          itemType: "tag",
+          itemId: 100,
+          layout: null,
+          createdAt: NOW,
+          updatedAt: NOW,
+        },
+      ],
+    };
+    const feedSectionItem = {
+      ...feedItem("feed-section", "https://example.com/feed-section"),
+      feedId: 1,
+      isWatched: true,
+      isWatchedUpdatedAt: new Date("2026-07-30T08:00:00.000Z"),
+    };
+    const tagSectionItem = {
+      ...feedItem("tag-section", "https://example.com/tag-section"),
+      feedId: 2,
+      isWatched: true,
+      isWatchedUpdatedAt: new Date("2026-07-30T10:00:00.000Z"),
+    };
+    const uncategorizedBookmark = bookmark({
+      id: "uncategorized-bookmark",
+      isSaved: false,
+      isRead: true,
+      readUpdatedAt: new Date("2026-07-30T11:00:00.000Z"),
+      viewIds: [10],
+    });
+
+    expect(
+      projectLocalMixedContentOrder({
+        feedItemIds: [tagSectionItem.id, feedSectionItem.id],
+        feedItems: {
+          [feedSectionItem.id]: feedSectionItem,
+          [tagSectionItem.id]: tagSectionItem,
+        },
+        bookmarks: {
+          [uncategorizedBookmark.id]: uncategorizedBookmark,
+        },
+        scope: { type: "view", viewId: 10 },
+        views: [sectionedView],
+        visibility: "read",
+        feedCategories: [{ feedId: 2, categoryId: 100 }],
+      }),
+    ).toEqual([
+      feedSectionItem.id,
+      tagSectionItem.id,
+      uncategorizedBookmark.id,
+    ]);
+  });
+
   it("hydrates Bookmark and Feed-item entities into separate caches from a discriminated page", () => {
     const savedBookmark = bookmark();
     const item = feedItem("feed-one", "https://example.com/feed");
@@ -218,6 +337,100 @@ describe("Bookmark synchronization and local mixed reprojection", () => {
     unsubscribeFeedItems();
     expect(bookmarkNotifications).toBe(1);
     expect(feedNotifications).toBe(1);
+  });
+
+  it("reprojects loaded mixed Views when a Feed item descriptor changes", () => {
+    const videosView = { ...view(), contentFilter: 2 as const };
+    const shortsView = {
+      ...view(),
+      id: 11,
+      name: "Shorts",
+      contentFilter: 4 as const,
+    };
+    viewsStore.getState().set([videosView, shortsView]);
+    const horizontal = {
+      ...feedItem("changing-video", "https://example.com/video"),
+      contentType: "video" as const,
+      orientation: "horizontal" as const,
+    };
+    feedItemsStore.getState().setFeedItem(horizontal.id, horizontal);
+    for (const target of [videosView, shortsView]) {
+      mixedContentStore.getState().applyPage({
+        scope: { type: "view", viewId: target.id },
+        visibility: "unread",
+        page: page(
+          target.id === videosView.id
+            ? [reference("feed-item", horizontal.id)]
+            : [],
+        ),
+        replacesScope: true,
+        feedItems: feedItemsStore.getState().feedItemsDict,
+      });
+    }
+
+    const vertical = {
+      ...horizontal,
+      orientation: "vertical" as const,
+      updatedAt: new Date(NOW.getTime() + 1),
+    };
+    const affected = processPublishedChunks([
+      {
+        source: "initial",
+        chunk: {
+          type: "feed-items",
+          feedId: vertical.feedId,
+          feedItems: [vertical],
+        },
+      },
+    ]);
+
+    expect(
+      affected
+        .map((scope) => getMixedScopeKey(scope.scope, scope.visibility))
+        .sort(),
+    ).toEqual(["view:10:unread", "view:11:unread"]);
+    expect(
+      mixedContentStore.getState().scopes["view:10:unread"]?.references,
+    ).toEqual([]);
+    expect(
+      mixedContentStore.getState().scopes["view:11:unread"]?.references,
+    ).toEqual([reference("feed-item", vertical.id)]);
+  });
+
+  it("reprojects cached Feed items immediately after a View filter edit", () => {
+    const horizontal = {
+      ...feedItem("horizontal", "https://example.com/horizontal"),
+      contentType: "video" as const,
+      orientation: "horizontal" as const,
+    };
+    const vertical = {
+      ...feedItem("vertical", "https://example.com/vertical"),
+      contentType: "video" as const,
+      orientation: "vertical" as const,
+    };
+    feedItemsStore.getState().setFeedItems([horizontal, vertical]);
+    mixedContentStore.getState().applyPage({
+      scope: { type: "view", viewId: 10 },
+      visibility: "unread",
+      page: page([reference("feed-item", horizontal.id)]),
+      replacesScope: true,
+      feedItems: feedItemsStore.getState().feedItemsDict,
+    });
+
+    const shortsView = { ...view(), contentFilter: 4 as const };
+    viewsStore.getState().set([shortsView]);
+    const feedItems = feedItemsStore.getState().feedItemsDict;
+    mixedContentStore.getState().reprojectFeedItems({
+      itemIds: Object.keys(feedItems),
+      feedItems,
+      bookmarks: bookmarksStore.getState().snapshot(),
+      views: [shortsView],
+      feedCategories: [],
+    });
+
+    expect(
+      mixedContentStore.getState().scopes["view:10:unread"]?.references,
+    ).toEqual([reference("feed-item", vertical.id)]);
   });
 
   it("suppresses matching Feed items immediately, moves Bookmark visibility, restores on deletion, and reports scopes for refill", () => {
@@ -494,14 +707,14 @@ describe("Bookmark synchronization and local mixed reprojection", () => {
     expect(
       mixedContentStore.getState().scopes[getMixedScopeKey(scope, "unread")]
         ?.references,
-    ).toEqual([reference("feed-item", item.id)]);
+    ).toEqual([]);
     expect(
       mixedContentStore
         .getState()
         .scopes[getMixedScopeKey(scope, "read")]?.references.map(
           ({ entityId }) => entityId,
         ),
-    ).toEqual([archivedBookmark.id]);
+    ).toEqual([archivedBookmark.id, item.id]);
 
     await setMixedReadValue({ references, isRead: false });
     expect(
@@ -510,6 +723,17 @@ describe("Bookmark synchronization and local mixed reprojection", () => {
     expect(feedItemsStore.getState().feedItemsDict[item.id]?.isWatched).toBe(
       false,
     );
+    expect(
+      mixedContentStore
+        .getState()
+        .scopes[getMixedScopeKey(scope, "unread")]?.references.map(
+          ({ entityId }) => entityId,
+        ),
+    ).toEqual([archivedBookmark.id, item.id]);
+    expect(
+      mixedContentStore.getState().scopes[getMixedScopeKey(scope, "read")]
+        ?.references,
+    ).toEqual([]);
     expect(orpcMocks.setBookmarkBulkReadValue).toHaveBeenNthCalledWith(2, {
       bookmarkIds: [archivedBookmark.id],
       isRead: false,

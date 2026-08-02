@@ -28,12 +28,6 @@ export type MixedContentCursor = {
 } | null;
 
 export type ApplicationBookmark = DatabaseBookmark & {
-  title: string;
-  author: string | null;
-  publishedAt: Date | null;
-  effectiveUrl: string | null;
-  iconUrl: string | null;
-  representativeImageUrl: string | null;
   captureHash: string | null;
   capturedAt: Date | null;
   viewIds: number[];
@@ -79,7 +73,6 @@ export async function queryMixedContentPage(input: {
     };
   }
   const hasSections =
-    input.visibility !== "read" &&
     input.scope.type === "view" &&
     input.scope.viewId !== INBOX_VIEW_ID &&
     scopeData.sections.length > 0;

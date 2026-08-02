@@ -2,14 +2,8 @@
 
 import clsx from "clsx";
 
-import { createFileRoute, useRouter } from "@tanstack/react-router";
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-} from "react";
+import { createFileRoute } from "@tanstack/react-router";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useAtomValue, useSetAtom } from "jotai";
 import rehypeParse from "rehype-parse";
 import rehypeSanitize from "rehype-sanitize";
@@ -29,9 +23,9 @@ import {
   getElements,
   useArticleNavigation,
 } from "~/lib/hooks/useArticleNavigation";
-import { getScrollContainer } from "~/lib/scroll";
 import { useDebouncedSaveProgress } from "~/lib/hooks/useDebouncedSaveProgress";
 import { useRefreshFeedItem } from "~/lib/hooks/useRefreshFeedItem";
+import { useRestoreArticleProgress } from "~/lib/hooks/useRestoreArticleProgress";
 import { useScrollDirection } from "~/lib/hooks/useScrollDirection";
 import { detectTruncatedContent } from "~/lib/utils/detectTruncatedContent";
 import {
@@ -45,21 +39,19 @@ import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import { Button } from "~/components/ui/button";
 import { ArticleSidebars } from "~/components/feed/read/ArticleSidebars";
 import { useRetentionPin } from "~/lib/hooks/useRetentionPin";
+import { useBookmarkValue } from "~/lib/data/bookmarks";
+import { BookmarkReader } from "~/components/content-reader/BookmarkReader";
+import { ContentRendererFallback } from "~/components/content-renderer/ContentRendererFallback";
+import { getArticleWidthLayout } from "~/components/content-reader/articleWidth";
+import {
+  contentDestination,
+  resolveContentItem,
+} from "~/lib/data/content-items/resolver";
 
 const parser = unified()
   .use(rehypeParse, { fragment: true })
   .use(rehypeSanitize)
   .use(rehypeStringify);
-
-const MAX_WIDTH_MAP: Record<number, string> = {
-  [0]: "container-xl",
-  [1]: "container-2xl",
-  [2]: "container-3xl",
-  [3]: "container-4xl",
-  [4]: "container-5xl",
-  [5]: "container-6xl",
-  [6]: "container-7xl",
-};
 
 export const Route = createFileRoute("/_app/read/$id")({
   component: ReadPage,
@@ -67,13 +59,42 @@ export const Route = createFileRoute("/_app/read/$id")({
 
 function ReadPage() {
   const params = Route.useParams();
-  const router = useRouter();
-  useRetentionPin("feed-item", params.id);
+  const bookmark = useBookmarkValue(params.id);
+  const feedItem = useFeedItemValue(params.id);
+  const hasRefreshedFeedItem = useRefreshFeedItem(
+    bookmark ? undefined : params.id,
+  );
+  const resolution = resolveContentItem({ bookmark, feedItem });
+  if (resolution.status === "ambiguous") {
+    return <p className="p-6 text-center">This content ID is ambiguous.</p>;
+  }
+  if (resolution.status === "missing") {
+    return <p className="p-6 text-center">Loading content…</p>;
+  }
+  const destination = contentDestination(resolution.item);
+  if (destination.renderer !== "read") {
+    return <ContentRendererFallback destination={destination} />;
+  }
+  if (resolution.item.entityKind === "bookmark") {
+    return <BookmarkReader id={params.id} />;
+  }
+  return (
+    <FeedReader id={params.id} hasRefreshedFeedItem={hasRefreshedFeedItem} />
+  );
+}
+
+function FeedReader({
+  id,
+  hasRefreshedFeedItem,
+}: {
+  id: string;
+  hasRefreshedFeedItem: boolean;
+}) {
+  useRetentionPin("feed-item", id);
 
   const [articleStyle] = useFlagState("ARTICLE_STYLE");
 
-  const feedItem = useFeedItemValue(params.id);
-  useRefreshFeedItem(params.id);
+  const feedItem = useFeedItemValue(id);
 
   const { feeds } = useFeeds();
   const feedCategories = useFeedCategories();
@@ -82,6 +103,7 @@ function ReadPage() {
   const feed = feeds.find((f) => f.id === feedItem?.feedId);
 
   const { zoom } = useZoom();
+  const articleWidthLayout = getArticleWidthLayout(zoom);
 
   let content = feedItem?.content ?? "";
 
@@ -121,10 +143,16 @@ function ReadPage() {
 
   // Arrow key navigation between paragraphs/headings
   const { scrollToElement } = useArticleNavigation(articleRef);
+  useRestoreArticleProgress({
+    contentId: id,
+    articleElement,
+    progress: feedItem?.progress,
+    ready: hasRefreshedFeedItem,
+  });
 
   // Save progress 500ms after last scroll event
   useDebouncedSaveProgress({
-    contentId: params.id,
+    contentId: id,
     getProgress: () => {
       const elements = getElements(articleRef.current);
       const closestVisibleIndex = getClosestVisibleElement(elements);
@@ -134,32 +162,6 @@ function ReadPage() {
       };
     },
   });
-
-  // The app reuses one scroll container across routes. Always start a newly
-  // opened article at the top; saved progress remains available to progress
-  // indicators but should not move the reader on entry.
-  useLayoutEffect(() => {
-    let active = true;
-    const resetScroll = () => {
-      getScrollContainer().scrollTo({ top: 0, behavior: "instant" });
-    };
-
-    resetScroll();
-    const unsubscribe = router.subscribe("onRendered", (event) => {
-      if (!event.pathChanged) return;
-
-      // Router scroll restoration also runs on `onRendered`. Defer until all
-      // synchronous subscribers finish so Back/Forward restoration runs first.
-      queueMicrotask(() => {
-        if (active) resetScroll();
-      });
-    });
-
-    return () => {
-      active = false;
-      unsubscribe();
-    };
-  }, [params.id, router]);
 
   // Truncation alert
   const { mutate: editFeed } = useEditFeedMutation();
@@ -211,19 +213,11 @@ function ReadPage() {
 
   return (
     <div
-      className={clsx("mx-auto grid h-full w-full place-items-center", {
-        "max-w-xl": zoom === 0,
-        "max-w-2xl": zoom === 1,
-        "max-w-3xl": zoom === 2,
-        "max-w-4xl": zoom === 3,
-        "max-w-5xl": zoom === 4,
-        "max-w-6xl": zoom === 5,
-        "max-w-7xl": zoom === 6,
-      })}
-      style={{
-        // @ts-expect-error This is fine and works
-        [`--article-max-width`]: `var(--${MAX_WIDTH_MAP[zoom]})`,
-      }}
+      className={clsx(
+        "mx-auto grid h-full w-full place-items-center",
+        articleWidthLayout.className,
+      )}
+      style={articleWidthLayout.style}
     >
       <div className="mb-4 flex w-full items-center gap-3 px-6 sm:pt-6">
         {feed?.imageUrl ? (
@@ -237,10 +231,10 @@ function ReadPage() {
         )}
         <span className="line-clamp-1 font-sans text-sm">{feed?.name}</span>
       </div>
-      <div key={params.id} className="relative w-full">
+      <div key={id} className="relative w-full">
         <ArticleSidebars
           article={articleElement}
-          contentKey={`${params.id}:${articleStyle}:${zoom}:${content}`}
+          contentKey={`${id}:${articleStyle}:${zoom}:${content}`}
           scrollToElement={scrollToElement}
         />
         <div
@@ -293,7 +287,7 @@ function ReadPage() {
           },
         )}
       >
-        <ContentActions contentID={params.id} />
+        <ContentActions contentID={id} />
       </div>
     </div>
   );

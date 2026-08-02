@@ -7,14 +7,15 @@ import {
   ArchiveIcon,
   BookmarkCheckIcon,
   BookmarkIcon,
-  CopyIcon,
+  PencilIcon,
   SendIcon,
+  Trash2Icon,
 } from "lucide-react";
-import { VIEW_CONTENT_TYPE } from "~/server/db/constants";
+import type { ApplicationBookmark } from "~/server/mixed-content/projection";
+import { CONTENT_TYPE } from "~/lib/content/descriptor";
 import { KeyboardShortcutDisplay } from "~/components/ButtonWithShortcut";
 import { Button } from "~/components/ui/button";
 import { visibilityFilterAtom } from "~/lib/data/atoms";
-import { getContentTypeFromItem } from "~/lib/data/feed-items";
 import { useFeedItemsSetWatchLaterValueMutation } from "~/lib/data/feed-items/mutations";
 import { getDataSubscriptionClientId } from "~/lib/data/clientChannel";
 import { useFeeds as useFeedsArray } from "~/lib/data/feeds/store";
@@ -28,6 +29,13 @@ import { SHORTCUT_KEYS } from "~/lib/constants/shortcuts";
 import { useFeedItemActions } from "~/lib/hooks/useFeedItemActions";
 import { useShowShortcuts } from "~/lib/hooks/useShowShortcuts";
 import { saveHomeScrollPosition } from "~/lib/scroll";
+import { useBookmarkValue } from "~/lib/data/bookmarks";
+import {
+  useDeleteBookmarkMutation,
+  useUpdateBookmarkStateMutation,
+} from "~/lib/data/bookmarks/mutations";
+import { useDialogStore } from "~/components/feed/dialogStore";
+import { contentDestination } from "~/lib/data/content-items/resolver";
 
 export type ItemSize = "standard" | "large";
 type WatchedDatePrefix = "read" | "watched";
@@ -114,11 +122,10 @@ function ItemMeta({
 
 // Thumbnail components for consistent styling across layouts
 
-function getWatchedDatePrefix(
-  item: Parameters<typeof getContentTypeFromItem>[0],
-): WatchedDatePrefix {
-  const contentType = getContentTypeFromItem(item);
-  return contentType === VIEW_CONTENT_TYPE.LONGFORM ? "read" : "watched";
+function getWatchedDatePrefix(item: {
+  contentType: "text" | "video";
+}): WatchedDatePrefix {
+  return item.contentType === CONTENT_TYPE.TEXT ? "read" : "watched";
 }
 
 type ThumbnailType =
@@ -128,7 +135,7 @@ function getThumbnailType(
   item: {
     thumbnail?: string;
     platform: string;
-    orientation?: string;
+    orientation?: string | null;
   },
   feed?: { imageUrl?: string },
   layout?: ThumbnailLayout,
@@ -294,7 +301,23 @@ function IconThumbnail({ feedImageUrl, feedName }: IconThumbnailProps) {
 function EmptyThumbnail() {
   return (
     <div className="absolute inset-0 grid place-items-center bg-transparent">
-      <div className="bg-muted-foreground/20 h-10 w-10 rounded" />
+      <div
+        data-testid="empty-thumbnail-placeholder"
+        className="bg-muted-foreground/20 h-10 w-10 rounded"
+      />
+    </div>
+  );
+}
+
+function BookmarkEmptyThumbnail() {
+  return (
+    <div className="absolute inset-0 grid place-items-center bg-transparent">
+      <div
+        data-testid="empty-thumbnail-placeholder"
+        className="bg-muted text-muted-foreground grid h-10 w-10 place-items-center rounded"
+      >
+        <BookmarkIcon size={16} />
+      </div>
     </div>
   );
 }
@@ -322,7 +345,7 @@ function ItemActions({
 }: ItemActionsProps) {
   const { mutateAsync: setWatchLaterValue } =
     useFeedItemsSetWatchLaterValueMutation(contentId);
-  const { copyUrl, toggleRead } = useFeedItemActions(contentId);
+  const { toggleRead } = useFeedItemActions(contentId);
 
   const showInstapaperAction = useShowInstapaperAction(contentId);
   const { mutateAsync: saveToInstapaper, isPending: isSavingToInstapaper } =
@@ -384,18 +407,6 @@ function ItemActions({
       <Button
         size="icon"
         variant="ghost"
-        onClick={() => void copyUrl()}
-        aria-label="Copy item URL"
-        className={clsx("relative overflow-visible", {
-          "h-8 w-8 p-0": isGrid,
-        })}
-      >
-        <CopyIcon size={isGrid ? 14 : 16} />
-        <KeyboardShortcutDisplay shortcut={SHORTCUT_KEYS.COPY_URL} />
-      </Button>
-      <Button
-        size="icon"
-        variant="ghost"
         onClick={handleToggleWatchLater}
         className={clsx("relative overflow-visible", {
           "h-8 w-8 p-0": isGrid,
@@ -429,7 +440,7 @@ interface ItemThumbnailProps {
     thumbnail?: string;
     title: string;
     platform: string;
-    orientation?: string;
+    orientation?: string | null;
     progress?: number;
     duration?: number;
   };
@@ -478,6 +489,258 @@ function ItemThumbnail({
   );
 }
 
+function BookmarkThumbnail({
+  bookmark,
+  layout,
+}: {
+  bookmark: ApplicationBookmark;
+  layout: ThumbnailLayout;
+}) {
+  const thumbnailType = bookmark.thumbnailUrl ? "article" : "icon";
+  return (
+    <ThumbnailContainer
+      layout={layout}
+      thumbnailType={thumbnailType}
+      progress={bookmark.progress}
+      duration={bookmark.duration}
+    >
+      {bookmark.thumbnailUrl ? (
+        <img
+          src={bookmark.thumbnailUrl}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          referrerPolicy="no-referrer"
+          className="absolute inset-0 h-full w-full object-cover"
+        />
+      ) : bookmark.iconUrl ? (
+        <div className="absolute inset-0 grid place-items-center">
+          <img
+            src={bookmark.iconUrl}
+            alt=""
+            loading="lazy"
+            decoding="async"
+            referrerPolicy="no-referrer"
+            className="size-10 rounded object-contain"
+          />
+        </div>
+      ) : (
+        <BookmarkEmptyThumbnail />
+      )}
+    </ThumbnailContainer>
+  );
+}
+
+function BookmarkActions({
+  bookmark,
+  layout,
+  isSelected,
+}: {
+  bookmark: ApplicationBookmark;
+  layout: ItemActionsLayout;
+  isSelected?: boolean;
+}) {
+  const { mutate: updateState } = useUpdateBookmarkStateMutation(bookmark.id);
+  const { mutate: deleteBookmark } = useDeleteBookmarkMutation();
+  const launchDialog = useDialogStore((store) => store.launchDialog);
+  const showShortcuts = useShowShortcuts();
+  const isGrid = layout === "grid";
+  const isStandardList = layout === "list";
+
+  return (
+    <div
+      className={clsx(
+        "md:bg-background/90 flex flex-row items-center md:absolute md:right-2 md:bottom-2 md:rounded-lg md:shadow-sm",
+        {
+          "md:hidden md:group-hover:flex": !(showShortcuts && isSelected),
+          "-ml-2 justify-start px-6 pb-2 md:ml-0 md:px-0 md:pb-0":
+            isStandardList,
+          "-ml-2 justify-start gap-1 px-2 pb-2 md:ml-0 md:px-0 md:pb-0": isGrid,
+        },
+      )}
+    >
+      <Button
+        size="icon"
+        variant="ghost"
+        aria-label="Delete Bookmark"
+        className={clsx({ "h-8 w-8 p-0": isGrid })}
+        onClick={() => deleteBookmark({ bookmarkId: bookmark.id })}
+      >
+        <Trash2Icon size={isGrid ? 14 : 16} />
+      </Button>
+      <Button
+        size="icon"
+        variant="ghost"
+        aria-label="Edit Bookmark"
+        className={clsx({ "h-8 w-8 p-0": isGrid })}
+        onClick={() =>
+          launchDialog("edit-bookmark", { selectedBookmarkId: bookmark.id })
+        }
+      >
+        <PencilIcon size={isGrid ? 14 : 16} />
+      </Button>
+      <Button
+        size="icon"
+        variant="ghost"
+        aria-label={bookmark.isSaved ? "Unsave" : "Save"}
+        className={clsx({ "h-8 w-8 p-0": isGrid })}
+        onClick={() =>
+          updateState({
+            bookmarkId: bookmark.id,
+            isSaved: !bookmark.isSaved,
+          })
+        }
+      >
+        {bookmark.isSaved ? (
+          <BookmarkCheckIcon size={isGrid ? 14 : 16} />
+        ) : (
+          <BookmarkIcon size={isGrid ? 14 : 16} />
+        )}
+      </Button>
+      <Button
+        size="icon"
+        variant="ghost"
+        aria-label={bookmark.isRead ? "Unarchive" : "Archive"}
+        className={clsx({ "h-8 w-8 p-0": isGrid })}
+        onClick={() =>
+          updateState({
+            bookmarkId: bookmark.id,
+            isRead: !bookmark.isRead,
+          })
+        }
+      >
+        <ArchiveIcon size={isGrid ? 14 : 16} />
+      </Button>
+    </div>
+  );
+}
+
+function BookmarkItemDisplay({
+  bookmark,
+  size,
+  isSelected,
+  onSelect,
+  grid,
+}: {
+  bookmark: ApplicationBookmark;
+  size: ItemSize;
+  isSelected?: boolean;
+  onSelect?: () => void;
+  grid: boolean;
+}) {
+  const visibilityFilter = useAtomValue(visibilityFilterAtom);
+  const destination = contentDestination({
+    entityKind: "bookmark",
+    entity: bookmark,
+  });
+  const href = destination.href;
+  const isLarge = size === "large";
+  const shouldDimReadSavedItem =
+    visibilityFilter === "later" && bookmark.isRead;
+  const date =
+    visibilityFilter === "later"
+      ? bookmark.savedUpdatedAt
+      : visibilityFilter === "read"
+        ? bookmark.readUpdatedAt
+        : bookmark.publishedAt || bookmark.createdAt;
+
+  if (grid) {
+    return (
+      <article
+        data-item-id={bookmark.id}
+        data-entity-kind="bookmark"
+        onMouseEnter={onSelect}
+        className="group relative flex h-full w-full flex-col"
+      >
+        <Link
+          to={href}
+          target={destination.external ? "_blank" : undefined}
+          rel={destination.external ? "noopener noreferrer" : undefined}
+          onClick={destination.external ? undefined : saveHomeScrollPosition}
+          className={clsx(
+            "flex h-full flex-1 flex-col rounded p-2 text-left",
+            shouldDimReadSavedItem && "opacity-50",
+            isSelected && "md:bg-muted",
+          )}
+        >
+          <BookmarkThumbnail
+            bookmark={bookmark}
+            layout={isLarge ? "large-grid" : "grid"}
+          />
+          <div className="flex flex-1 flex-col justify-center pt-2">
+            <ItemTitle title={bookmark.title} lineClamp={isLarge ? 1 : 2} />
+            <ItemMeta
+              author={bookmark.author ?? undefined}
+              feedName={
+                bookmark.siteName ?? new URL(bookmark.sourceUrl).hostname
+              }
+              postedAt={date}
+              className="pt-0.5"
+            />
+          </div>
+        </Link>
+        <BookmarkActions
+          bookmark={bookmark}
+          layout="grid"
+          isSelected={isSelected}
+        />
+      </article>
+    );
+  }
+
+  return (
+    <article
+      data-item-id={bookmark.id}
+      data-entity-kind="bookmark"
+      onMouseEnter={onSelect}
+      className={clsx(
+        "group relative flex flex-1 justify-stretch gap-2 md:mx-4 md:my-2",
+        isLarge
+          ? "flex-col md:flex-row md:items-center"
+          : "items-center md:h-20",
+      )}
+    >
+      <Link
+        to={href}
+        target={destination.external ? "_blank" : undefined}
+        rel={destination.external ? "noopener noreferrer" : undefined}
+        onClick={destination.external ? undefined : saveHomeScrollPosition}
+        className={clsx(
+          "flex w-full flex-1 flex-col gap-4 px-6 pt-4 text-left md:flex-row md:items-center md:rounded md:px-2 md:py-2",
+          isLarge ? "pb-1 md:pb-2" : "pb-4 md:h-20 md:py-0",
+          shouldDimReadSavedItem && "opacity-50",
+          isSelected && "md:bg-muted",
+        )}
+      >
+        <div
+          className={clsx("grid place-items-center", isLarge ? "w-44" : "w-16")}
+        >
+          <BookmarkThumbnail
+            bookmark={bookmark}
+            layout={isLarge ? "large-list" : "list"}
+          />
+        </div>
+        <div className="flex h-full flex-1 flex-col justify-center pr-2">
+          <ItemTitle title={bookmark.title} lineClamp={2} />
+          {isLarge && (
+            <ItemContentSnippet snippet={bookmark.description ?? undefined} />
+          )}
+          <ItemMeta
+            author={bookmark.author ?? undefined}
+            feedName={bookmark.siteName ?? new URL(bookmark.sourceUrl).hostname}
+            postedAt={date}
+          />
+        </div>
+      </Link>
+      <BookmarkActions
+        bookmark={bookmark}
+        layout={isLarge ? "large-list" : "list"}
+        isSelected={isSelected}
+      />
+    </article>
+  );
+}
+
 interface ItemDisplayProps {
   contentId: string;
   size?: ItemSize;
@@ -486,7 +749,7 @@ interface ItemDisplayProps {
   sectionItemType?: "feed" | "tag";
 }
 
-export function ItemDisplay({
+function FeedItemDisplay({
   contentId,
   size = "standard",
   isSelected,
@@ -501,12 +764,15 @@ export function ItemDisplay({
 
   const feed = feeds.find((f) => f.id === item.feedId);
 
-  const itemDestination = item.platform === "website" ? "read" : "watch";
-
+  const destination = contentDestination({
+    entityKind: "feed-item",
+    entity: item,
+  });
   const shouldOpenInSerial =
-    feed?.openLocation === "serial" || !feed?.openLocation;
+    destination.renderer !== "origin" &&
+    (feed?.openLocation === "serial" || !feed?.openLocation);
 
-  const href = shouldOpenInSerial ? `/${itemDestination}/${item.id}` : item.url;
+  const href = shouldOpenInSerial ? destination.href : item.url;
 
   const target = shouldOpenInSerial ? undefined : "_blank";
   const rel = shouldOpenInSerial ? undefined : "noopener noreferrer";
@@ -603,7 +869,7 @@ interface GridItemDisplayProps {
   sectionItemType?: "feed" | "tag";
 }
 
-export function GridItemDisplay({
+function FeedGridItemDisplay({
   contentId,
   size = "standard",
   isSelected,
@@ -679,4 +945,36 @@ export function GridItemDisplay({
       />
     </article>
   );
+}
+
+export function ItemDisplay(props: ItemDisplayProps) {
+  const bookmark = useBookmarkValue(props.contentId);
+  if (bookmark) {
+    return (
+      <BookmarkItemDisplay
+        bookmark={bookmark}
+        size={props.size ?? "standard"}
+        isSelected={props.isSelected}
+        onSelect={props.onSelect}
+        grid={false}
+      />
+    );
+  }
+  return <FeedItemDisplay {...props} />;
+}
+
+export function GridItemDisplay(props: GridItemDisplayProps) {
+  const bookmark = useBookmarkValue(props.contentId);
+  if (bookmark) {
+    return (
+      <BookmarkItemDisplay
+        bookmark={bookmark}
+        size={props.size ?? "standard"}
+        isSelected={props.isSelected}
+        onSelect={props.onSelect}
+        grid
+      />
+    );
+  }
+  return <FeedGridItemDisplay {...props} />;
 }

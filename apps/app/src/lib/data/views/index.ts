@@ -7,21 +7,9 @@ import {
   UNSELECTED_VIEW_ID,
   viewFilterIdAtom,
   viewsAtom,
-  visibilityFilterAtom,
 } from "../atoms";
-import { useFeedCategories } from "../feed-categories";
-import {
-  createFeedItemFilterIndex,
-  createFeedItemFilterPredicate,
-} from "../feed-items";
-import {
-  getFeedItemScopeKey,
-  useFeedItemsListProjection,
-  useFeedItemsOrder,
-  useScopeFeedItemIds,
-} from "../store";
-import { useViewsFetchStatus } from "./store";
 import { INBOX_VIEW_ID, INBOX_VIEW_PLACEMENT } from "./constants";
+import { useViewsFetchStatus } from "./store";
 import type { ApplicationView } from "~/server/db/schema";
 
 export { INBOX_VIEW_ID, INBOX_VIEW_PLACEMENT };
@@ -57,49 +45,6 @@ export function useUpdateViewFilter() {
   };
 
   return updateViewFilter;
-}
-
-export function useCheckFilteredFeedItemsForView() {
-  const feedItemsOrder = useFeedItemsOrder();
-  const feedItemsProjection = useFeedItemsListProjection();
-  const scopeFeedItemIds = useScopeFeedItemIds();
-  const { feedCategories } = useFeedCategories();
-  const { views } = useViews();
-  const visibilityFilter = useAtomValue(visibilityFilterAtom);
-  const filterIndex = useMemo(
-    () => createFeedItemFilterIndex(feedCategories, views),
-    [feedCategories, views],
-  );
-
-  return useCallback(
-    (viewId: number) => {
-      const viewFilter = views.find((view) => view.id === viewId) || null;
-      const scopeKey = getFeedItemScopeKey("view", viewId, visibilityFilter);
-      const scopedFeedItemsOrder = scopeFeedItemIds[scopeKey];
-      const baseFeedItemsOrder = scopedFeedItemsOrder ?? feedItemsOrder;
-      const feedItemsDict = feedItemsProjection.getItems();
-      const doesFeedItemPassFilters = createFeedItemFilterPredicate({
-        visibilityFilter,
-        categoryFilter: -1,
-        feedFilter: -1,
-        viewFilter,
-        filterIndex,
-      });
-
-      return baseFeedItemsOrder.filter((item) => {
-        const feedItem = feedItemsDict[item];
-        return !!feedItem && doesFeedItemPassFilters(feedItem);
-      });
-    },
-    [
-      feedItemsOrder,
-      scopeFeedItemIds,
-      feedItemsProjection,
-      filterIndex,
-      views,
-      visibilityFilter,
-    ],
-  );
 }
 
 export function useViews() {

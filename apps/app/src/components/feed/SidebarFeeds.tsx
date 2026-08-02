@@ -9,7 +9,7 @@ import {
   PlusIcon,
   SettingsIcon,
 } from "lucide-react";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { Skeleton } from "../ui/skeleton";
 import { useDialogStore } from "./dialogStore";
 import type { ApplicationFeed } from "~/server/db/schema";
@@ -35,68 +35,13 @@ import {
   viewFilterAtom,
   visibilityFilterAtom,
 } from "~/lib/data/atoms";
-import { useFeedCategories } from "~/lib/data/feed-categories";
-import {
-  createFeedItemFilterIndex,
-  createFeedItemFilterPredicate,
-} from "~/lib/data/feed-items";
 import { useFeeds } from "~/lib/data/feeds";
+import { useFeedStatusDict } from "~/lib/data/store";
 import {
-  useFeedItemsListProjection,
-  useFeedItemsOrder,
-  useFeedStatusDict,
-  useHasInitialData,
-  useViewFeedIds,
-} from "~/lib/data/store";
-import { useLoadingMode } from "~/lib/data/loading-machine";
-import { useCustomViewsData } from "~/lib/data/views";
-
-function useCheckFilteredFeedItemsForFeed() {
-  const feedItemsOrder = useFeedItemsOrder();
-  const feedItemsProjection = useFeedItemsListProjection();
-  const { feedCategories } = useFeedCategories();
-
-  const visibilityFilter = useAtomValue(visibilityFilterAtom);
-  const categoryFilter = useAtomValue(categoryFilterAtom);
-  const viewFilter = useAtomValue(viewFilterAtom);
-  const { customViews } = useCustomViewsData();
-  const filterIndex = useMemo(
-    () =>
-      createFeedItemFilterIndex(
-        feedCategories,
-        viewFilter && !customViews.some((view) => view.id === viewFilter.id)
-          ? [...customViews, viewFilter]
-          : customViews,
-      ),
-    [customViews, feedCategories, viewFilter],
-  );
-
-  return useCallback(
-    (feed: number) => {
-      const feedItemsDict = feedItemsProjection.getItems();
-      const doesFeedItemPassFilters = createFeedItemFilterPredicate({
-        visibilityFilter,
-        categoryFilter,
-        feedFilter: feed,
-        viewFilter,
-        filterIndex,
-      });
-
-      return feedItemsOrder.some((itemId) => {
-        const item = feedItemsDict[itemId];
-        return !!item && doesFeedItemPassFilters(item);
-      });
-    },
-    [
-      feedItemsOrder,
-      feedItemsProjection,
-      visibilityFilter,
-      categoryFilter,
-      filterIndex,
-      viewFilter,
-    ],
-  );
-}
+  getNavigationAvailability,
+  useNavigationSnapshot,
+  useNavigationSnapshotStatus,
+} from "~/lib/data/navigation/store";
 
 function useDebouncedState(defaultValue: string, delay: number) {
   const [searchQuery, setSearchQuery] = useState(defaultValue);
@@ -126,6 +71,74 @@ function sortFeedOptions(a: ApplicationFeed, b: ApplicationFeed) {
   return a.name.localeCompare(b.name);
 }
 
+type FeedOption = ApplicationFeed & {
+  hasEntries: boolean;
+  belongsToCurrentView: boolean;
+  hasEntriesInCurrentView: boolean;
+};
+
+function ActiveFeedSidebarItem({
+  feed,
+  feedStatus,
+  isSelected,
+  onSelect,
+  onEdit,
+}: {
+  feed: FeedOption;
+  feedStatus: "success" | "empty" | "error" | "skipped";
+  isSelected: boolean;
+  onSelect: () => void;
+  onEdit: () => void;
+}) {
+  const isSuccess = feedStatus === "success" || feedStatus === "skipped";
+
+  return (
+    <SidebarMenuItem className="group flex gap-1">
+      <SidebarMenuButton
+        variant={isSelected ? "outline" : "default"}
+        onClick={onSelect}
+      >
+        {feedStatus === "error" && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <AlertCircleIcon size={16} className="text-sidebar-accent" />
+            </TooltipTrigger>
+            <TooltipContent className="max-w-xs text-center">
+              Something went wrong fetching content for this feed. If this
+              continues, try deleting this feed and adding it again with the
+              correct URL.
+            </TooltipContent>
+          </Tooltip>
+        )}
+        {feedStatus === "empty" && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <MinusIcon size={16} className="text-sidebar-accent" />
+            </TooltipTrigger>
+            <TooltipContent>
+              This feed has no new content within the last 30 days.
+            </TooltipContent>
+          </Tooltip>
+        )}
+        {isSuccess && !feed.hasEntries && (
+          <CircleSmall size={16} className="text-sidebar-accent" />
+        )}
+        {isSuccess && feed.hasEntries && (
+          <div className="grid size-4 place-items-center">
+            <div className="bg-sidebar-accent size-2.5 rounded-full" />
+          </div>
+        )}
+        <div className="line-clamp-1">{feed.name}</div>
+      </SidebarMenuButton>
+      <div className="group/button flex w-fit items-center justify-end">
+        <SidebarMenuButton onClick={onEdit}>
+          <Edit2Icon className="opacity-30 transition-opacity group-hover/button:opacity-100" />
+        </SidebarMenuButton>
+      </div>
+    </SidebarMenuItem>
+  );
+}
+
 export function SidebarFeeds() {
   const [searchQuery, setSearchQuery] = useDebouncedState("", 300);
 
@@ -140,18 +153,15 @@ export function SidebarFeeds() {
   const [feedFilter, setFeedFilter] = useAtom(feedFilterAtom);
   const categoryFilter = useAtomValue(categoryFilterAtom);
   const viewFilter = useAtomValue(viewFilterAtom);
+  const visibilityFilter = useAtomValue(visibilityFilterAtom);
   const feedStatusDict = useFeedStatusDict();
-  const hasInitialData = useHasInitialData();
-  const loading = useLoadingMode();
+  const navigationSnapshot = useNavigationSnapshot();
+  const navigationSnapshotStatus = useNavigationSnapshotStatus();
+  const currentViewFeedAvailability = viewFilter
+    ? (navigationSnapshot.viewFeeds[viewFilter.id] ?? {})
+    : {};
 
-  const checkFilteredFeedItemsForFeed = useCheckFilteredFeedItemsForFeed();
-  const viewFeedIds = useViewFeedIds();
-  const feedsInCurrentView = viewFilter
-    ? (viewFeedIds[viewFilter.id] ?? [])
-    : [];
-  const feedsInCurrentViewSet = new Set(feedsInCurrentView);
-
-  if (!hasInitialData || loading.mode === "initialLoad") {
+  if (navigationSnapshotStatus !== "success") {
     return (
       <div>
         <SidebarGroup className="group-data-[collapsible=icon]:hidden">
@@ -167,7 +177,11 @@ export function SidebarFeeds() {
                 asChild
                 onClick={() => launchDialog("add-feed")}
               >
-                <ButtonWithShortcut shortcut="a" variant="ghost">
+                <ButtonWithShortcut
+                  shortcut="a"
+                  variant="ghost"
+                  aria-label="Add Feed or Bookmark"
+                >
                   <PlusIcon />
                 </ButtonWithShortcut>
               </SidebarMenuButton>
@@ -190,84 +204,63 @@ export function SidebarFeeds() {
     );
   }
 
-  const feedOptions = feeds.map((feed) => ({
-    ...feed,
-    hasEntries: feed.isActive ? checkFilteredFeedItemsForFeed(feed.id) : false,
-  }));
+  const normalizedSearchQuery = searchQuery.trim().toLocaleLowerCase();
+  const feedOptions = feeds
+    .filter(
+      (feed) =>
+        !normalizedSearchQuery ||
+        feed.name.toLocaleLowerCase().includes(normalizedSearchQuery),
+    )
+    .map((feed) => ({
+      ...feed,
+      hasEntries: getNavigationAvailability(navigationSnapshot.feeds, feed.id)[
+        visibilityFilter
+      ],
+      belongsToCurrentView: feed.id in currentViewFeedAvailability,
+      hasEntriesInCurrentView: getNavigationAvailability(
+        currentViewFeedAvailability,
+        feed.id,
+      )[visibilityFilter],
+    }));
 
   const {
     preferredFeedOptionsWithEntries,
     preferredFeedOptionsWithoutEntries,
-    feedOptionsWithContent,
-    emptyFeedOptions,
-    errorFeedOptions,
+    otherActiveFeedOptions,
     inactiveFeedOptions,
   } = feedOptions.reduce(
     (acc, feedOption) => {
       // Inactive feeds always go to the inactive section
       if (!feedOption.isActive) {
         acc.inactiveFeedOptions.push(feedOption);
-        acc.inactiveFeedOptions.sort(sortFeedOptions);
         return acc;
       }
 
-      if (searchQuery) {
-        const lowercaseQuery = searchQuery.toLowerCase();
-        const lowercaseName = feedOption.name.toLowerCase();
-
-        if (lowercaseName.includes(lowercaseQuery)) {
-          acc.preferredFeedOptionsWithEntries.push(feedOption);
-          acc.preferredFeedOptionsWithEntries.sort(sortFeedOptions);
-          return acc;
-        }
-      } else {
-        // Show in preferred section if feed has visible entries
-        if (feedOption.hasEntries) {
-          acc.preferredFeedOptionsWithEntries.push(feedOption);
-          acc.preferredFeedOptionsWithEntries.sort(sortFeedOptions);
-          return acc;
-        }
-
-        // Show at bottom of preferred section if feed belongs to the current view
-        // but has no visible entries (e.g., outside time window or all read)
-        if (feedsInCurrentViewSet.has(feedOption.id)) {
-          acc.preferredFeedOptionsWithoutEntries.push(feedOption);
-          acc.preferredFeedOptionsWithoutEntries.sort(sortFeedOptions);
-          return acc;
-        }
-      }
-
-      if (feedOption.id === feedFilter) {
+      if (feedOption.hasEntriesInCurrentView) {
         acc.preferredFeedOptionsWithEntries.push(feedOption);
-        acc.preferredFeedOptionsWithEntries.sort(sortFeedOptions);
         return acc;
       }
 
-      // Default to success if no status (e.g., skipped/cached feeds don't report status)
-      const feedStatus = feedStatusDict[feedOption.id] ?? "success";
-
-      if (feedStatus === "success") {
-        acc.feedOptionsWithContent.push(feedOption);
-        acc.feedOptionsWithContent.sort(sortFeedOptions);
-      } else if (feedStatus === "empty") {
-        acc.emptyFeedOptions.push(feedOption);
-        acc.emptyFeedOptions.sort(sortFeedOptions);
-      } else if (feedStatus === "error") {
-        acc.errorFeedOptions.push(feedOption);
-        acc.errorFeedOptions.sort(sortFeedOptions);
+      if (feedOption.belongsToCurrentView) {
+        acc.preferredFeedOptionsWithoutEntries.push(feedOption);
+        return acc;
       }
+
+      acc.otherActiveFeedOptions.push(feedOption);
 
       return acc;
     },
     {
       preferredFeedOptionsWithEntries: [] as typeof feedOptions,
       preferredFeedOptionsWithoutEntries: [] as typeof feedOptions,
-      feedOptionsWithContent: [] as typeof feedOptions,
-      emptyFeedOptions: [] as typeof feedOptions,
-      errorFeedOptions: [] as typeof feedOptions,
+      otherActiveFeedOptions: [] as typeof feedOptions,
       inactiveFeedOptions: [] as typeof feedOptions,
     },
   );
+  preferredFeedOptionsWithEntries.sort(sortFeedOptions);
+  preferredFeedOptionsWithoutEntries.sort(sortFeedOptions);
+  otherActiveFeedOptions.sort(sortFeedOptions);
+  inactiveFeedOptions.sort(sortFeedOptions);
 
   // Combine preferred options: feeds with entries first, then feeds matching view but without entries
   const preferredFeedOptions = [
@@ -275,7 +268,9 @@ export function SidebarFeeds() {
     ...preferredFeedOptionsWithoutEntries,
   ];
 
-  const hasAnyItems = checkFilteredFeedItemsForFeed(-1);
+  const hasAnyItems = Object.values(navigationSnapshot.feeds).some(
+    (availability) => availability[visibilityFilter],
+  );
 
   return (
     <>
@@ -294,7 +289,7 @@ export function SidebarFeeds() {
             </SidebarMenuButton>
             <SidebarMenuButton
               size="default-icon"
-              asChild
+              aria-label="Add Feed or Bookmark"
               onClick={() => launchDialog("add-feed")}
             >
               <PlusIcon />
@@ -334,161 +329,35 @@ export function SidebarFeeds() {
               All
             </SidebarMenuButton>
           </SidebarMenuItem>
-          {preferredFeedOptions.map((feed) => {
-            // Default to success if no status (e.g., skipped/cached feeds don't report status)
-            const feedStatus = feedStatusDict[feed.id] ?? "success";
-            const isSuccess = feedStatus === "success";
-
-            return (
-              <SidebarMenuItem key={feed.id} className="group flex gap-1">
-                <SidebarMenuButton
-                  variant={feed.id === feedFilter ? "outline" : "default"}
-                  onClick={() => setFeedFilter(feed.id)}
-                >
-                  {feedStatus === "error" && (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <AlertCircleIcon
-                          size={16}
-                          className="text-sidebar-accent"
-                        />
-                      </TooltipTrigger>
-                      <TooltipContent className="max-w-xs text-center">
-                        Something went wrong fetching content for this feed. If
-                        this continues, try deleting this feed and adding it
-                        again with the correct URL.
-                      </TooltipContent>
-                    </Tooltip>
-                  )}
-                  {feedStatus === "empty" && (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <MinusIcon size={16} className="text-sidebar-accent" />
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        This feed has no new content within the last 30 days.
-                      </TooltipContent>
-                    </Tooltip>
-                  )}
-                  {isSuccess && !feed.hasEntries && (
-                    <CircleSmall size={16} className="text-sidebar-accent" />
-                  )}
-                  {isSuccess && feed.hasEntries && (
-                    <div className="grid size-4 place-items-center">
-                      <div className="bg-sidebar-accent size-2.5 rounded-full" />
-                    </div>
-                  )}
-                  <div className="line-clamp-1">{feed.name}</div>
-                </SidebarMenuButton>
-                <div className="group/button flex w-fit items-center justify-end">
-                  <SidebarMenuButton
-                    onClick={() => setSelectedFeedForEditing(feed.id)}
-                  >
-                    <Edit2Icon className="opacity-30 transition-opacity group-hover/button:opacity-100" />
-                  </SidebarMenuButton>
-                </div>
-              </SidebarMenuItem>
-            );
-          })}
-          {!!preferredFeedOptions.length && !!feedOptionsWithContent.length && (
+          {preferredFeedOptions.map((feed) => (
+            <ActiveFeedSidebarItem
+              key={feed.id}
+              feed={feed}
+              feedStatus={feedStatusDict[feed.id] ?? "success"}
+              isSelected={feed.id === feedFilter}
+              onSelect={() => setFeedFilter(feed.id)}
+              onEdit={() => setSelectedFeedForEditing(feed.id)}
+            />
+          ))}
+          {!!preferredFeedOptions.length && !!otherActiveFeedOptions.length && (
             <hr className="my-2 opacity-50" />
           )}
-          {feedOptionsWithContent.map((feed) => {
-            return (
-              <SidebarMenuItem key={feed.id} className="group flex gap-1">
-                <SidebarMenuButton
-                  variant={feed.id === feedFilter ? "outline" : "default"}
-                  onClick={() => setFeedFilter(feed.id)}
-                >
-                  {!feed.hasEntries && (
-                    <CircleSmall size={16} className="text-sidebar-accent" />
-                  )}
-                  {feed.hasEntries && (
-                    <div className="grid size-4 place-items-center">
-                      <div className="bg-sidebar-accent size-2.5 rounded-full" />
-                    </div>
-                  )}
-                  <div className="line-clamp-1">{feed.name}</div>
-                </SidebarMenuButton>
-                <div className="group/button flex w-fit items-center justify-end">
-                  <SidebarMenuButton
-                    onClick={() => setSelectedFeedForEditing(feed.id)}
-                  >
-                    <Edit2Icon className="opacity-30 transition-opacity group-hover/button:opacity-100" />
-                  </SidebarMenuButton>
-                </div>
-              </SidebarMenuItem>
-            );
-          })}
-          {!!feedOptionsWithContent.length && !!emptyFeedOptions.length && (
-            <hr className="my-2 opacity-50" />
-          )}
-          {emptyFeedOptions.map((feed) => {
-            return (
-              <SidebarMenuItem key={feed.id} className="group flex gap-1">
-                <SidebarMenuButton
-                  variant={feed.id === feedFilter ? "outline" : "default"}
-                  onClick={() => setFeedFilter(feed.id)}
-                >
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <MinusIcon size={16} className="text-sidebar-accent" />
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      This feed has no new content within the last 30 days.
-                    </TooltipContent>
-                  </Tooltip>
-                  <div className="line-clamp-1">{feed.name}</div>
-                </SidebarMenuButton>
-                <div className="group/button flex w-fit items-center justify-end">
-                  <SidebarMenuButton
-                    onClick={() => setSelectedFeedForEditing(feed.id)}
-                  >
-                    <Edit2Icon className="opacity-30 transition-opacity group-hover/button:opacity-100" />
-                  </SidebarMenuButton>
-                </div>
-              </SidebarMenuItem>
-            );
-          })}
-          {!!emptyFeedOptions.length && !!errorFeedOptions.length && (
-            <hr className="my-2 opacity-50" />
-          )}
-          {errorFeedOptions.map((feed) => {
-            return (
-              <SidebarMenuItem key={feed.id} className="group flex gap-1">
-                <SidebarMenuButton
-                  variant={feed.id === feedFilter ? "outline" : "default"}
-                  onClick={() => setFeedFilter(feed.id)}
-                >
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <AlertCircleIcon
-                        size={16}
-                        className="text-sidebar-accent"
-                      />
-                    </TooltipTrigger>
-                    <TooltipContent className="max-w-xs text-center">
-                      Something went wrong fetching content for this feed. If
-                      this continues, try deleting this feed and adding it again
-                      with the correct URL.
-                    </TooltipContent>
-                  </Tooltip>
-
-                  <div className="line-clamp-1">{feed.name}</div>
-                </SidebarMenuButton>
-                <div className="group/button flex w-fit items-center justify-end">
-                  <SidebarMenuButton
-                    onClick={() => setSelectedFeedForEditing(feed.id)}
-                  >
-                    <Edit2Icon className="opacity-30 transition-opacity group-hover/button:opacity-100" />
-                  </SidebarMenuButton>
-                </div>
-              </SidebarMenuItem>
-            );
-          })}
+          {otherActiveFeedOptions.map((feed) => (
+            <ActiveFeedSidebarItem
+              key={feed.id}
+              feed={feed}
+              feedStatus={feedStatusDict[feed.id] ?? "success"}
+              isSelected={feed.id === feedFilter}
+              onSelect={() => setFeedFilter(feed.id)}
+              onEdit={() => setSelectedFeedForEditing(feed.id)}
+            />
+          ))}
           {inactiveFeedOptions.length > 0 && (
             <>
-              <hr className="my-2 opacity-50" />
+              {(preferredFeedOptions.length > 0 ||
+                otherActiveFeedOptions.length > 0) && (
+                <hr className="my-2 opacity-50" />
+              )}
               {inactiveFeedOptions.map((feed) => (
                 <SidebarMenuItem
                   key={feed.id}
@@ -498,6 +367,14 @@ export function SidebarFeeds() {
                     variant={feed.id === feedFilter ? "outline" : "default"}
                     onClick={() => setFeedFilter(feed.id)}
                   >
+                    {!feed.hasEntries && (
+                      <CircleSmall size={16} className="text-sidebar-accent" />
+                    )}
+                    {feed.hasEntries && (
+                      <div className="grid size-4 place-items-center">
+                        <div className="bg-sidebar-accent size-2.5 rounded-full" />
+                      </div>
+                    )}
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <PauseIcon

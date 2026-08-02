@@ -4,7 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { ContentTab } from "./ContentTab";
 import { DisplayTab } from "./DisplayTab";
-import type { ViewContentType, ViewLayout } from "~/server/db/constants";
+import type { ViewLayout } from "~/server/db/constants";
+import type { ContentFilter } from "~/lib/views/contentFilter";
 import type { ApplicationView } from "~/server/db/schema";
 import type { ViewSection } from "./ViewSectionList";
 import { Button } from "~/components/ui/button";
@@ -17,12 +18,14 @@ import {
 } from "~/lib/data/views/mutations";
 import { useViews } from "~/lib/data/views";
 import {
-  VIEW_CONTENT_TYPE,
   VIEW_LAYOUT,
   VIEW_READ_STATUS,
-  viewContentTypeSchema,
   viewLayoutSchema,
 } from "~/server/db/constants";
+import {
+  contentFilterSchema,
+  DEFAULT_CONTENT_FILTER,
+} from "~/lib/views/contentFilter";
 
 function useBuildViewSectionsFromView(
   view: ApplicationView | undefined,
@@ -53,8 +56,8 @@ export function EditViewDialog({
 
   const [name, setName] = useState<string>("");
   const [daysTimeWindow, setDaysTimeWindow] = useState<number>(0);
-  const [contentType, setContentType] = useState<ViewContentType>(
-    VIEW_CONTENT_TYPE.LONGFORM,
+  const [contentFilter, setContentFilter] = useState<ContentFilter>(
+    DEFAULT_CONTENT_FILTER,
   );
   const [layout, setLayout] = useState<ViewLayout>(VIEW_LAYOUT.LIST);
   const [selectedCategories, setSelectedCategories] = useState<number[]>([]);
@@ -84,16 +87,6 @@ export function EditViewDialog({
     return ids;
   }, [selectedFeedIds, selectedCategories, feedCategories]);
 
-  const tagIdsInView = useMemo(() => {
-    const ids = new Set(selectedCategories);
-    for (const fc of feedCategories) {
-      if (feedIdsInView.has(fc.feedId)) {
-        ids.add(fc.categoryId);
-      }
-    }
-    return ids;
-  }, [selectedCategories, feedIdsInView, feedCategories]);
-
   useEffect(() => {
     if (!selectedViewId) return;
 
@@ -102,11 +95,13 @@ export function EditViewDialog({
 
     setName(view.name);
     setDaysTimeWindow(view.daysWindow);
-    const parsedContentType = viewContentTypeSchema.safeParse(view.contentType);
-    setContentType(
-      parsedContentType.success
-        ? parsedContentType.data
-        : VIEW_CONTENT_TYPE.LONGFORM,
+    const parsedContentFilter = contentFilterSchema.safeParse(
+      view.contentFilter,
+    );
+    setContentFilter(
+      parsedContentFilter.success
+        ? parsedContentFilter.data
+        : DEFAULT_CONTENT_FILTER,
     );
     const parsedLayout = viewLayoutSchema.safeParse(view.layout);
     setLayout(parsedLayout.success ? parsedLayout.data : VIEW_LAYOUT.LIST);
@@ -118,7 +113,8 @@ export function EditViewDialog({
     setViewSections(initialViewSections);
   }, [initialViewSections]);
 
-  // Auto-remove view sections for feeds/tags that are no longer in the view
+  // Feed subsections must still resolve to View content. Tag subsections are
+  // independent headings and remain valid without View membership or content.
   useEffect(() => {
     setViewSections((prev) =>
       prev.filter((item) => {
@@ -126,12 +122,12 @@ export function EditViewDialog({
           return feedIdsInView.has(item.itemId);
         }
         if (item.itemType === "tag") {
-          return tagIdsInView.has(item.itemId);
+          return true;
         }
         return false;
       }),
     );
-  }, [feedIdsInView, tagIdsInView]);
+  }, [feedIdsInView]);
 
   const handleSave = async () => {
     if (selectedViewId === null) return;
@@ -143,7 +139,7 @@ export function EditViewDialog({
         id: selectedViewId,
         daysWindow: daysTimeWindow,
         readStatus: VIEW_READ_STATUS.UNREAD,
-        contentType: contentType,
+        contentFilter,
         layout: layout,
         categoryIds: selectedCategories,
         feedIds: selectedFeedIds,
@@ -234,8 +230,8 @@ export function EditViewDialog({
             setSelectedFeedIds={setSelectedFeedIds}
             daysTimeWindow={daysTimeWindow}
             setDaysTimeWindow={setDaysTimeWindow}
-            contentType={contentType}
-            setContentType={setContentType}
+            contentFilter={contentFilter}
+            setContentFilter={setContentFilter}
           />
         </TabsContent>
         <TabsContent value="display" className="mt-4">

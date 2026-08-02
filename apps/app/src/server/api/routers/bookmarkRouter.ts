@@ -42,19 +42,27 @@ export const save = protectedProcedure
       userId: context.user.id,
       ...input,
     });
-    if (result.removedBookmarkId) {
-      await publishBookmarkDeletion({
-        userId: context.user.id,
-        id: result.removedBookmarkId,
-        canonicalUrl: result.bookmark.canonicalUrl,
-      });
-    }
-    await publishBookmarkUpsert({
+    const removedBookmarkIds =
+      result.removedBookmarkIds ??
+      (result.removedBookmarkId ? [result.removedBookmarkId] : []);
+    await Promise.all(
+      removedBookmarkIds.map((removedBookmarkId) =>
+        publishBookmarkDeletion({
+          userId: context.user.id,
+          id: removedBookmarkId,
+          canonicalUrl: result.bookmark.canonicalUrl,
+        }),
+      ),
+    );
+    const applicationBookmark = await publishBookmarkUpsert({
       database: context.db,
       userId: context.user.id,
       bookmarkId: result.bookmark.id,
     });
-    return result;
+    return {
+      ...result,
+      bookmark: applicationBookmark ?? result.bookmark,
+    };
   });
 
 export const getCapture = protectedProcedure
@@ -71,6 +79,17 @@ export const getCapture = protectedProcedure
       ...input,
     }),
   );
+
+export const getById = protectedProcedure
+  .input(z.object({ bookmarkId: bookmarkIdSchema }))
+  .handler(async ({ context, input }) => {
+    const bookmarks = await loadApplicationBookmarksById({
+      database: context.db,
+      userId: context.user.id,
+      bookmarkIds: [input.bookmarkId],
+    });
+    return bookmarks[0] ?? null;
+  });
 
 export const updateState = protectedProcedure
   .input(
@@ -94,12 +113,12 @@ export const updateState = protectedProcedure
       userId: context.user.id,
       ...input,
     });
-    await publishBookmarkUpsert({
+    const applicationBookmark = await publishBookmarkUpsert({
       database: context.db,
       userId: context.user.id,
       bookmarkId: bookmark.id,
     });
-    return bookmark;
+    return applicationBookmark ?? bookmark;
   });
 
 export const setView = protectedProcedure
@@ -116,7 +135,7 @@ export const setView = protectedProcedure
       userId: context.user.id,
       ...input,
     });
-    await publishBookmarkUpsert({
+    return publishBookmarkUpsert({
       database: context.db,
       userId: context.user.id,
       bookmarkId: input.bookmarkId,
@@ -137,7 +156,7 @@ export const setTag = protectedProcedure
       userId: context.user.id,
       ...input,
     });
-    await publishBookmarkUpsert({
+    return publishBookmarkUpsert({
       database: context.db,
       userId: context.user.id,
       bookmarkId: input.bookmarkId,

@@ -68,9 +68,13 @@ test.describe("add feed manually", () => {
     await seedAddFeedSelectionData(SELF_HOSTED_TURSO_PORT, email);
 
     await signIn({ page, email, password });
+    await page.getByRole("radio", { name: "All", exact: true }).click();
     await expect(page.locator("article").first()).toBeVisible({
       timeout: 30000,
     });
+    await expect(
+      page.getByRole("button", { name: "Copy item URL" }),
+    ).toHaveCount(0);
 
     const manageHeaderButton = page.getByRole("button", {
       name: "Manage",
@@ -106,6 +110,7 @@ test.describe("add feed manually", () => {
     // On desktop, the command palette sits one-third down the viewport.
     const desktopDialogBox = await dialog.boundingBox();
     expect(desktopDialogBox).not.toBeNull();
+    expect(desktopDialogBox!.width).toBe(672);
     expect(desktopDialogBox!.y + desktopDialogBox!.height / 2).toBeCloseTo(
       1080 / 3,
       0,
@@ -154,25 +159,27 @@ test.describe("add feed manually", () => {
     await feedSearch.fill(
       `http://127.0.0.1:${SELF_HOSTED_RSS_SERVER_PORT}/missing-feed`,
     );
-    const noFeedsFound = dialog.getByText("No feeds found for URL.");
-    await expect(noFeedsFound).toBeVisible({ timeout: 10000 });
-    await expect(
-      noFeedsFound.locator("xpath=preceding-sibling::*[name()='svg']"),
-    ).toBeVisible();
-    const failureState = dialog.getByTestId("feed-discovery-failure-state");
-    await expectVerticalPosition(commandList, failureState, 1 / 2);
-
-    await page.setViewportSize({ width: 390, height: 300 });
-    await expect(dialog).toHaveCSS("height", "300px");
-    await expectVerticalPosition(commandList, failureState, 1 / 3);
-    await page.setViewportSize({ width: 1920, height: 1080 });
+    const bookmarkFallback = dialog.getByRole("option", {
+      name: /Bookmark page to read later/,
+    });
+    await expect(bookmarkFallback).toBeVisible({ timeout: 10000 });
+    const retryFeedDiscovery = dialog.getByRole("option", {
+      name: /Retry finding feeds/,
+    });
+    await expect(retryFeedDiscovery).toBeVisible();
+    await expect(retryFeedDiscovery).toContainText("No feeds found for URL.");
+    await expect(dialog.getByRole("option").first()).toContainText(
+      "Retry finding feeds",
+    );
 
     await expect(dialog.getByText(/Find feeds at/)).toHaveCount(0);
-    await dialog.getByRole("button", { name: "Retry" }).click();
+
+    await retryFeedDiscovery.click();
     await expect(
       dialog.getByRole("option", { name: "Finding feeds…" }),
     ).toBeVisible();
-    await expect(noFeedsFound).toBeVisible({ timeout: 10000 });
+    await expect(retryFeedDiscovery).toBeVisible({ timeout: 10000 });
+    await expect(bookmarkFallback).toBeVisible();
 
     await feedSearch.fill(feedUrl);
     await expect(
