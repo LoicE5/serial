@@ -20,7 +20,9 @@ test.describe("article progress tracking", () => {
     }
   });
 
-  test("saves progress but opens the article at the top", async ({ page }) => {
+  test("saves progress and restores the last read location", async ({
+    page,
+  }) => {
     const { feedItemId, email, password } = await seedArticleData(
       SELF_HOSTED_TURSO_PORT,
       SELF_HOSTED_APP_PORT,
@@ -79,23 +81,27 @@ test.describe("article progress tracking", () => {
       .poll(() => scrollContainer.evaluate((el) => el.scrollTop))
       .toBe(scrolledTop);
 
-    // Reloading should not move the reader back to the saved position.
-    await page.reload({ waitUntil: "load" });
+    // Reopening from the content list restores the saved reading location.
+    await page.goto("/");
+    const articleCard = page
+      .locator("article")
+      .filter({ hasText: "Test Article" });
+    await expect(articleCard).toBeVisible({ timeout: 15_000 });
+    await articleCard.getByRole("link").first().click();
     await expect(
       page.locator("h1").filter({ hasText: "Test Article" }),
     ).toBeVisible({ timeout: 15000 });
 
-    // Wait for article body content to render after IDB hydration/server sync.
+    // Wait for article body content to render after the authoritative refresh.
     await expect(
       page.locator('[data-slot="sidebar-inset"] p').first(),
     ).toBeVisible({ timeout: 15000 });
 
-    // Give router restoration and the server refresh time to settle; neither
-    // should reapply the saved paragraph position.
-    await page.waitForTimeout(1000);
-    expect(await scrollContainer.evaluate((el) => el.scrollTop)).toBe(0);
+    await expect
+      .poll(() => scrollContainer.evaluate((el) => el.scrollTop))
+      .toBeGreaterThan(0);
 
-    // Opening at the top also leaves keyboard selection inactive.
+    // Restoring progress does not activate keyboard selection.
     await expect(selectedElements).toHaveCount(0);
 
     await page.keyboard.press("ArrowDown");
@@ -139,7 +145,9 @@ test.describe("article progress tracking", () => {
     );
   });
 
-  test("opens at the top after Back then Forward", async ({ page }) => {
+  test("restores the reading position after Back then Forward", async ({
+    page,
+  }) => {
     const { email, password } = await seedArticleData(
       SELF_HOSTED_TURSO_PORT,
       SELF_HOSTED_APP_PORT,
@@ -169,11 +177,9 @@ test.describe("article progress tracking", () => {
     await page.goForward();
     await expect(page).toHaveURL(/\/read\//);
     await expect(page.getByText("Paragraph 1:")).toBeVisible();
-    await page.waitForTimeout(100);
-
-    expect(await scrollContainer.evaluate((element) => element.scrollTop)).toBe(
-      0,
-    );
+    await expect
+      .poll(() => scrollContainer.evaluate((element) => element.scrollTop))
+      .toBe(previousArticleScroll);
   });
 
   test("navigates through content inside top-level div wrappers", async ({
@@ -230,7 +236,8 @@ test.describe("article progress tracking", () => {
     await setFeedItemContent(
       SELF_HOSTED_TURSO_PORT,
       feedItemId,
-      '<img src="/icon-192x192.png" alt="Keyboard preview">',
+      `<a href="https://example.com/image-target"><img src="/icon-192x192.png" alt="Keyboard preview"></a>
+       <a href="https://example.com/article">Ordinary reader link</a>`,
     );
 
     await signIn({ page, email, password });
@@ -241,6 +248,12 @@ test.describe("article progress tracking", () => {
         name: "Open image preview: Keyboard preview",
       }),
     ).toBeVisible();
+    await expect(
+      page.locator('a[href="https://example.com/image-target"]'),
+    ).toHaveCount(0);
+    await expect(
+      page.getByRole("link", { name: "Ordinary reader link" }),
+    ).toHaveAttribute("target", "_blank");
 
     await page.keyboard.press("ArrowDown");
     await expect(page.locator("[data-lightbox]")).toHaveAttribute(

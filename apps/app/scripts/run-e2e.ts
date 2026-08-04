@@ -1,6 +1,6 @@
 import { randomInt } from "node:crypto";
 import net from "node:net";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 
 type TestEnvironment = "main" | "self-hosted" | "demo";
 
@@ -15,6 +15,7 @@ const environments: Record<
     appPortVariable: string;
     tursoPortVariable: string;
     rssPortVariable: string;
+    additionalPortVariables?: string[];
   }
 > = {
   main: {
@@ -28,6 +29,10 @@ const environments: Record<
     appPortVariable: "SERIAL_TEST_SELF_HOSTED_APP_PORT",
     tursoPortVariable: "SERIAL_TEST_SELF_HOSTED_TURSO_PORT",
     rssPortVariable: "SERIAL_TEST_SELF_HOSTED_RSS_PORT",
+    additionalPortVariables: [
+      "SERIAL_TEST_SELF_HOSTED_BOOTSTRAP_APP_PORT",
+      "SERIAL_TEST_SELF_HOSTED_BOOTSTRAP_TURSO_PORT",
+    ],
   },
   demo: {
     config: "playwright.demo.config.ts",
@@ -88,25 +93,51 @@ if (
 }
 
 const environment = environments[environmentName];
-const [appPort, tursoPort, rssPort] = await allocatePorts(3);
+const additionalPortVariables = environment.additionalPortVariables ?? [];
+const [appPort, tursoPort, rssPort, ...additionalPorts] = await allocatePorts(
+  3 + additionalPortVariables.length,
+);
 if (!appPort || !tursoPort || !rssPort) {
   throw new Error("Failed to allocate test ports.");
 }
 
 const appUrl = `http://localhost:${appPort}`;
+const additionalPortEnvironment = Object.fromEntries(
+  additionalPortVariables.map((variable, index) => [
+    variable,
+    String(additionalPorts[index]),
+  ]),
+);
 const childEnvironment = {
   ...process.env,
   [environment.appPortVariable]: String(appPort),
   [environment.tursoPortVariable]: String(tursoPort),
   [environment.rssPortVariable]: String(rssPort),
+  ...additionalPortEnvironment,
   DATABASE_URL: `http://127.0.0.1:${tursoPort}`,
   PUBLIC_BASE_URL: appUrl,
   VITE_PUBLIC_BASE_URL: appUrl,
+  SERIAL_TEST_RSS_ALLOW_LOOPBACK: "1",
+  SERIAL_TEST_RSS_ORIGIN: `http://127.0.0.1:${rssPort}`,
+  PORT: String(appPort),
 };
 
 console.log(
   `${environmentName} test ports: app=${appPort}, db=${tursoPort}, rss=${rssPort}`,
 );
+
+if (process.env.SERIAL_CLIENT_PERFORMANCE_PRODUCTION === "1") {
+  const build = spawnSync("pnpm", ["build:atomic"], {
+    env: childEnvironment,
+    stdio: "inherit",
+  });
+  if (build.signal) {
+    process.kill(process.pid, build.signal);
+  }
+  if (build.status !== 0) {
+    process.exit(build.status ?? 1);
+  }
+}
 
 const playwright = spawn(
   "pnpm",

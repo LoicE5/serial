@@ -7,18 +7,9 @@ import {
   UNSELECTED_VIEW_ID,
   viewFilterIdAtom,
   viewsAtom,
-  visibilityFilterAtom,
 } from "../atoms";
-import { useFeedCategories } from "../feed-categories";
-import { doesFeedItemPassFilters } from "../feed-items";
-import {
-  getFeedItemScopeKey,
-  useFeedItemsDict,
-  useFeedItemsOrder,
-  useScopeFeedItemIds,
-} from "../store";
-import { useViewsFetchStatus } from "./store";
 import { INBOX_VIEW_ID, INBOX_VIEW_PLACEMENT } from "./constants";
+import { useViewAvailability, useViewsFetchStatus } from "./store";
 import type { ApplicationView } from "~/server/db/schema";
 
 export { INBOX_VIEW_ID, INBOX_VIEW_PLACEMENT };
@@ -56,57 +47,14 @@ export function useUpdateViewFilter() {
   return updateViewFilter;
 }
 
-export function useCheckFilteredFeedItemsForView() {
-  const feedItemsOrder = useFeedItemsOrder();
-  const feedItemsDict = useFeedItemsDict();
-  const scopeFeedItemIds = useScopeFeedItemIds();
-  const { feedCategories } = useFeedCategories();
-  const { views } = useViews();
-  const visibilityFilter = useAtomValue(visibilityFilterAtom);
-  const { customViewCategoryIds, customViewFeedIds } = useCustomViewsData();
-
-  return useCallback(
-    (viewId: number) => {
-      const viewFilter = views.find((view) => view.id === viewId) || null;
-      const scopeKey = getFeedItemScopeKey("view", viewId, visibilityFilter);
-      const scopedFeedItemsOrder = scopeFeedItemIds[scopeKey];
-      const baseFeedItemsOrder = scopedFeedItemsOrder ?? feedItemsOrder;
-
-      return baseFeedItemsOrder.filter(
-        (item) =>
-          feedItemsDict[item] &&
-          doesFeedItemPassFilters({
-            item: feedItemsDict[item],
-            visibilityFilter,
-            categoryFilter: -1,
-            feedCategories,
-            feedFilter: -1,
-            viewFilter,
-            customViewCategoryIds,
-            customViews: undefined,
-            customViewFeedIds,
-          }),
-      );
-    },
-    [
-      feedItemsOrder,
-      scopeFeedItemIds,
-      feedItemsDict,
-      feedCategories,
-      views,
-      customViewCategoryIds,
-      customViewFeedIds,
-      visibilityFilter,
-    ],
-  );
-}
-
 export function useViews() {
   const views = useAtomValue(viewsAtom);
   const fetchStatus = useViewsFetchStatus();
+  const viewAvailability = useViewAvailability();
 
   return {
     views,
+    viewAvailability,
     hasFetchedViews: fetchStatus === "success",
   };
 }

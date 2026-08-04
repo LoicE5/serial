@@ -10,6 +10,8 @@ import * as contentCategoriesRouter from "~/server/api/routers/contentCategories
 import * as viewRouter from "~/server/api/routers/viewRouter";
 import * as viewFeedsRouter from "~/server/api/routers/viewFeedsRouter";
 import * as subscriptionRouter from "~/server/api/routers/subscriptionRouter";
+import * as bookmarkRouter from "~/server/api/routers/bookmarkRouter";
+import * as mixedContentRouter from "~/server/api/routers/mixedContentRouter";
 
 export const orpcRouter = {
   admin: adminRouter,
@@ -24,4 +26,6 @@ export const orpcRouter = {
   view: viewRouter,
   viewFeeds: viewFeedsRouter,
   subscription: subscriptionRouter,
+  bookmark: bookmarkRouter,
+  mixedContent: mixedContentRouter,
 };

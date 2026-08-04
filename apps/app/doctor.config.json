@@ -33,6 +33,10 @@
         "rules": ["react-doctor/effect-needs-cleanup"]
       },
       {
+        "files": ["src/components/debug/ClientPerformanceProfiler.tsx"],
+        "rules": ["react-doctor/no-hydration-branch-on-browser-global"]
+      },
+      {
         "files": [
           "src/components/admin/EditInviteDialog.tsx",
           "src/components/view-dialog/EditViewDialog.tsx"

@@ -1,10 +1,17 @@
 import { useMutation } from "@tanstack/react-query";
 import { feedItemsStore, useFeedItemState } from "../store";
+import { bookmarksStore } from "../bookmarks/store";
+import { feedCategoriesStore } from "../feed-categories/store";
+import { mixedContentStore } from "../mixed-content/store";
+import { viewsStore } from "../views/store";
+import { refreshNavigationSnapshotSafely } from "../navigation/store";
 import {
   clearPendingFeedItemOverride,
   setPendingWatchedOverride,
   setPendingWatchLaterOverride,
 } from "./pendingMutations";
+import { advanceFeedItemMembershipRevision } from "./membershipRevision";
+import type { ApplicationFeedItem } from "~/server/db/schema";
 import { orpc, orpcRouterClient } from "~/lib/orpc";
 
 type BulkWatchedItem = {
@@ -26,32 +33,62 @@ export type OptimisticWatchLaterContext = {
   previousIsWatchLaterUpdatedAt: Date | null;
 };
 
+type WatchedServerValue = {
+  id?: string;
+  isWatched: boolean;
+  isWatchedUpdatedAt: Date | null;
+  updatedAt: Date;
+};
+
+function setFeedItemsWithMixedProjection(items: ApplicationFeedItem[]) {
+  if (items.length === 0) return;
+  const store = feedItemsStore.getState();
+  const previousFeedItems = Object.fromEntries(
+    items.map((item) => [item.id, store.feedItemsDict[item.id]]),
+  );
+  store.setFeedItems(items);
+  mixedContentStore.getState().reprojectFeedItems({
+    itemIds: items.map((item) => item.id),
+    previousFeedItems,
+    feedItems: store.feedItemsDict,
+    bookmarks: bookmarksStore.getState().snapshot(),
+    views: viewsStore.getState().views,
+    feedCategories: feedCategoriesStore.getState().feedCategories,
+  });
+}
+
+export function applyOptimisticWatchedValues(
+  items: Array<{ id: string }>,
+  isWatched: boolean,
+) {
+  const store = feedItemsStore.getState();
+  const isWatchedUpdatedAt = isWatched ? new Date() : null;
+  const contexts: OptimisticWatchedContext[] = [];
+  const updatedItems = items.flatMap(({ id }) => {
+    const feedItem = store.feedItemsDict[id];
+    if (!feedItem) return [];
+
+    const token = setPendingWatchedOverride(id, isWatched, isWatchedUpdatedAt);
+    contexts.push({
+      itemId: id,
+      token,
+      previousIsWatched: feedItem.isWatched,
+      previousIsWatchedUpdatedAt: feedItem.isWatchedUpdatedAt,
+    });
+    return [{ ...feedItem, isWatched, isWatchedUpdatedAt }];
+  });
+  if (updatedItems.length > 0) {
+    advanceFeedItemMembershipRevision();
+    setFeedItemsWithMixedProjection(updatedItems);
+  }
+  return contexts;
+}
+
 export function applyOptimisticWatchedValue(
   itemId: string,
   isWatched: boolean,
 ): OptimisticWatchedContext | undefined {
-  const store = feedItemsStore.getState();
-  const feedItem = store.feedItemsDict[itemId];
-  if (!feedItem) return;
-
-  const isWatchedUpdatedAt = isWatched ? new Date() : null;
-  const token = setPendingWatchedOverride(
-    itemId,
-    isWatched,
-    isWatchedUpdatedAt,
-  );
-  store.setFeedItem(itemId, {
-    ...feedItem,
-    isWatched,
-    isWatchedUpdatedAt,
-  });
-
-  return {
-    itemId,
-    token,
-    previousIsWatched: feedItem.isWatched,
-    previousIsWatchedUpdatedAt: feedItem.isWatchedUpdatedAt,
-  };
+  return applyOptimisticWatchedValues([{ id: itemId }], isWatched)[0];
 }
 
 export function applyOptimisticWatchLaterValue(
@@ -68,11 +105,10 @@ export function applyOptimisticWatchLaterValue(
     isWatchLater,
     isWatchLaterUpdatedAt,
   );
-  store.setFeedItem(itemId, {
-    ...feedItem,
-    isWatchLater,
-    isWatchLaterUpdatedAt,
-  });
+  advanceFeedItemMembershipRevision();
+  setFeedItemsWithMixedProjection([
+    { ...feedItem, isWatchLater, isWatchLaterUpdatedAt },
+  ]);
 
   return {
     itemId,
@@ -85,22 +121,13 @@ export function applyOptimisticWatchLaterValue(
 export function rollbackOptimisticWatchedValue(
   context: OptimisticWatchedContext | undefined,
 ) {
-  if (
-    !context ||
-    !clearPendingFeedItemOverride(context.itemId, "isWatched", context.token)
-  ) {
-    return;
-  }
+  rollbackOptimisticWatchedValues(context ? [context] : []);
+}
 
-  const store = feedItemsStore.getState();
-  const currentItem = store.feedItemsDict[context.itemId];
-  if (!currentItem) return;
-
-  store.setFeedItem(context.itemId, {
-    ...currentItem,
-    isWatched: context.previousIsWatched,
-    isWatchedUpdatedAt: context.previousIsWatchedUpdatedAt,
-  });
+export function rollbackOptimisticWatchedValues(
+  contexts: OptimisticWatchedContext[],
+) {
+  settleOptimisticWatchedValues(contexts, []);
 }
 
 export function rollbackOptimisticWatchLaterValue(
@@ -117,36 +144,54 @@ export function rollbackOptimisticWatchLaterValue(
   const currentItem = store.feedItemsDict[context.itemId];
   if (!currentItem) return;
 
-  store.setFeedItem(context.itemId, {
-    ...currentItem,
-    isWatchLater: context.previousIsWatchLater,
-    isWatchLaterUpdatedAt: context.previousIsWatchLaterUpdatedAt,
-  });
+  setFeedItemsWithMixedProjection([
+    {
+      ...currentItem,
+      isWatchLater: context.previousIsWatchLater,
+      isWatchLaterUpdatedAt: context.previousIsWatchLaterUpdatedAt,
+    },
+  ]);
 }
 
 export function resolveOptimisticWatchedValue(
   context: OptimisticWatchedContext | undefined,
-  serverValue: {
-    isWatched: boolean;
-    isWatchedUpdatedAt: Date | null;
-    updatedAt: Date;
-  },
+  serverValue: WatchedServerValue,
 ) {
-  if (
-    !context ||
-    !clearPendingFeedItemOverride(context.itemId, "isWatched", context.token)
-  ) {
-    return;
-  }
+  if (context) settleOptimisticWatchedValues([context], [serverValue]);
+}
 
+export function settleOptimisticWatchedValues(
+  contexts: OptimisticWatchedContext[],
+  serverItems: WatchedServerValue[],
+) {
   const store = feedItemsStore.getState();
-  const currentItem = store.feedItemsDict[context.itemId];
-  if (!currentItem) return;
-
-  store.setFeedItem(context.itemId, {
-    ...currentItem,
-    ...serverValue,
+  const serverItemsById = new Map(
+    serverItems.flatMap((item) => (item.id ? [[item.id, item] as const] : [])),
+  );
+  const singleServerItem =
+    contexts.length === 1 && serverItems.length === 1
+      ? serverItems[0]
+      : undefined;
+  const updatedItems = contexts.flatMap((context) => {
+    if (
+      !clearPendingFeedItemOverride(context.itemId, "isWatched", context.token)
+    ) {
+      return [];
+    }
+    const currentItem = store.feedItemsDict[context.itemId];
+    if (!currentItem) return [];
+    const serverItem = serverItemsById.get(context.itemId) ?? singleServerItem;
+    return [
+      serverItem
+        ? { ...currentItem, ...serverItem }
+        : {
+            ...currentItem,
+            isWatched: context.previousIsWatched,
+            isWatchedUpdatedAt: context.previousIsWatchedUpdatedAt,
+          },
+    ];
   });
+  setFeedItemsWithMixedProjection(updatedItems);
 }
 
 export function resolveOptimisticWatchLaterValue(
@@ -168,10 +213,7 @@ export function resolveOptimisticWatchLaterValue(
   const currentItem = store.feedItemsDict[context.itemId];
   if (!currentItem) return;
 
-  store.setFeedItem(context.itemId, {
-    ...currentItem,
-    ...serverValue,
-  });
+  setFeedItemsWithMixedProjection([{ ...currentItem, ...serverValue }]);
 }
 
 export async function setBulkWatchedValue({
@@ -181,27 +223,17 @@ export async function setBulkWatchedValue({
   items: BulkWatchedItem[];
   isWatched: boolean;
 }) {
-  const contexts = items.map(({ id }) =>
-    applyOptimisticWatchedValue(id, isWatched),
-  );
+  const contexts = applyOptimisticWatchedValues(items, isWatched);
 
   try {
     const serverItems = await orpcRouterClient.feedItem.setBulkWatchedValue({
       items,
       isWatched,
     });
-    contexts.forEach((context) => {
-      const serverItem = serverItems?.find(
-        (candidateItem) => candidateItem.id === context?.itemId,
-      );
-      if (serverItem) {
-        resolveOptimisticWatchedValue(context, serverItem);
-      } else {
-        rollbackOptimisticWatchedValue(context);
-      }
-    });
+    settleOptimisticWatchedValues(contexts, serverItems ?? []);
+    await refreshNavigationSnapshotSafely();
   } catch (error) {
-    contexts.forEach(rollbackOptimisticWatchedValue);
+    rollbackOptimisticWatchedValues(contexts);
     throw error;
   }
 }
@@ -212,8 +244,9 @@ export function useFeedItemsSetWatchedValueMutation(contentId: string) {
       onMutate: ({ isWatched }) => {
         return applyOptimisticWatchedValue(contentId, isWatched);
       },
-      onSuccess: (serverValue, _variables, context) => {
+      onSuccess: async (serverValue, _variables, context) => {
         resolveOptimisticWatchedValue(context, serverValue);
+        await refreshNavigationSnapshotSafely();
       },
       onError: (_error, _variables, context) => {
         rollbackOptimisticWatchedValue(context);
@@ -228,8 +261,9 @@ export function useFeedItemsSetWatchLaterValueMutation(contentId: string) {
       onMutate: ({ isWatchLater }) => {
         return applyOptimisticWatchLaterValue(contentId, isWatchLater);
       },
-      onSuccess: (serverValue, _variables, context) => {
+      onSuccess: async (serverValue, _variables, context) => {
         resolveOptimisticWatchLaterValue(context, serverValue);
+        await refreshNavigationSnapshotSafely();
       },
       onError: (_error, _variables, context) => {
         rollbackOptimisticWatchLaterValue(context);
@@ -255,24 +289,14 @@ export function useBulkSetWatchedValueMutation() {
   return useMutation(
     orpc.feedItem.setBulkWatchedValue.mutationOptions({
       onMutate: ({ items, isWatched }) => {
-        return items.map(({ id }) =>
-          applyOptimisticWatchedValue(id, isWatched),
-        );
+        return applyOptimisticWatchedValues(items, isWatched);
       },
-      onSuccess: (serverItems, _variables, contexts) => {
-        contexts?.forEach((context) => {
-          const serverItem = serverItems?.find(
-            (candidateItem) => candidateItem.id === context?.itemId,
-          );
-          if (serverItem) {
-            resolveOptimisticWatchedValue(context, serverItem);
-          } else {
-            rollbackOptimisticWatchedValue(context);
-          }
-        });
+      onSuccess: async (serverItems, _variables, contexts) => {
+        settleOptimisticWatchedValues(contexts ?? [], serverItems ?? []);
+        await refreshNavigationSnapshotSafely();
       },
       onError: (_error, _variables, contexts) => {
-        contexts?.forEach(rollbackOptimisticWatchedValue);
+        rollbackOptimisticWatchedValues(contexts ?? []);
       },
     }),
   );

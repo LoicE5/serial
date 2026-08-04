@@ -19,7 +19,6 @@ import { ViewItemStandardList } from "./ViewItemStandardList";
 import { useViewSections } from "./useViewSections";
 import { useViewListScroll } from "./useViewListScroll";
 import type { ViewSection } from "./useViewSections";
-import type { ViewLayout } from "~/server/db/constants";
 import { VIEW_LAYOUT } from "~/server/db/constants";
 import FeedLoading from "~/components/loading";
 import { ButtonWithShortcut } from "~/components/ButtonWithShortcut";
@@ -34,19 +33,17 @@ import {
 } from "~/lib/data/atoms";
 import { useFeedCategories } from "~/lib/data/feed-categories";
 import { useFeeds } from "~/lib/data/feeds";
-import { useFilteredFeedItemsOrder } from "~/lib/data/feed-items";
+import { REMOTE_IMAGE_PROPS } from "~/lib/remoteMedia";
+import { useFilteredContentOrder } from "~/lib/data/feed-items";
 import {
-  setBulkWatchedValue,
-  useBulkSetWatchedValueMutation,
-} from "~/lib/data/feed-items/mutations";
-import {
-  feedItemsStore,
   useFetchFeedItemsLastFetchedAt,
   useHasInitialData,
 } from "~/lib/data/store";
 import { useFeedItemNavigation } from "~/lib/hooks/useFeedItemNavigation";
 import { useShortcut } from "~/lib/hooks/useShortcut";
 import { showUndoToast } from "~/lib/undo";
+import { bookmarksStore } from "~/lib/data/bookmarks/store";
+import { setMixedReadValue } from "~/lib/data/mixed-content/mutations";
 
 function getNextAvailableItemAfterSection(
   sectionIndex: number,
@@ -77,6 +74,7 @@ function SectionFeedIcon({ itemId }: { itemId?: number }) {
   if (feed?.imageUrl) {
     return (
       <img
+        {...REMOTE_IMAGE_PROPS}
         src={feed.imageUrl}
         alt={feed.name}
         className="h-6 w-6 shrink-0 rounded object-contain"
@@ -104,11 +102,9 @@ function SectionHeading({
 }) {
   const visibilityFilter = useAtomValue(visibilityFilterAtom);
   const selectedItemId = useAtomValue(selectedItemIdAtom);
-  const feedItemsDict = feedItemsStore.useFeedItemsDict();
   const [isLoading, setIsLoading] = useState(false);
   const [isStuck, setIsStuck] = useState(false);
   const sentinelRef = useRef<HTMLDivElement>(null);
-  const bulkMutation = useBulkSetWatchedValueMutation();
 
   useEffect(() => {
     if (!sentinelRef.current) return;
@@ -125,23 +121,23 @@ function SectionHeading({
 
     setIsLoading(true);
     try {
-      const items = sectionItems
-        .map((id) => ({
-          id,
-          feedId: feedItemsDict[id]?.feedId ?? 0,
-        }))
-        .filter((item) => item.feedId > 0);
+      const references = sectionItems.map((entityId) => ({
+        entityId,
+        entityKind: bookmarksStore.getState().getBookmark(entityId)
+          ? ("bookmark" as const)
+          : ("feed-item" as const),
+        sectionPlacement: null,
+        normalizedAt: new Date(0),
+      }));
 
-      if (items.length === 0) return;
-
-      await bulkMutation.mutateAsync({ items, isWatched: true });
+      await setMixedReadValue({ references, isRead: true });
 
       onMarkAsRead?.(sectionIndex);
 
       showUndoToast({
-        message: `Marked ${items.length} item${items.length === 1 ? "" : "s"} as read`,
+        message: `Marked ${references.length} item${references.length === 1 ? "" : "s"} as read`,
         onUndo: async () => {
-          await setBulkWatchedValue({ items, isWatched: false });
+          await setMixedReadValue({ references, isRead: false });
         },
       });
     } finally {
@@ -199,18 +195,15 @@ function LayoutSection({
   handleMouseSelect,
   sectionIndex,
   onMarkAsRead,
-  viewName,
   sectionItemsForAction,
 }: {
   section: ViewSection;
   handleMouseSelect: (itemId: string) => void;
   sectionIndex: number;
   onMarkAsRead?: (sectionIndex: number) => void;
-  viewName?: string;
   sectionItemsForAction: string[];
 }) {
-  const { items, layout, name, isUncategorized, itemType, itemId } = section;
-  const sectionName = isUncategorized ? (viewName ?? name) : name;
+  const { items, layout, name, itemType, itemId } = section;
 
   const layoutProps = {
     items,
@@ -222,7 +215,7 @@ function LayoutSection({
     <div className="w-full" id={`section-${sectionIndex}`}>
       {items.length > 0 && (
         <SectionHeading
-          name={sectionName}
+          name={name}
           itemType={itemType}
           itemId={itemId}
           sectionItems={sectionItemsForAction}
@@ -248,39 +241,6 @@ function LayoutSection({
   );
 }
 
-function isGridLayout(layout: ViewLayout) {
-  return layout === VIEW_LAYOUT.GRID || layout === VIEW_LAYOUT.LARGE_GRID;
-}
-
-function FlatViewItemsList({
-  items,
-  layout,
-  handleMouseSelect,
-}: {
-  items: string[];
-  layout: ViewLayout;
-  handleMouseSelect: (itemId: string) => void;
-}) {
-  const layoutProps = {
-    items,
-    handleMouseSelect,
-  };
-
-  if (layout === VIEW_LAYOUT.LARGE_LIST) {
-    return <ViewItemLargeList {...layoutProps} />;
-  }
-
-  if (layout === VIEW_LAYOUT.GRID) {
-    return <ViewItemGrid {...layoutProps} />;
-  }
-
-  if (layout === VIEW_LAYOUT.LARGE_GRID) {
-    return <ViewItemLargeGrid {...layoutProps} />;
-  }
-
-  return <ViewItemStandardList {...layoutProps} />;
-}
-
 export function RenderViewItems() {
   useLazyFeedFilter();
   useLazyCategoryFilter();
@@ -292,7 +252,7 @@ export function RenderViewItems() {
   const feedItemsLastFetchedAt = useFetchFeedItemsLastFetchedAt();
   const hasInitialData = useHasInitialData();
 
-  const filteredFeedItemsOrder = useFilteredFeedItemsOrder();
+  const filteredFeedItemsOrder = useFilteredContentOrder();
 
   const currentView = useAtomValue(viewFilterAtom);
   const {
@@ -314,15 +274,11 @@ export function RenderViewItems() {
     visibleFilteredFeedItemsOrder,
   );
   const visibilityFilter = useAtomValue(visibilityFilterAtom);
-  const isReadVisibility = visibilityFilter === "read";
   const viewListKey = `view-${currentView?.id ?? "none"}-${visibilityFilter}`;
-  const navigationItems = isReadVisibility
-    ? filteredFeedItemsOrder
-    : fullFlatItems;
-  const navigationHasGridSections = isReadVisibility
-    ? isGridLayout(baseLayout)
-    : fullHasGridSections;
-  const navigationSectionInfo = isReadVisibility ? undefined : fullSectionInfo;
+  const navigationItems = fullFlatItems;
+  const navigationIsGridLayout =
+    fullSectionInfo.length === 1 && fullHasGridSections;
+  const navigationSectionInfo = fullSectionInfo;
   const shouldShowPaginationEnd =
     hasRenderedAllItems &&
     paginationState?.hasMore === false &&
@@ -331,7 +287,7 @@ export function RenderViewItems() {
   // Keyboard navigation
   const { handleMouseSelect, selectItem } = useFeedItemNavigation(
     navigationItems,
-    navigationHasGridSections,
+    navigationIsGridLayout,
     navigationSectionInfo,
   );
 
@@ -353,12 +309,19 @@ export function RenderViewItems() {
     return <FeedLoading />;
   }
 
-  if (hasFetchedFeeds && !feeds.length) {
+  if (
+    hasFetchedFeeds &&
+    !feeds.length &&
+    Object.keys(bookmarksStore.getState().snapshot()).length === 0
+  ) {
     return <FeedEmptyState />;
   }
 
   // Show skeletons while feed items are being fetched
-  if (feedItemsLastFetchedAt === null && filteredFeedItemsOrder.length === 0) {
+  if (
+    (feedItemsLastFetchedAt === null || paginationState?.isFetching) &&
+    filteredFeedItemsOrder.length === 0
+  ) {
     switch (baseLayout) {
       case VIEW_LAYOUT.LARGE_LIST:
         return <LargeListSkeleton />;
@@ -382,30 +345,20 @@ export function RenderViewItems() {
 
   return (
     <div className="w-full">
-      {isReadVisibility ? (
-        <FlatViewItemsList
-          key={viewListKey}
-          items={visibleFilteredFeedItemsOrder}
-          layout={baseLayout}
+      {visibleComputedSections.map((section, index) => (
+        <LayoutSection
+          key={
+            section.isUncategorized
+              ? `${viewListKey}-uncategorized`
+              : `${viewListKey}-${section.itemType}-${section.itemId}`
+          }
+          section={section}
+          sectionIndex={index}
           handleMouseSelect={handleMouseSelect}
+          onMarkAsRead={handleSectionMarkAsRead}
+          sectionItemsForAction={fullComputedSections[index]?.items ?? []}
         />
-      ) : (
-        visibleComputedSections.map((section, index) => (
-          <LayoutSection
-            key={
-              section.isUncategorized
-                ? `${viewListKey}-uncategorized`
-                : `${viewListKey}-${section.itemType}-${section.itemId}`
-            }
-            section={section}
-            sectionIndex={index}
-            handleMouseSelect={handleMouseSelect}
-            onMarkAsRead={handleSectionMarkAsRead}
-            viewName={currentView?.name}
-            sectionItemsForAction={fullComputedSections[index]?.items ?? []}
-          />
-        ))
-      )}
+      ))}
       <div ref={sentinelRef} className="h-px w-full" />
       {paginationState?.isFetching && <PaginationLoader />}
       {shouldShowPaginationEnd && <PaginationEnd />}

@@ -1,0 +1,372 @@
+import {
+  EXTENSION_FEED_ADD_REQUEST_TIMEOUT_MS,
+  parseExtensionBookmark,
+  parseExtensionDiscoveredFeeds,
+  parseExtensionBookmarkWorkspace,
+  type ExtensionCaptureCandidate,
+  type ExtensionPageObservation,
+} from "@serial/bookmark-capture";
+
+import { isSessionExpired } from "./auth";
+import type { ExtensionAuthSession } from "./auth";
+import { serializeBookmarkRequest } from "./bookmarks";
+import type {
+  BookmarkMessage,
+  BookmarkMessageResponse,
+  BookmarkWorkspace,
+} from "./bookmarks";
+
+type BookmarkBackgroundDependencies = {
+  readStoredSession: () => Promise<ExtensionAuthSession | null>;
+  clearSession: (session?: ExtensionAuthSession) => Promise<void>;
+  fetchFromInstance: (
+    input: string | URL | Request,
+    init?: RequestInit,
+    options?: { timeoutMs?: number },
+  ) => Promise<Response>;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function eligiblePageUrl(value: string | undefined) {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    return (url.protocol === "http:" || url.protocol === "https:") &&
+      !url.username &&
+      !url.password
+      ? url.toString()
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export function isConnectedInstancePage(sourceUrl: string, instance: string) {
+  try {
+    return new URL(sourceUrl).origin === new URL(instance).origin;
+  } catch {
+    return false;
+  }
+}
+
+function fallbackCapture(sourceUrl: string): ExtensionCaptureCandidate {
+  const url = new URL(sourceUrl);
+  const host = url.hostname.replace(/^www\./, "");
+  const pathSegment = url.pathname.split("/").filter(Boolean).at(-1) ?? "";
+  let decodedPathSegment = pathSegment;
+  try {
+    decodedPathSegment = decodeURIComponent(pathSegment);
+  } catch {
+    // A malformed escape in the URL should still degrade to URL-only capture.
+  }
+  const title = decodedPathSegment.replace(/[-_]+/g, " ").trim() || host;
+  return {
+    effectiveUrl: sourceUrl,
+    title,
+    siteName: host,
+    descriptor: {
+      platform: "website",
+      contentType: "text",
+      orientation: null,
+      contentId: null,
+      classifierVersion: 1,
+    },
+  };
+}
+
+function parsedObservation(
+  value: unknown,
+  sourceUrl: string,
+): ExtensionPageObservation {
+  if (!isRecord(value) || !isRecord(value.capture)) {
+    return {
+      sourceUrl,
+      capture: fallbackCapture(sourceUrl),
+      captureFailureReason: "unextractable",
+      feeds: [],
+    };
+  }
+  return value as unknown as ExtensionPageObservation;
+}
+
+export function parseWorkspace(
+  value: unknown,
+  fallbackFeeds: ExtensionPageObservation["feeds"],
+): BookmarkWorkspace | null {
+  return parseExtensionBookmarkWorkspace(value, fallbackFeeds);
+}
+
+async function authenticatedApiRequest(
+  session: ExtensionAuthSession,
+  path: string,
+  init: RequestInit,
+  dependencies: BookmarkBackgroundDependencies,
+) {
+  const response = await dependencies.fetchFromInstance(
+    `${session.instance}${path}`,
+    {
+      ...init,
+      headers: {
+        Authorization: `Bearer ${session.token}`,
+        "Content-Type": "application/json",
+        ...init.headers,
+      },
+    },
+    path === "/api/extension/feeds"
+      ? { timeoutMs: EXTENSION_FEED_ADD_REQUEST_TIMEOUT_MS }
+      : undefined,
+  );
+  if (response.status === 401 || response.status === 403) {
+    await dependencies.clearSession(session);
+    return { response, payload: null, authExpired: true };
+  }
+  let payload: unknown = null;
+  try {
+    payload = await response.json();
+  } catch {
+    // The caller reports a compatibility error without echoing response data.
+  }
+  return { response, payload, authExpired: false };
+}
+
+function apiError(payload: unknown, fallback: string) {
+  return isRecord(payload) && typeof payload.error === "string"
+    ? payload.error
+    : fallback;
+}
+
+async function captureActiveBookmark(
+  session: ExtensionAuthSession,
+  dependencies: BookmarkBackgroundDependencies,
+): Promise<BookmarkMessageResponse> {
+  const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+  const sourceUrl = eligiblePageUrl(tab?.url);
+  if (!tab?.id || !sourceUrl) return { ok: true, status: "ineligible" };
+  if (isConnectedInstancePage(sourceUrl, session.instance)) {
+    return { ok: true, status: "base" };
+  }
+
+  let observation: ExtensionPageObservation;
+  try {
+    const results = await browser.scripting.executeScript({
+      target: { tabId: tab.id },
+      files: ["/content-scripts/bookmark-capture.js"],
+    });
+    observation = parsedObservation(results[0]?.result, sourceUrl);
+  } catch {
+    observation = {
+      sourceUrl,
+      capture: fallbackCapture(sourceUrl),
+      captureFailureReason: "unextractable",
+      feeds: [],
+    };
+  }
+
+  const request = await authenticatedApiRequest(
+    session,
+    "/api/extension/bookmarks",
+    {
+      method: "POST",
+      body: serializeBookmarkRequest(observation).serialized,
+    },
+    dependencies,
+  );
+  if (request.authExpired) {
+    return { ok: false, authExpired: true, error: "Reconnect to Serial" };
+  }
+  if (!request.response.ok) {
+    return {
+      ok: false,
+      authExpired: false,
+      error: apiError(request.payload, "Serial could not save this Bookmark"),
+    };
+  }
+  const workspace = parseWorkspace(request.payload, observation.feeds);
+  if (!workspace) {
+    return {
+      ok: false,
+      authExpired: false,
+      error: "This Serial instance returned an incompatible Bookmark response",
+    };
+  }
+  return { ok: true, status: "saved", workspace };
+}
+
+async function discoverBookmarkFeeds(
+  session: ExtensionAuthSession,
+  sourceUrl: string,
+  dependencies: BookmarkBackgroundDependencies,
+): Promise<BookmarkMessageResponse> {
+  const request = await authenticatedApiRequest(
+    session,
+    "/api/extension/bookmark-feed-discovery",
+    {
+      method: "POST",
+      body: JSON.stringify({ sourceUrl }),
+    },
+    dependencies,
+  );
+  if (request.authExpired) {
+    return { ok: false, authExpired: true, error: "Reconnect to Serial" };
+  }
+  if (!request.response.ok) {
+    return {
+      ok: false,
+      authExpired: false,
+      error: apiError(request.payload, "Serial could not discover Feeds"),
+    };
+  }
+  const feeds = isRecord(request.payload)
+    ? parseExtensionDiscoveredFeeds(request.payload.feeds)
+    : null;
+  return feeds
+    ? { ok: true, status: "feeds-discovered", feeds }
+    : {
+        ok: false,
+        authExpired: false,
+        error: "This Serial instance returned incompatible Feed results",
+      };
+}
+
+export async function handleBookmarkMessage(
+  message: BookmarkMessage,
+  dependencies: BookmarkBackgroundDependencies,
+): Promise<BookmarkMessageResponse> {
+  const session = await dependencies.readStoredSession();
+  if (!session || isSessionExpired(session)) {
+    if (session) await dependencies.clearSession(session);
+    return { ok: false, authExpired: true, error: "Reconnect to Serial" };
+  }
+  try {
+    if (message.type === "bookmark.capture-active") {
+      return captureActiveBookmark(session, dependencies);
+    }
+    if (message.type === "bookmark.discover-feeds") {
+      return await discoverBookmarkFeeds(
+        session,
+        message.sourceUrl,
+        dependencies,
+      );
+    }
+    const request =
+      message.type === "bookmark.add-feed"
+        ? await authenticatedApiRequest(
+            session,
+            "/api/extension/feeds",
+            {
+              method: "POST",
+              body: JSON.stringify({ url: message.url }),
+            },
+            dependencies,
+          )
+        : await authenticatedApiRequest(
+            session,
+            "/api/extension/bookmarks",
+            {
+              method: message.type === "bookmark.remove" ? "DELETE" : "PATCH",
+              body: JSON.stringify(
+                message.type === "bookmark.remove"
+                  ? { bookmarkId: message.bookmarkId }
+                  : message.type === "bookmark.create-view" ||
+                      message.type === "bookmark.create-tag"
+                    ? {
+                        action:
+                          message.type === "bookmark.create-view"
+                            ? "create-view"
+                            : "create-tag",
+                        bookmarkId: message.bookmarkId,
+                        name: message.name,
+                      }
+                    : message.type === "bookmark.set-view"
+                      ? {
+                          action: "set-view",
+                          bookmarkId: message.bookmarkId,
+                          viewId: message.viewId,
+                          assigned: message.assigned,
+                        }
+                      : {
+                          action: "set-tag",
+                          bookmarkId: message.bookmarkId,
+                          tagId: message.tagId,
+                          assigned: message.assigned,
+                        },
+              ),
+            },
+            dependencies,
+          );
+    if (request.authExpired) {
+      return { ok: false, authExpired: true, error: "Reconnect to Serial" };
+    }
+    if (!request.response.ok) {
+      return {
+        ok: false,
+        authExpired: false,
+        error: apiError(
+          request.payload,
+          "Serial could not complete that action",
+        ),
+      };
+    }
+    if (message.type === "bookmark.remove") {
+      return { ok: true, status: "removed" };
+    }
+    if (message.type === "bookmark.add-feed") {
+      return { ok: true, status: "feed-added" };
+    }
+    const payload = request.payload;
+    const bookmark = isRecord(payload)
+      ? parseExtensionBookmark(payload.bookmark)
+      : null;
+    if (bookmark && isRecord(payload) && isRecord(payload.createdOption)) {
+      const created = payload.createdOption;
+      const option = isRecord(created.option) ? created.option : null;
+      if (
+        created.kind === "view" &&
+        option &&
+        typeof option.id === "number" &&
+        typeof option.name === "string" &&
+        Array.isArray(option.tagIds) &&
+        option.tagIds.every((id: unknown) => typeof id === "number")
+      ) {
+        return {
+          ok: true,
+          status: "created-organization",
+          bookmark,
+          kind: "view",
+          option: { id: option.id, name: option.name, tagIds: option.tagIds },
+        };
+      }
+      if (
+        created.kind === "tag" &&
+        option &&
+        typeof option.id === "number" &&
+        typeof option.name === "string"
+      ) {
+        return {
+          ok: true,
+          status: "created-organization",
+          bookmark,
+          kind: "tag",
+          option: { id: option.id, name: option.name },
+        };
+      }
+    }
+    return bookmark
+      ? { ok: true, status: "updated", bookmark }
+      : {
+          ok: false,
+          authExpired: false,
+          error:
+            "This Serial instance returned an incompatible Bookmark response",
+        };
+  } catch {
+    return {
+      ok: false,
+      authExpired: false,
+      error: "Unable to reach the Serial instance",
+    };
+  }
+}

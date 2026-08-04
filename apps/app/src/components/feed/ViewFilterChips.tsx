@@ -1,39 +1,39 @@
 "use client";
 
 import clsx from "clsx";
-import { useAtom } from "jotai";
+import { useAtom, useAtomValue } from "jotai";
 import { PlusIcon } from "lucide-react";
-import { useMemo } from "react";
 import { useDialogStore } from "./dialogStore";
 import { Button } from "~/components/ui/button";
 import { ToggleGroup, ToggleGroupItem } from "~/components/ui/toggle-group";
-import { viewFilterIdAtom } from "~/lib/data/atoms";
-import {
-  useCheckFilteredFeedItemsForView,
-  useUpdateViewFilter,
-  useViews,
-} from "~/lib/data/views";
+import { viewFilterIdAtom, visibilityFilterAtom } from "~/lib/data/atoms";
+import { useUpdateViewFilter, useViews } from "~/lib/data/views";
 import { KeyboardShortcutDisplay } from "~/components/ButtonWithShortcut";
 import {
   MAX_VIEW_SHORTCUTS,
   VIEW_SHORTCUT_KEYS,
 } from "~/lib/constants/shortcuts";
+import { getNavigationAvailability } from "~/lib/data/navigation/store";
+import { Skeleton } from "~/components/ui/skeleton";
+
+const VIEW_FILTER_SKELETON_WIDTHS = ["w-16", "w-22", "w-18", "w-26"];
+
+function ViewFilterChipSkeletons() {
+  return (
+    <div className="flex max-w-[calc(100vw-3rem)] flex-wrap gap-1 md:max-w-lg">
+      {VIEW_FILTER_SKELETON_WIDTHS.map((width) => (
+        <Skeleton className={clsx("h-8", width)} key={width} />
+      ))}
+    </div>
+  );
+}
 
 export function ViewFilterChips() {
-  const { views } = useViews();
+  const { views, viewAvailability, hasFetchedViews } = useViews();
   const [viewFilter] = useAtom(viewFilterIdAtom);
+  const visibilityFilter = useAtomValue(visibilityFilterAtom);
 
   const updateViewFilter = useUpdateViewFilter();
-
-  const checkFilteredFeedItemsForView = useCheckFilteredFeedItemsForView();
-
-  const viewHasEntriesMap = useMemo(() => {
-    const map = new Map<number, boolean>();
-    views.forEach((view) => {
-      map.set(view.id, checkFilteredFeedItemsForView(view.id).length > 0);
-    });
-    return map;
-  }, [views, checkFilteredFeedItemsForView]);
 
   const launchDialog = useDialogStore((store) => store.launchDialog);
 
@@ -49,6 +49,10 @@ export function ViewFilterChips() {
         <span className="pl-1.5">Add a view</span>
       </Button>
     );
+  }
+
+  if (!hasFetchedViews) {
+    return <ViewFilterChipSkeletons />;
   }
 
   return (
@@ -67,7 +71,10 @@ export function ViewFilterChips() {
         return (
           <ToggleGroupItem
             className={clsx("relative", {
-              "opacity-50": !viewHasEntriesMap.get(view.id),
+              "opacity-50": !getNavigationAvailability(
+                viewAvailability,
+                view.id,
+              )[visibilityFilter],
             })}
             key={view.id}
             value={view.id.toString()}

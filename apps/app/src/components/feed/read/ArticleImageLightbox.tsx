@@ -28,7 +28,14 @@ export function ArticleImageLightbox({
         style={{ display: "block", cursor: "zoom-in" }}
         onClick={toggle}
       >
-        <img src={src} alt={alt} className={className} />
+        <img
+          src={src}
+          alt={alt}
+          className={className}
+          loading="lazy"
+          decoding="async"
+          referrerPolicy="no-referrer"
+        />
       </button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogPortal>
@@ -46,6 +53,8 @@ export function ArticleImageLightbox({
             <img
               src={src}
               alt={alt}
+              decoding="async"
+              referrerPolicy="no-referrer"
               className="rounded object-contain"
               style={{ maxWidth: "100%", maxHeight: "100%" }}
             />

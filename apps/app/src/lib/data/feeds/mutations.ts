@@ -3,12 +3,7 @@ import { toast } from "sonner";
 import { useFetchFeedCategories } from "../feed-categories/store";
 import { useFetchViewFeeds } from "../view-feeds/store";
 import { useFetchViews, useRemoveFeedReferences } from "../views/store";
-import {
-  feedItemsStore,
-  useFeedItemsDict,
-  useFeedItemsOrder,
-  useFetchFeedItemsForFeed,
-} from "../store";
+import { feedItemsStore, useFetchFeedItemsForFeed } from "../store";
 import {
   useAddFeed,
   useFetchFeeds,
@@ -17,6 +12,7 @@ import {
 } from "./store";
 import { useDialogStore } from "~/components/feed/dialogStore";
 import { orpc } from "~/lib/orpc";
+import { refreshNavigationSnapshotSafely } from "~/lib/data/navigation/store";
 
 export function useCreateFeedMutation() {
   const fetchFeedItemsForFeed = useFetchFeedItemsForFeed();
@@ -35,6 +31,7 @@ export function useCreateFeedMutation() {
           fetchViewFeeds(),
           fetchViews(),
         ]);
+        await refreshNavigationSnapshotSafely();
 
         if (result.deactivatedCount > 0) {
           toast.warning(
@@ -56,9 +53,6 @@ export function useCreateFeedMutation() {
 }
 
 export function useDeleteFeedMutation() {
-  const feedItemsOrder = useFeedItemsOrder();
-  const feedItemsDict = useFeedItemsDict();
-
   const setFeedItemsOrder = feedItemsStore.useSetFeedItemsOrder();
   const setFeedItemsDict = feedItemsStore.useSetFeedItemsDict();
 
@@ -67,9 +61,10 @@ export function useDeleteFeedMutation() {
 
   return useMutation(
     orpc.feed.delete.mutationOptions({
-      onSuccess: (_, feedId) => {
+      onSuccess: async (_, feedId) => {
         removeFeed(feedId);
         removeFeedReferences([feedId]);
+        const { feedItemsDict, feedItemsOrder } = feedItemsStore.getState();
 
         const [updatedFeedItemsOrder, removedFeedItems] = feedItemsOrder.reduce(
           ([partialKeptItems, partialRemovedItems], feedItemContentId) => {
@@ -94,6 +89,7 @@ export function useDeleteFeedMutation() {
 
         setFeedItemsOrder(updatedFeedItemsOrder);
         setFeedItemsDict(updatedfeedItemsDict);
+        await refreshNavigationSnapshotSafely();
       },
     }),
   );
@@ -116,15 +112,13 @@ export function useEditFeedMutation() {
           fetchViewFeeds(),
           fetchViews(),
         ]);
+        await refreshNavigationSnapshotSafely();
       },
     }),
   );
 }
 
 export function useBulkDeleteFeedsMutation() {
-  const feedItemsOrder = useFeedItemsOrder();
-  const feedItemsDict = useFeedItemsDict();
-
   const setFeedItemsOrder = feedItemsStore.useSetFeedItemsOrder();
   const setFeedItemsDict = feedItemsStore.useSetFeedItemsDict();
 
@@ -134,8 +128,9 @@ export function useBulkDeleteFeedsMutation() {
 
   return useMutation(
     orpc.feed.bulkDelete.mutationOptions({
-      onSuccess: (_, { feedIds }) => {
+      onSuccess: async (_, { feedIds }) => {
         removeFeedReferences(feedIds);
+        const { feedItemsDict, feedItemsOrder } = feedItemsStore.getState();
 
         // Remove feed items belonging to deleted feeds
         const feedIdSet = new Set(feedIds);
@@ -167,6 +162,7 @@ export function useBulkDeleteFeedsMutation() {
         // Refetch feeds to update the list
         void fetchFeeds();
         void fetchFeedCategories();
+        await refreshNavigationSnapshotSafely();
       },
     }),
   );

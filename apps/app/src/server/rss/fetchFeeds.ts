@@ -1,4 +1,8 @@
 import { and, eq, inArray } from "drizzle-orm";
+import {
+  FEED_ADD_MAX_DISCOVERED_FEEDS,
+  FEED_INGESTION_CONCURRENCY,
+} from "@serial/bookmark-capture";
 import { checkFeedItemIsVerticalFromUrl } from "../checkFeedItemIsVertical";
 import { feedItems, feeds } from "../db/schema";
 import { buildConflictUpdateColumns } from "../db/utils";
@@ -14,6 +18,9 @@ import {
   fetchYouTubeFeedDetails,
 } from "./parsers/youtube";
 import { computeItemHash } from "./hash";
+import { boundFeedItems } from "./feedBounds";
+import { readFeedHttp } from "./feedHttp";
+import { isAuthorizedTestRssUrl } from "./testRssOrigin";
 import type { ApplicationFeedItem, DatabaseFeed } from "../db/schema";
 import type { db as Database } from "../db";
 import type {
@@ -23,15 +30,22 @@ import type {
   RSSContent,
   RSSFeedWithMetadata,
 } from "./types";
+import { normalizedBookmarkUrlOverride } from "~/server/bookmarks/url";
+import { CONTENT_TYPE } from "~/lib/content/descriptor";
 import { env } from "~/env";
 import { dbSemaphore } from "~/lib/semaphore";
+import { workerPool } from "~/lib/workerPool";
 
 /** How long to back off a feed after a fetch error, to avoid cascading retries. */
 const ERROR_BACKOFF_MS = 60 * 60 * 1000; // 1 hour
+export { FEED_INGESTION_CONCURRENCY } from "@serial/bookmark-capture";
+const MAX_CHANNEL_DISCOVERY_BYTES = 5 * 1024 * 1024;
 
 export type FetchFeedsStatus = "success" | "empty" | "error" | "skipped";
 
 function assertValidFeedUrl(url: string) {
+  if (isAuthorizedTestRssUrl(url)) return;
+
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -77,13 +91,15 @@ export async function fetchNewFeedDetails(
     isYouTubeHost &&
     (url.includes("youtube.com/@") || url.includes("youtube.com/channel/"))
   ) {
-    const feed = await fetch(url);
+    const feed = await readFeedHttp(url, {
+      maxBodyBytes: MAX_CHANNEL_DISCOVERY_BYTES,
+    });
     if (!feed.ok) {
       throw new Error(
         `Failed to fetch YouTube channel page: ${feed.status} ${feed.statusText}`,
       );
     }
-    const text = await feed.text();
+    const text = feed.text;
 
     const rssFeedUrlMatches = text.matchAll(
       /<link rel="alternate" type="application\/rss\+xml" title="RSS" href="(https:\/\/www\.youtube\.com\/feeds\/videos\.xml\?channel_id=[^&]{24})">/gm,
@@ -94,30 +110,33 @@ export async function fetchNewFeedDetails(
     );
   }
 
-  const feedDetailList = (
-    await Promise.all(
-      urls.map(async (feedUrl) => {
-        assertValidFeedUrl(feedUrl);
-        const feedHostname = new URL(feedUrl).hostname.toLowerCase();
-        const isYouTube =
-          feedHostname === "youtube.com" ||
-          feedHostname === "www.youtube.com" ||
-          feedHostname.endsWith(".youtube.com");
-        if (isYouTube) {
-          return fetchYouTubeFeedDetails(feedUrl);
-        }
-        if (
-          feedHostname === "nebula.tv" ||
-          feedHostname === "nebula.app" ||
-          feedHostname.endsWith(".nebula.tv") ||
-          feedHostname.endsWith(".nebula.app")
-        ) {
-          return fetchNebulaFeedDetails(feedUrl);
-        }
-        return fetchUnknownRssFeed(feedUrl);
-      }),
-    )
-  ).filter(Boolean);
+  const feedDetailList: NewFeedDetails[] = [];
+  for await (const feedDetails of workerPool(
+    urls.slice(0, FEED_ADD_MAX_DISCOVERED_FEEDS),
+    FEED_INGESTION_CONCURRENCY,
+    async (feedUrl) => {
+      assertValidFeedUrl(feedUrl);
+      const feedHostname = new URL(feedUrl).hostname.toLowerCase();
+      const isYouTube =
+        feedHostname === "youtube.com" ||
+        feedHostname === "www.youtube.com" ||
+        feedHostname.endsWith(".youtube.com");
+      if (isYouTube) {
+        return fetchYouTubeFeedDetails(feedUrl);
+      }
+      if (
+        feedHostname === "nebula.tv" ||
+        feedHostname === "nebula.app" ||
+        feedHostname.endsWith(".nebula.tv") ||
+        feedHostname.endsWith(".nebula.app")
+      ) {
+        return fetchNebulaFeedDetails(feedUrl);
+      }
+      return fetchUnknownRssFeed(feedUrl);
+    },
+  )) {
+    if (feedDetails) feedDetailList.push(feedDetails);
+  }
 
   // get feeds
   return feedDetailList;
@@ -152,17 +171,29 @@ async function insertFeedItems(
     return [];
   }
 
+  const targetFeed = databaseFeeds.find((feed) => feed.id === feedId);
+  const feedContentType =
+    targetFeed?.platform === "website" ? CONTENT_TYPE.TEXT : CONTENT_TYPE.VIDEO;
   const feedItemList: Array<typeof feedItems.$inferInsert> = items.map(
     (item) => {
+      let normalizedUrl: string | null = null;
+      try {
+        normalizedUrl = normalizedBookmarkUrlOverride(item.url);
+      } catch {
+        // Invalid item URLs retain their existing Feed behavior but cannot
+        // participate in Bookmark canonical suppression.
+      }
       return {
         feedId,
         contentId: item.id,
         content: item.content,
         contentSnippet: item.contentSnippet,
+        contentType: feedContentType,
         title: item.title,
         author: item.author,
         thumbnail: item.thumbnail,
         url: item.url,
+        normalizedUrl,
         postedAt: new Date(item.publishedDate),
         orientation: checkFeedItemIsVerticalFromUrl(item.url),
       } satisfies typeof feedItems.$inferInsert;
@@ -176,6 +207,7 @@ async function insertFeedItems(
       .select({
         url: feedItems.url,
         contentHash: feedItems.contentHash,
+        normalizedUrl: feedItems.normalizedUrl,
       })
       .from(feedItems)
       .where(
@@ -194,8 +226,12 @@ async function insertFeedItems(
   const changedItems = feedItemListWithHash.filter((incoming) => {
     const existing = existingByUrl.get(incoming.url);
     if (!existing) return true; // new item
-    // null hash means pre-migration row — force re-write to populate hash
-    return existing.contentHash !== incoming.contentHash;
+    // Refresh pre-migration hashes and sparse normalization overrides even
+    // when the Feed content itself is otherwise unchanged.
+    return (
+      existing.contentHash !== incoming.contentHash ||
+      (existing.normalizedUrl ?? null) !== incoming.normalizedUrl
+    );
   });
 
   if (changedItems.length === 0) {
@@ -215,6 +251,8 @@ async function insertFeedItems(
             "contentHash",
             "contentId",
             "contentSnippet",
+            "contentType",
+            "normalizedUrl",
             "createdAt",
             "orientation",
             "postedAt",
@@ -243,10 +281,9 @@ export async function* fetchAndInsertFeedData(
   context: { db: typeof Database },
   databaseFeeds: DatabaseFeed[],
 ) {
-  const feedIds = databaseFeeds.map((feed) => feed.id);
   const now = new Date();
 
-  const feedPromises = databaseFeeds.map(async (feed): Promise<FeedResult> => {
+  const processFeed = async (feed: DatabaseFeed): Promise<FeedResult> => {
     try {
       // Check if we should skip this feed based on nextFetchAt
       if (feed.nextFetchAt && feed.nextFetchAt > now) {
@@ -328,7 +365,7 @@ export async function* fetchAndInsertFeedData(
         const applicationFeedItems = await insertFeedItems(
           context,
           feed.id,
-          cachedResult.data.items,
+          boundFeedItems(cachedResult.data.items),
           databaseFeeds,
         );
 
@@ -487,7 +524,7 @@ export async function* fetchAndInsertFeedData(
         error: e,
       };
     }
-  });
+  };
 
   let skippedCount = 0;
   let crossUserCacheCount = 0;
@@ -498,13 +535,11 @@ export async function* fetchAndInsertFeedData(
     databaseFeeds.map((feed) => [feed.id, feed.name]),
   );
 
-  while (feedPromises.length > 0) {
-    const result = await Promise.any(Array.from(feedPromises));
-
-    const resultIndex = feedIds.findIndex((id) => id === result.id);
-    void feedPromises.splice(resultIndex, 1);
-    feedIds.splice(resultIndex, 1);
-
+  for await (const result of workerPool(
+    databaseFeeds,
+    FEED_INGESTION_CONCURRENCY,
+    processFeed,
+  )) {
     if (result.status === "skipped") {
       skippedCount++;
     } else if (result.fromCache) {
@@ -526,7 +561,7 @@ export async function* fetchAndInsertFeedData(
       1,
     );
     logMessage(
-      `[Feed Fetch] ${skippedCount} skipped, ${crossUserCacheCount} cross-user cached (${cacheHitPercent}%), ${fetchedCount} fetched out of ${totalFeeds} feeds`,
+      `[Feed Fetch] ${skippedCount} skipped, ${crossUserCacheCount} cross-user cached (${cacheHitPercent}%), ${fetchedCount} fetched out of ${totalFeeds} feeds; workers=${Math.min(FEED_INGESTION_CONCURRENCY, totalFeeds)}, queued=${Math.max(0, totalFeeds - FEED_INGESTION_CONCURRENCY)}`,
     );
   }
 

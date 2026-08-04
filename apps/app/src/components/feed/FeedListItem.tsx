@@ -1,8 +1,4 @@
 import { GlobeIcon, PlayCircleIcon } from "lucide-react";
-import type * as React from "react";
-import type { FeedPlatform } from "~/server/db/schema";
-import { YoutubeIcon } from "~/components/brand-icons";
-import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar";
 import {
   Item,
   ItemActions,
@@ -10,10 +6,15 @@ import {
   ItemDescription,
   ItemMedia,
   ItemTitle,
-} from "~/components/ui/item";
+} from "@serial/ui";
+import type * as React from "react";
+import type { ContentPlatform } from "~/lib/content/descriptor";
+import { YoutubeIcon } from "~/components/brand-icons";
+import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar";
 import { cn } from "~/lib/utils";
+import { REMOTE_IMAGE_PROPS } from "~/lib/remoteMedia";
 
-function PlatformIcon({ platform }: { platform: FeedPlatform }) {
+function PlatformIcon({ platform }: { platform: ContentPlatform }) {
   switch (platform) {
     case "youtube":
       return <YoutubeIcon size={16} />;
@@ -32,7 +33,7 @@ function FeedMedia({
 }: {
   imageUrl?: string;
   title: string;
-  platform: FeedPlatform;
+  platform: ContentPlatform;
 }) {
   if (!imageUrl) {
     return (
@@ -43,7 +44,12 @@ function FeedMedia({
   }
 
   return (
-    <img src={imageUrl} alt={title} className="size-7 rounded object-cover" />
+    <img
+      {...REMOTE_IMAGE_PROPS}
+      src={imageUrl}
+      alt={title}
+      className="size-7 rounded object-cover"
+    />
   );
 }
 
@@ -55,13 +61,18 @@ export function FeedAvatar({
 }: {
   imageUrl?: string;
   title: string;
-  platform: FeedPlatform;
+  platform: ContentPlatform;
   fallback?: React.ReactNode;
 }) {
   return (
     <Avatar className="size-7 rounded">
       {imageUrl && (
-        <AvatarImage className="rounded" src={imageUrl} alt={title} />
+        <AvatarImage
+          {...REMOTE_IMAGE_PROPS}
+          className="rounded"
+          src={imageUrl}
+          alt={title}
+        />
       )}
       <AvatarFallback className="rounded">
         {fallback ?? <PlatformIcon platform={platform} />}
@@ -92,7 +103,7 @@ export function FeedListItem({
   title: string;
   titleHref?: string;
   description?: React.ReactNode;
-  platform: FeedPlatform;
+  platform: ContentPlatform;
   imageUrl?: string;
   media?: React.ReactNode;
   leading?: React.ReactNode;
