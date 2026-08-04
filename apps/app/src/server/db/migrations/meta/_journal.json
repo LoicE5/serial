@@ -334,22 +334,8 @@
     {
       "idx": 47,
       "version": "6",
-      "when": 1785374366024,
-      "tag": "0047_odd_vivisector",
-      "breakpoints": true
-    },
-    {
-      "idx": 48,
-      "version": "6",
-      "when": 1785443415211,
-      "tag": "0048_gray_forge",
-      "breakpoints": true
-    },
-    {
-      "idx": 49,
-      "version": "6",
-      "when": 1785612887892,
-      "tag": "0049_lucky_killer_shrike",
+      "when": 1785811900564,
+      "tag": "0047_violet_lady_ursula",
       "breakpoints": true
     }
   ]

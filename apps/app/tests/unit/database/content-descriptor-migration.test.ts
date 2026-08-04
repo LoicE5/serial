@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 const MIGRATIONS_DIRECTORY = "src/server/db/migrations";
 const POST_MIGRATIONS_DIRECTORY = "src/server/db/post-migrations";
+const FEATURE_MIGRATION_TAG = "0047_violet_lady_ursula";
 
 function statements(content: string) {
   return content
@@ -40,25 +41,25 @@ describe("content descriptor migration", () => {
     }
   });
 
-  it("keeps exactly one 0049 migration and one normalized-URL post statement", () => {
+  it("keeps one consolidated feature migration and one feed-item post-migration", () => {
     const migrationFiles = readdirSync(MIGRATIONS_DIRECTORY).filter((file) =>
-      file.startsWith("0049_"),
+      file.startsWith("0047_"),
     );
-    expect(migrationFiles).toEqual(["0049_lucky_killer_shrike.sql"]);
+    expect(migrationFiles).toEqual([`${FEATURE_MIGRATION_TAG}.sql`]);
     const postFiles = readdirSync(
-      `${POST_MIGRATIONS_DIRECTORY}/0049_lucky_killer_shrike`,
+      `${POST_MIGRATIONS_DIRECTORY}/${FEATURE_MIGRATION_TAG}`,
     ).filter((file) => file.endsWith(".sql"));
     expect(postFiles).toEqual([
-      "001_backfill_feed_item_normalized_url_overrides.sql",
+      "001_backfill_feed_item_content_descriptors.sql",
     ]);
     expect(
       statements(
         readFileSync(
-          `${POST_MIGRATIONS_DIRECTORY}/0049_lucky_killer_shrike/${postFiles[0]}`,
+          `${POST_MIGRATIONS_DIRECTORY}/${FEATURE_MIGRATION_TAG}/${postFiles[0]}`,
           "utf8",
         ),
       ),
-    ).toHaveLength(1);
+    ).toHaveLength(2);
   });
 
   it("applies the complete migration and post-migration chain to a fresh database", async () => {
@@ -70,10 +71,10 @@ describe("content descriptor migration", () => {
     ) as { entries: Array<{ idx: number; tag: string }> };
 
     try {
-      await applyJournalRange(client, journal.entries, 0, 49);
+      await applyJournalRange(client, journal.entries, 0, 47);
       for (const statement of statements(
         readFileSync(
-          `${POST_MIGRATIONS_DIRECTORY}/0049_lucky_killer_shrike/001_backfill_feed_item_normalized_url_overrides.sql`,
+          `${POST_MIGRATIONS_DIRECTORY}/${FEATURE_MIGRATION_TAG}/001_backfill_feed_item_content_descriptors.sql`,
           "utf8",
         ),
       )) {
@@ -100,7 +101,7 @@ describe("content descriptor migration", () => {
     }
   });
 
-  it("advances representative pre-0048 main data through the complete chain", async () => {
+  it("advances representative main data through the consolidated migration", async () => {
     const directory = mkdtempSync(join(tmpdir(), "serial-migration-test-"));
     cleanupDirectories.push(directory);
     const client = createClient({ url: `file:${directory}/database.sqlite` });
@@ -109,10 +110,9 @@ describe("content descriptor migration", () => {
     ) as { entries: Array<{ idx: number; tag: string }> };
 
     try {
-      await applyJournalRange(client, journal.entries, 0, 47);
+      await applyJournalRange(client, journal.entries, 0, 46);
 
       const now = 1_700_000_000;
-      await applyJournalRange(client, journal.entries, 48, 48);
       await client.execute({
         sql: `INSERT INTO serial_user
           (id, name, email, email_verified, created_at, updated_at)
@@ -160,44 +160,18 @@ describe("content descriptor migration", () => {
             id,
             `content-${id}`,
             `Item ${id}`,
-            `https://feed${id}.example/item`,
+            `https://feed${id}.example/item${id === 1 ? "#reader" : ""}`,
             now,
             now,
             now,
           ],
         });
       }
-      await client.execute({
-        sql: `INSERT INTO serial_bookmark
-          (id, user_id, source_url, canonical_url, saved_updated_at,
-           read_updated_at, progress_updated_at, created_at, updated_at)
-          VALUES ('legacy-bookmark', 'legacy-user', ?, ?, ?, ?, ?, ?, ?)`,
-        args: [
-          "https://example.com/submitted",
-          "https://example.com/article",
-          now,
-          now,
-          now,
-          now,
-          now,
-        ],
-      });
-      await client.execute({
-        sql: `INSERT INTO serial_page_capture
-          (bookmark_id, title, author, published_at, content_html,
-           effective_url, icon_url, representative_image_url, content_hash,
-           capture_source, extractor_version, sanitizer_policy_version, captured_at)
-          VALUES ('legacy-bookmark', 'Captured title', 'Writer', ?, '<p>Body</p>',
-            'https://example.com/effective', 'https://example.com/icon.png',
-            'https://example.com/image.jpg', 'hash', 'server-static-fetch',
-            'test', 1, ?)`,
-        args: [now, now],
-      });
 
-      await applyJournalRange(client, journal.entries, 49, 49);
+      await applyJournalRange(client, journal.entries, 47, 47);
       for (const statement of statements(
         readFileSync(
-          `${POST_MIGRATIONS_DIRECTORY}/0049_lucky_killer_shrike/001_backfill_feed_item_normalized_url_overrides.sql`,
+          `${POST_MIGRATIONS_DIRECTORY}/${FEATURE_MIGRATION_TAG}/001_backfill_feed_item_content_descriptors.sql`,
           "utf8",
         ),
       )) {
@@ -230,18 +204,14 @@ describe("content descriptor migration", () => {
       });
       expect(
         await client.execute(
-          "SELECT effective_url, title, author, thumbnail_url, icon_url, preview_source FROM serial_bookmark",
+          "SELECT id, normalized_url FROM serial_feed_item ORDER BY id",
         ),
       ).toMatchObject({
         rows: [
-          {
-            effective_url: "https://example.com/effective",
-            title: "Captured title",
-            author: "Writer",
-            thumbnail_url: "https://example.com/image.jpg",
-            icon_url: "https://example.com/icon.png",
-            preview_source: "server-static-fetch",
-          },
+          { id: "item-1", normalized_url: "https://feed1.example/item" },
+          { id: "item-2", normalized_url: null },
+          { id: "item-3", normalized_url: null },
+          { id: "item-4", normalized_url: null },
         ],
       });
       expect(
