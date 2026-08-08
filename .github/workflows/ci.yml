@@ -107,7 +107,9 @@ jobs:
           echo "$HOME/.turso" >> "$GITHUB_PATH"
 
       - name: Run app E2E tests
-        run: pnpm --filter @serial/app test:e2e
+        run: |
+          pnpm --filter @serial/app test:e2e
+          pnpm --filter @serial/app test:e2e:cleanup
 
   gate:
     if: always()

@@ -52,6 +52,7 @@
     "test:e2e:self-hosted-bootstrap": "SERIAL_CLIENT_PERFORMANCE_PRODUCTION=1 node --import=tsx scripts/run-e2e.ts self-hosted --project self-hosted-bootstrap",
     "test:e2e:self-hosted:dev": "node --import=tsx scripts/run-e2e.ts self-hosted",
     "test:e2e:self-hosted:ui": "node --import=tsx scripts/run-e2e.ts self-hosted --ui",
+    "test:e2e:cleanup": "node --import=tsx scripts/test-e2e-cleanup.ts",
     "test:e2e:demo": "node --import=tsx scripts/run-e2e.ts demo",
     "test:e2e:demo:ui": "node --import=tsx scripts/run-e2e.ts demo --ui",
     "benchmark:app": "node --expose-gc --import=tsx scripts/performance/run-app-benchmark.ts",

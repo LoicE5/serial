@@ -4,6 +4,7 @@ import {
   DEMO_APP_PORT,
   DEMO_RSS_SERVER_PORT,
 } from "./tests/e2e/fixtures/ports";
+import { supervisedWebServerCommand } from "./tests/e2e/fixtures/web-server-command";
 
 export default defineConfig({
   ...baseConfig,
@@ -14,13 +15,15 @@ export default defineConfig({
   },
   webServer: [
     {
-      command: "pnpm dev:test:demo",
+      command: supervisedWebServerCommand("pnpm dev:test:demo"),
       url: `http://127.0.0.1:${DEMO_APP_PORT}/api/health`,
       reuseExistingServer: !process.env.CI,
       timeout: 120_000,
     },
     {
-      command: `node --import=tsx tests/e2e/fixtures/rss-server.ts ${DEMO_RSS_SERVER_PORT}`,
+      command: supervisedWebServerCommand(
+        `node --import=tsx tests/e2e/fixtures/rss-server.ts ${DEMO_RSS_SERVER_PORT}`,
+      ),
       url: `http://127.0.0.1:${DEMO_RSS_SERVER_PORT}`,
       reuseExistingServer: !process.env.CI,
       timeout: 120_000,
