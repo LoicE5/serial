@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   BookmarkEditorPopupLayout,
   FeedDiscovery,
+  IneligiblePageNotice,
 } from "./BookmarkWorkspaceView";
 import type { BookmarkWorkspace } from "../../lib/bookmarks";
 
@@ -98,5 +99,17 @@ describe("extension Bookmark editor sizing", () => {
     );
     expect(markup).not.toContain("min-h-full");
     expect(markup).not.toContain("max-w-");
+  });
+});
+
+describe("extension ineligible-page notice", () => {
+  it("explains the rejected web-page URL without blaming browser pages", () => {
+    const markup = renderToStaticMarkup(createElement(IneligiblePageNotice));
+
+    expect(markup).toContain("This page can’t be bookmarked.");
+    expect(markup).toContain(
+      "Serial can’t bookmark pages whose address includes sign-in credentials.",
+    );
+    expect(markup).not.toContain("Open an HTTP(S) page");
   });
 });
