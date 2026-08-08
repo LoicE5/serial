@@ -148,7 +148,7 @@ test.describe("article progress tracking", () => {
   test("restores the reading position after Back then Forward", async ({
     page,
   }) => {
-    const { email, password } = await seedArticleData(
+    const { feedItemId, email, password } = await seedArticleData(
       SELF_HOSTED_TURSO_PORT,
       SELF_HOSTED_APP_PORT,
     );
@@ -163,12 +163,23 @@ test.describe("article progress tracking", () => {
     await expect(page.getByText("Paragraph 20:")).toBeVisible();
 
     const scrollContainer = page.locator('[data-slot="sidebar-inset"]');
-    const previousArticleScroll = await scrollContainer.evaluate((element) => {
-      element.scrollTop = element.scrollHeight;
-      return element.scrollTop;
-    });
+    const scrollContainerBox = await scrollContainer.boundingBox();
+    expect(scrollContainerBox).not.toBeNull();
+    await page.mouse.move(
+      scrollContainerBox!.x + scrollContainerBox!.width / 2,
+      scrollContainerBox!.y + scrollContainerBox!.height / 2,
+    );
+    await page.mouse.wheel(0, 1_200);
+    await expect
+      .poll(() => scrollContainer.evaluate((element) => element.scrollTop))
+      .toBeGreaterThan(0);
+    const previousArticleScroll = await scrollContainer.evaluate(
+      (element) => element.scrollTop,
+    );
     expect(previousArticleScroll).toBeGreaterThan(0);
-    await page.waitForTimeout(100);
+    await expect
+      .poll(() => getFeedItemProgress(SELF_HOSTED_TURSO_PORT, feedItemId))
+      .toBeGreaterThan(0);
 
     await page.goBack();
     await expect(page).toHaveURL("/");

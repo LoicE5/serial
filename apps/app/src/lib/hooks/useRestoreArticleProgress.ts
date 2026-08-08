@@ -2,9 +2,19 @@
 
 import { useLayoutEffect, useRef } from "react";
 import { getElements } from "./useArticleNavigation";
+import { getShortcutKeys, SHORTCUT_KEYS } from "~/lib/constants/shortcuts";
 import { getScrollContainer } from "~/lib/scroll";
 
 const TARGET_VIEWPORT_POSITION = 1 / 3;
+const READER_SCROLL_KEYS = new Set([
+  ...getShortcutKeys(SHORTCUT_KEYS.ARROW_UP),
+  ...getShortcutKeys(SHORTCUT_KEYS.ARROW_DOWN),
+  "PageUp",
+  "PageDown",
+  "Home",
+  "End",
+  " ",
+]);
 
 export function useRestoreArticleProgress({
   contentId,
@@ -18,13 +28,42 @@ export function useRestoreArticleProgress({
   ready?: boolean;
 }) {
   const restoredContentIdRef = useRef<string | null>(null);
+  const hasUserInteractedRef = useRef(false);
+
+  useLayoutEffect(() => {
+    hasUserInteractedRef.current = false;
+    const container = getScrollContainer();
+    const markUserInteraction = () => {
+      hasUserInteractedRef.current = true;
+    };
+    const handleKeydown = (event: KeyboardEvent) => {
+      if (READER_SCROLL_KEYS.has(event.key)) markUserInteraction();
+    };
+
+    container.addEventListener("wheel", markUserInteraction, { passive: true });
+    container.addEventListener("pointerdown", markUserInteraction, {
+      passive: true,
+    });
+    container.addEventListener("touchstart", markUserInteraction, {
+      passive: true,
+    });
+    window.addEventListener("keydown", handleKeydown);
+
+    return () => {
+      container.removeEventListener("wheel", markUserInteraction);
+      container.removeEventListener("pointerdown", markUserInteraction);
+      container.removeEventListener("touchstart", markUserInteraction);
+      window.removeEventListener("keydown", handleKeydown);
+    };
+  }, [contentId]);
 
   useLayoutEffect(() => {
     if (
       !ready ||
       !articleElement ||
       progress === undefined ||
-      restoredContentIdRef.current === contentId
+      restoredContentIdRef.current === contentId ||
+      hasUserInteractedRef.current
     ) {
       return;
     }
@@ -36,7 +75,13 @@ export function useRestoreArticleProgress({
     const observer = new MutationObserver(() => scheduleRestore());
 
     function scheduleRestore() {
-      if (firstFrame || restoredContentIdRef.current === contentId) return;
+      if (
+        firstFrame ||
+        restoredContentIdRef.current === contentId ||
+        hasUserInteractedRef.current
+      ) {
+        return;
+      }
       const elements = getElements(contentElement);
       if (
         elements.length === 0 ||
@@ -45,10 +90,18 @@ export function useRestoreArticleProgress({
         return;
       }
 
+      if (savedProgress <= 0) {
+        restoredContentIdRef.current = contentId;
+        observer.disconnect();
+        getScrollContainer().scrollTo({ top: 0, behavior: "instant" });
+        return;
+      }
+
       firstFrame = requestAnimationFrame(() => {
         firstFrame = 0;
         secondFrame = requestAnimationFrame(() => {
           secondFrame = 0;
+          if (hasUserInteractedRef.current) return;
           const renderedElements = getElements(contentElement);
           if (
             renderedElements.length === 0 ||
@@ -60,11 +113,6 @@ export function useRestoreArticleProgress({
           restoredContentIdRef.current = contentId;
           observer.disconnect();
           const container = getScrollContainer();
-          if (savedProgress <= 0) {
-            container.scrollTo({ top: 0, behavior: "instant" });
-            return;
-          }
-
           const element =
             renderedElements[
               Math.min(savedProgress, renderedElements.length - 1)
