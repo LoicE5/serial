@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useFeedItemActions } from "~/lib/hooks/useFeedItemActions";
 
 const mocks = vi.hoisted(() => ({
+  refreshNavigationAfterFeedItemChangeIfNeeded: vi.fn(),
   refreshNavigationSnapshotSafely: vi.fn().mockResolvedValue(undefined),
   resolveOptimisticWatchedValue: vi.fn(),
   setWatchedValue: vi.fn(),
@@ -25,12 +26,28 @@ vi.mock("~/lib/orpc", () => ({
   },
 }));
 vi.mock("~/lib/data/store", () => ({
+  feedItemsStore: {
+    getState: () => ({
+      feedItemsDict: {
+        "saved-item": {
+          id: "saved-item",
+          feedId: 1,
+          isWatched: true,
+          isWatchLater: true,
+        },
+      },
+    }),
+  },
   useFeedItemValue: () => ({
     id: "saved-item",
     feedId: 1,
     isWatched: false,
     isWatchLater: true,
   }),
+}));
+vi.mock("~/lib/data/navigation/refreshOnLocalTransition", () => ({
+  refreshNavigationAfterFeedItemChangeIfNeeded:
+    mocks.refreshNavigationAfterFeedItemChangeIfNeeded,
 }));
 vi.mock("~/lib/data/feed-items/mutations", () => ({
   applyOptimisticWatchedValue: vi.fn(() => ({ id: "saved-item" })),
@@ -72,6 +89,9 @@ describe("connected Feed item action revalidation", () => {
       expect(mocks.resolveOptimisticWatchedValue).toHaveBeenCalledOnce(),
     );
 
+    expect(
+      mocks.refreshNavigationAfterFeedItemChangeIfNeeded,
+    ).toHaveBeenCalledOnce();
     expect(mocks.refreshNavigationSnapshotSafely).not.toHaveBeenCalled();
   });
 
@@ -83,5 +103,8 @@ describe("connected Feed item action revalidation", () => {
     await vi.waitFor(() =>
       expect(mocks.refreshNavigationSnapshotSafely).toHaveBeenCalledOnce(),
     );
+    expect(
+      mocks.refreshNavigationAfterFeedItemChangeIfNeeded,
+    ).toHaveBeenCalledOnce();
   });
 });

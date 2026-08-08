@@ -4,7 +4,7 @@ import { useCallback } from "react";
 import { useRouter } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { orpcRouterClient } from "../orpc";
-import { useFeedItemValue } from "../data/store";
+import { feedItemsStore, useFeedItemValue } from "../data/store";
 import {
   applyOptimisticWatchedValue,
   applyOptimisticWatchLaterValue,
@@ -13,6 +13,7 @@ import {
   rollbackOptimisticWatchedValue,
   rollbackOptimisticWatchLaterValue,
 } from "../data/feed-items/mutations";
+import { refreshNavigationAfterFeedItemChangeIfNeeded } from "../data/navigation/refreshOnLocalTransition";
 import { useFeeds as useFeedsArray } from "../data/feeds/store";
 import { saveHomeScrollPosition } from "~/lib/scroll";
 import { getDataSubscriptionClientId } from "~/lib/data/clientChannel";
@@ -34,6 +35,7 @@ export function useFeedItemActions(itemId: string) {
     if (item.isWatched) return;
 
     const context = applyOptimisticWatchedValue(itemId, true);
+    const optimisticItem = feedItemsStore.getState().feedItemsDict[itemId];
     void orpcRouterClient.feedItem
       .setWatchedValue({
         id: itemId,
@@ -43,6 +45,12 @@ export function useFeedItemActions(itemId: string) {
       })
       .then(async (serverValue) => {
         resolveOptimisticWatchedValue(context, serverValue);
+        if (optimisticItem) {
+          refreshNavigationAfterFeedItemChangeIfNeeded({
+            previousItem: item,
+            nextItem: optimisticItem,
+          });
+        }
         await refreshNavigationWithoutSubscription();
       })
       .catch(() => rollbackOptimisticWatchedValue(context));
@@ -53,6 +61,7 @@ export function useFeedItemActions(itemId: string) {
 
     const newIsWatched = !item.isWatched;
     const context = applyOptimisticWatchedValue(itemId, newIsWatched);
+    const optimisticItem = feedItemsStore.getState().feedItemsDict[itemId];
     void orpcRouterClient.feedItem
       .setWatchedValue({
         id: itemId,
@@ -62,6 +71,12 @@ export function useFeedItemActions(itemId: string) {
       })
       .then(async (serverValue) => {
         resolveOptimisticWatchedValue(context, serverValue);
+        if (optimisticItem) {
+          refreshNavigationAfterFeedItemChangeIfNeeded({
+            previousItem: item,
+            nextItem: optimisticItem,
+          });
+        }
         await refreshNavigationWithoutSubscription();
       })
       .catch(() => rollbackOptimisticWatchedValue(context));
@@ -73,6 +88,7 @@ export function useFeedItemActions(itemId: string) {
     if (!item) return;
 
     const context = applyOptimisticWatchLaterValue(itemId, !item.isWatchLater);
+    const optimisticItem = feedItemsStore.getState().feedItemsDict[itemId];
     void orpcRouterClient.feedItem
       .setWatchLaterValue({
         id: itemId,
@@ -82,6 +98,12 @@ export function useFeedItemActions(itemId: string) {
       })
       .then(async (serverValue) => {
         resolveOptimisticWatchLaterValue(context, serverValue);
+        if (optimisticItem) {
+          refreshNavigationAfterFeedItemChangeIfNeeded({
+            previousItem: item,
+            nextItem: optimisticItem,
+          });
+        }
         await refreshNavigationWithoutSubscription();
       })
       .catch(() => rollbackOptimisticWatchLaterValue(context));
