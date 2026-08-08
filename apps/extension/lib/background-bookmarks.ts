@@ -30,17 +30,24 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function eligiblePageUrl(value: string | undefined) {
-  if (!value) return null;
+type ActivePageClassification =
+  { status: "base" | "ineligible" } | { status: "eligible"; sourceUrl: string };
+
+function classifyActivePageUrl(
+  value: string | undefined,
+): ActivePageClassification {
+  if (!value) return { status: "base" };
   try {
     const url = new URL(value);
-    return (url.protocol === "http:" || url.protocol === "https:") &&
-      !url.username &&
-      !url.password
-      ? url.toString()
-      : null;
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      return { status: "base" };
+    }
+    if (url.username || url.password) return { status: "ineligible" };
+    return { status: "eligible", sourceUrl: url.toString() };
   } catch {
-    return null;
+    return /^https?:/i.test(value)
+      ? { status: "ineligible" }
+      : { status: "base" };
   }
 }
 
@@ -143,8 +150,12 @@ async function captureActiveBookmark(
   dependencies: BookmarkBackgroundDependencies,
 ): Promise<BookmarkMessageResponse> {
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-  const sourceUrl = eligiblePageUrl(tab?.url);
-  if (!tab?.id || !sourceUrl) return { ok: true, status: "ineligible" };
+  if (typeof tab?.id !== "number" || tab.id < 0) {
+    return { ok: true, status: "base" };
+  }
+  const page = classifyActivePageUrl(tab.url);
+  if (page.status !== "eligible") return { ok: true, status: page.status };
+  const { sourceUrl } = page;
   if (isConnectedInstancePage(sourceUrl, session.instance)) {
     return { ok: true, status: "base" };
   }

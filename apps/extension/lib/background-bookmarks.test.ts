@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { EXTENSION_FEED_ADD_REQUEST_TIMEOUT_MS } from "@serial/bookmark-capture";
 
 import {
@@ -47,6 +47,25 @@ function authenticatedDependencies(
   };
 }
 
+async function captureActiveTab(tab?: { id?: number; url?: string }) {
+  const fetchFromInstance = vi.fn();
+  const executeScript = vi.fn();
+  vi.stubGlobal("browser", {
+    tabs: { query: vi.fn(() => Promise.resolve(tab ? [tab] : [])) },
+    scripting: { executeScript },
+  });
+
+  const response = await handleBookmarkMessage(
+    { type: "bookmark.capture-active" },
+    authenticatedDependencies(fetchFromInstance),
+  );
+  return { executeScript, fetchFromInstance, response };
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
 describe("extension Bookmark page eligibility", () => {
   it("treats every path on the connected Serial origin as the base extension", () => {
     expect(
@@ -70,6 +89,50 @@ describe("extension Bookmark page eligibility", () => {
         "http://localhost:3001",
       ),
     ).toBe(false);
+  });
+
+  it.each([
+    ["new-tab", "chrome://newtab/"],
+    ["settings", "about:preferences"],
+    ["extension", "moz-extension://serial/popup.html"],
+    ["local-file", "file:///Users/example/article.html"],
+  ])("uses the base extension for %s tabs", async (_name, url) => {
+    const result = await captureActiveTab({ id: 1, url });
+
+    expect(result.response).toEqual({ ok: true, status: "base" });
+    expect(result.executeScript).not.toHaveBeenCalled();
+    expect(result.fetchFromInstance).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["missing tab", undefined],
+    ["missing tab ID", { url: "https://example.com/article" }],
+    ["missing tab URL", { id: 1 }],
+  ])("uses the base extension for %s metadata", async (_name, tab) => {
+    const result = await captureActiveTab(tab);
+
+    expect(result.response).toEqual({ ok: true, status: "base" });
+    expect(result.executeScript).not.toHaveBeenCalled();
+    expect(result.fetchFromInstance).not.toHaveBeenCalled();
+  });
+
+  it("keeps credential-bearing web pages ineligible", async () => {
+    const result = await captureActiveTab({
+      id: 1,
+      url: "https://reader:secret@example.com/private",
+    });
+
+    expect(result.response).toEqual({ ok: true, status: "ineligible" });
+    expect(result.executeScript).not.toHaveBeenCalled();
+    expect(result.fetchFromInstance).not.toHaveBeenCalled();
+  });
+
+  it("keeps malformed web-page URLs ineligible", async () => {
+    const result = await captureActiveTab({ id: 1, url: "https://[invalid" });
+
+    expect(result.response).toEqual({ ok: true, status: "ineligible" });
+    expect(result.executeScript).not.toHaveBeenCalled();
+    expect(result.fetchFromInstance).not.toHaveBeenCalled();
   });
 });
 

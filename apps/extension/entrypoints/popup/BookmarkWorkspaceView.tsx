@@ -14,6 +14,7 @@ import { Check, Info, Loader2, LogOut, Plus, Rss } from "lucide-react";
 import type { ExtensionAuthSession } from "../../lib/auth";
 import type { BookmarkWorkspace } from "../../lib/bookmarks";
 import { ExtensionHeader } from "./ExtensionHeader";
+import { ExtensionLoadingView } from "./ExtensionLoadingView";
 import { PopupLayout } from "./PopupLayout";
 import { useBookmarkWorkspace } from "./useBookmarkWorkspace";
 import type { FeedDiscoveryStatus } from "./useBookmarkWorkspace";
@@ -26,10 +27,21 @@ export function BookmarkEditorPopupLayout({
   return (
     <main
       data-slot="extension-bookmark-editor-viewport"
-      className="h-full min-w-0 overflow-x-hidden overflow-y-auto [&>[data-slot=bookmark-editor]]:min-h-full"
+      className="min-h-[380px] max-h-[570px] min-w-0 overflow-x-hidden overflow-y-auto [&>[data-slot=bookmark-editor]]:min-h-[380px]"
     >
       {children}
     </main>
+  );
+}
+
+export function IneligiblePageNotice() {
+  return (
+    <div className="mt-8">
+      <p className="text-sm font-medium">This page can’t be bookmarked.</p>
+      <p className="text-muted-foreground mt-1 text-sm">
+        Serial can’t bookmark pages whose address includes sign-in credentials.
+      </p>
+    </div>
   );
 }
 
@@ -138,6 +150,11 @@ export function BookmarkWorkspaceView({
   onAuthExpired: () => void;
 }) {
   const controller = useBookmarkWorkspace({ session, onAuthExpired });
+
+  if (controller.status === "loading") {
+    return <ExtensionLoadingView />;
+  }
+
   const signOutButton = (
     <Button
       type="button"
@@ -229,23 +246,7 @@ export function BookmarkWorkspaceView({
         </div>
       )}
 
-      {controller.status === "loading" && (
-        <div
-          className="text-muted-foreground mt-8 flex items-center gap-2 text-sm"
-          role="status"
-        >
-          <Loader2 className="size-4 animate-spin" /> Preparing Bookmark…
-        </div>
-      )}
-
-      {controller.status === "ineligible" && (
-        <div className="mt-8">
-          <p className="text-sm font-medium">This page can’t be bookmarked.</p>
-          <p className="text-muted-foreground mt-1 text-sm">
-            Open an HTTP(S) page and try again.
-          </p>
-        </div>
-      )}
+      {controller.status === "ineligible" && <IneligiblePageNotice />}
 
       {(externalError || controller.error) && (
         <Alert variant="destructive" className="mt-5">
