@@ -1,4 +1,5 @@
 import { randomInt } from "node:crypto";
+import { existsSync } from "node:fs";
 import net from "node:net";
 import { spawn, spawnSync } from "node:child_process";
 
@@ -122,43 +123,104 @@ const childEnvironment = {
   PORT: String(appPort),
 };
 
-console.log(
-  `${environmentName} test ports: app=${appPort}, db=${tursoPort}, rss=${rssPort}`,
-);
+const allocatedPortEnvironment = {
+  [environment.appPortVariable]: appPort,
+  [environment.tursoPortVariable]: tursoPort,
+  [environment.rssPortVariable]: rssPort,
+  ...Object.fromEntries(
+    additionalPortVariables.map((variable, index) => [
+      variable,
+      additionalPorts[index],
+    ]),
+  ),
+};
+
+console.log(`SERIAL_E2E_PORTS=${JSON.stringify(allocatedPortEnvironment)}`);
 
 if (process.env.SERIAL_CLIENT_PERFORMANCE_PRODUCTION === "1") {
-  const build = spawnSync("pnpm", ["build:atomic"], {
-    env: childEnvironment,
-    stdio: "inherit",
-  });
-  if (build.signal) {
-    process.kill(process.pid, build.signal);
-  }
-  if (build.status !== 0) {
-    process.exit(build.status ?? 1);
+  if (process.env.SERIAL_E2E_REUSE_BUILD === "1") {
+    if (!existsSync(".output/server/index.mjs")) {
+      console.error(
+        "SERIAL_E2E_REUSE_BUILD=1 requires an existing production build.",
+      );
+      process.exit(1);
+    }
+  } else {
+    const build = spawnSync("pnpm", ["build:atomic"], {
+      env: childEnvironment,
+      stdio: "inherit",
+    });
+    if (build.signal) {
+      process.kill(process.pid, build.signal);
+    }
+    if (build.status !== 0) {
+      process.exit(build.status ?? 1);
+    }
   }
 }
 
-const playwright = spawn(
-  "pnpm",
+let supervisorReady = false;
+let pendingSignal: NodeJS.Signals | undefined;
+const forwardedSignals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+const signalHandlers = new Map<NodeJS.Signals, () => void>();
+
+const supervisor = spawn(
+  process.execPath,
   [
-    "exec",
-    "playwright",
-    "test",
-    "--config",
+    "--import=tsx",
+    "scripts/supervise-e2e.ts",
+    String(process.pid),
     environment.config,
     ...playwrightArguments,
   ],
   {
     env: childEnvironment,
-    stdio: "inherit",
+    stdio: ["inherit", "inherit", "inherit", "ipc"],
   },
 );
 
-playwright.once("exit", (code, signal) => {
-  if (signal) {
-    process.kill(process.pid, signal);
+for (const signal of forwardedSignals) {
+  const handler = () => {
+    pendingSignal ??= signal;
+    if (!supervisorReady) return;
+    try {
+      supervisor.kill(signal);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+    }
+  };
+  signalHandlers.set(signal, handler);
+  process.on(signal, handler);
+}
+
+supervisor.on("message", (message: unknown) => {
+  if (
+    typeof message !== "object" ||
+    message === null ||
+    !("type" in message) ||
+    message.type !== "ready"
+  ) {
     return;
   }
-  process.exitCode = code ?? 1;
+  supervisorReady = true;
+  if (pendingSignal) {
+    try {
+      supervisor.kill(pendingSignal);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+    }
+  }
+});
+
+supervisor.once("exit", (code, signal) => {
+  for (const [forwardedSignal, handler] of signalHandlers) {
+    process.off(forwardedSignal, handler);
+  }
+
+  const exitSignal = signal ?? pendingSignal;
+  if (exitSignal) {
+    process.kill(process.pid, exitSignal);
+  } else {
+    process.exitCode = code ?? 1;
+  }
 });

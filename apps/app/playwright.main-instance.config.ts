@@ -4,6 +4,7 @@ import {
   MAIN_APP_PORT,
   MAIN_RSS_SERVER_PORT,
 } from "./tests/e2e/fixtures/ports";
+import { supervisedWebServerCommand } from "./tests/e2e/fixtures/web-server-command";
 
 export default defineConfig({
   ...baseConfig,
@@ -15,12 +16,14 @@ export default defineConfig({
   },
   webServer: [
     {
-      command: "pnpm dev:test:main",
+      command: supervisedWebServerCommand("pnpm dev:test:main"),
       url: `http://localhost:${MAIN_APP_PORT}`,
       reuseExistingServer: !process.env.CI,
     },
     {
-      command: `node --import=tsx tests/e2e/fixtures/rss-server.ts ${MAIN_RSS_SERVER_PORT}`,
+      command: supervisedWebServerCommand(
+        `node --import=tsx tests/e2e/fixtures/rss-server.ts ${MAIN_RSS_SERVER_PORT}`,
+      ),
       url: `http://127.0.0.1:${MAIN_RSS_SERVER_PORT}`,
       reuseExistingServer: !process.env.CI,
     },
