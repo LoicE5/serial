@@ -12,6 +12,13 @@ trustPolicyExclude:
   - semver
   - "chokidar@4.0.3"
   - style-to-object
+allowBuilds:
+  "@sentry/cli": false
+  better-sqlite3: true
+  esbuild: true
+  simple-git-hooks: false
+  spawn-sync: false
+  unrs-resolver: true
 overrides:
   "@types/react": 19.2.17
   "@types/react-dom": 19.2.3
