@@ -232,7 +232,12 @@ test.describe("feed item actions", () => {
     await page.keyboard.press("e");
     await expect(itemLink(firstSavedItemId)).toHaveCount(0);
 
-    await page.getByRole("tab", { name: "Archived", exact: true }).click();
+    await page
+      .getByRole("tab", {
+        name: "Switch to archived content",
+        exact: true,
+      })
+      .click();
     await expect(itemLink(firstSavedItemId)).toBeVisible({ timeout: 5000 });
   });
 });

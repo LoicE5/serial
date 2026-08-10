@@ -201,13 +201,23 @@ test.describe("authoritative sidebar navigation", () => {
     await expect(item).toHaveCount(0);
     await expect(viewButton.locator(".bg-sidebar-accent")).toHaveCount(0);
 
-    await page.getByRole("tab", { name: "Archived", exact: true }).click();
+    await page
+      .getByRole("tab", {
+        name: "Switch to archived content",
+        exact: true,
+      })
+      .click();
     await expect(item).toBeVisible();
     await item.getByRole("link").hover();
     await page.keyboard.press("e");
 
     await expect(viewButton.locator(".bg-sidebar-accent")).toHaveCount(0);
-    await page.getByRole("tab", { name: "Unread", exact: true }).click();
+    await page
+      .getByRole("tab", {
+        name: "Switch to unread content",
+        exact: true,
+      })
+      .click();
     await expect(viewButton.locator(".bg-sidebar-accent")).toHaveCount(1);
   });
 

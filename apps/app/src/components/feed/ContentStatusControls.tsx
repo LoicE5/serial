@@ -80,16 +80,16 @@ export function ContentStatusControls() {
         <TabsList>
           {ARCHIVE_STATUS_OPTIONS.map((option) => (
             <Tooltip key={option.value}>
-              <TabsTrigger
-                className="relative"
-                value={option.value}
-                aria-label={`Switch to ${option.value} content`}
-              >
-                <TooltipTrigger>
+              <TooltipTrigger asChild>
+                <TabsTrigger
+                  className="relative"
+                  value={option.value}
+                  aria-label={`Switch to ${option.value} content`}
+                >
                   {option.Icon}
                   <KeyboardShortcutDisplay shortcut={option.shortcut} />
-                </TooltipTrigger>
-              </TabsTrigger>
+                </TabsTrigger>
+              </TooltipTrigger>
               <TooltipContent>{option.label}</TooltipContent>
             </Tooltip>
           ))}

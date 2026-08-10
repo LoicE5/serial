@@ -37,12 +37,16 @@ async function renderedItemIds(locator: Locator) {
 }
 
 function contentStatusTab(page: Page, name: string) {
-  const axisAnchor = name === "Inbox" || name === "Saved" ? "Inbox" : "Unread";
+  const isSaveStatus = name === "Inbox" || name === "Saved";
+  const accessibleName = isSaveStatus
+    ? name
+    : `Switch to ${name.toLowerCase()} content`;
+  const axisAnchor = isSaveStatus ? "Inbox" : "Switch to unread content";
 
   return page
     .locator('[data-slot="tabs-list"]')
     .filter({ has: page.getByRole("tab", { name: axisAnchor, exact: true }) })
-    .getByRole("tab", { name, exact: false });
+    .getByRole("tab", { name: accessibleName, exact: true });
 }
 
 async function beginSkeletonObservation(locator: Locator) {
