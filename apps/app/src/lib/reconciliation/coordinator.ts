@@ -148,6 +148,10 @@ export type ReconciliationCoordinatorEvent<TAuthoritative, TLiveEvent> =
       repairIntent?: ReconciliationRequestIntent;
     }
   | {
+      type: "targets-dirtied";
+      targets: ReconciliationTarget[];
+    }
+  | {
       type: "request-settled";
       reconciliationId: string;
       at: number;
@@ -613,6 +617,11 @@ export function transitionReconciliation<TAuthoritative, TLiveEvent>(
         markTargetsDirty(state, requestTargets(event.intent), false),
         event.intent,
       );
+    case "targets-dirtied":
+      return {
+        state: withDerivedTrust(markTargetsDirty(state, event.targets, true)),
+        commands: [],
+      };
     case "authoritative-received": {
       state = bindColdFullScope(state, event.reconciliationId, event.target);
       if (

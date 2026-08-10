@@ -10,6 +10,7 @@ import type {
   BookmarkSyncChunk,
   MixedContentChunk,
 } from "~/server/mixed-content/sync";
+import type { RssPublishedChunk } from "~/lib/rss";
 import { env } from "~/env";
 import { logError, logMessage } from "~/server/logger";
 
@@ -20,7 +21,8 @@ export type PublishedChunk =
   | { source: "feed"; chunk: GetItemsByFeedChunk }
   | { source: "category"; chunk: GetItemsByCategoryIdChunk }
   | { source: "bookmark"; chunk: BookmarkSyncChunk }
-  | { source: "mixed"; chunk: MixedContentChunk };
+  | { source: "mixed"; chunk: MixedContentChunk }
+  | { source: "rss"; chunk: RssPublishedChunk };
 
 const RESUME_RETENTION_SECONDS = 60 * 2;
 const REDIS_KEY_PREFIX = "serial:pub:";

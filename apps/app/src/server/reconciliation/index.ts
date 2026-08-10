@@ -26,13 +26,12 @@ import {
   getFeedItemReconciliationVersion,
   REQUIRED_RECONCILIATION_DOMAINS,
 } from "~/lib/reconciliation";
-import { env } from "~/env";
 import {
   queryMixedContentPage,
   queryResolvedMixedContentPage,
 } from "~/server/mixed-content/projection";
 import { queryNavigationSnapshot } from "~/server/navigation/snapshot";
-import { getUserPlanLimits } from "~/server/subscriptions/helpers";
+import { resolveAutomaticRssOwner } from "~/server/rss/automaticOwnership";
 import { ITEMS_PER_PAGE } from "~/server/api/constants";
 import { UNCATEGORIZED_VIEW_ID } from "~/lib/data/views/constants";
 
@@ -179,17 +178,6 @@ function resolveFullScope(
     pageManifest: emptyPageManifest(),
     membershipRevision: request.selection.membershipRevision,
   };
-}
-
-async function resolveAutomaticRssOwner(input: {
-  database: ReconciliationDatabase;
-  userId: string;
-}) {
-  const limits = await getUserPlanLimits(input.database, input.userId);
-  return env.BACKGROUND_REFRESH_ENABLED &&
-    limits.backgroundRefreshIntervalMs !== null
-    ? ("background-task" as const)
-    : ("client" as const);
 }
 
 async function* reconcileFull(input: {

@@ -1,17 +1,13 @@
 import { publisher } from "../api/publisher";
 import { captureException } from "../logger";
 import { fetchAndInsertFeedData } from "./fetchFeeds";
-import type { GetByViewChunk } from "../api/routers/initialRouter";
+import { affectedFeedFromItems, emptyRefreshStats } from "./stats";
 import type { DatabaseFeed } from "../db/schema";
 import type { db as Database } from "../db";
+import type { RefreshStats } from "./stats";
+import type { RssPublishedChunk } from "~/lib/rss";
 
-export type RefreshStats = {
-  refreshedCount: number;
-  skippedCount: number;
-  emptyCount: number;
-  errorCount: number;
-  totalRowsWritten: number;
-};
+export type { RefreshStats } from "./stats";
 
 /**
  * Shared feed refresh logic used by both background-refresh tasks and
@@ -36,13 +32,7 @@ export async function refreshUserFeeds({
 }): Promise<RefreshStats> {
   const activeFeedsList = feedsList.filter((feed) => feed.isActive);
 
-  const stats: RefreshStats = {
-    refreshedCount: 0,
-    skippedCount: 0,
-    emptyCount: 0,
-    errorCount: 0,
-    totalRowsWritten: 0,
-  };
+  const stats = emptyRefreshStats();
 
   if (activeFeedsList.length === 0) {
     return stats;
@@ -50,9 +40,9 @@ export async function refreshUserFeeds({
 
   // Typed publish helper that no-ops when there is no channel
   const publish = channel
-    ? async (chunk: GetByViewChunk) => {
+    ? async (chunk: RssPublishedChunk) => {
         await publisher.publish(`${channel}`, {
-          source: "initial",
+          source: "rss",
           chunk,
         });
       }
@@ -85,6 +75,11 @@ export async function refreshUserFeeds({
       stats.refreshedCount++;
       if ("feedItems" in feedResult) {
         stats.totalRowsWritten += feedResult.feedItems.length;
+        const affectedFeed = affectedFeedFromItems(
+          feedResult.id,
+          feedResult.feedItems,
+        );
+        if (affectedFeed) stats.affectedFeeds.push(affectedFeed);
 
         if (feedResult.feedItems.length > 0) {
           await publish({
@@ -98,6 +93,7 @@ export async function refreshUserFeeds({
       stats.emptyCount++;
     } else if (feedResult.status === "error") {
       stats.errorCount++;
+      stats.originFailureFeedIds.push(feedResult.id);
       const feedName = feedNameMap.get(feedResult.id) ?? "unknown";
       const errMsg =
         "error" in feedResult
