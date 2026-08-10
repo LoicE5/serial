@@ -17,7 +17,7 @@ import { clearPendingFeedItemOverrides } from "./feed-items/pendingMutations";
 import { isFeedItemMembershipRevisionStale } from "./feed-items/membershipRevision";
 import { feedsStore } from "./feeds/store";
 import { createNormalizedIDBStorage } from "./normalized-idb-storage";
-import { loadingActor } from "./loading-machine";
+import { loadingActor, updateRefreshCooldown } from "./loading-machine";
 import {
   applyScopeMembershipUpdate,
   getChangedItemsFromDiff,
@@ -908,12 +908,12 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
         loadingActor.send({ type: "MANUAL_REFRESH_REQUEST" });
 
         try {
-          // Re-run the same flow as initial mount: metadata, diffs, RSS refresh.
-          // Rate limiting is handled server-side via checkUserRefreshEligibility —
-          // if the user is in cooldown, metadata+diffs still run but RSS is skipped.
-          await orpcRouterClient.initial.requestInitialData({
-            clientId: getDataSubscriptionClientId(),
-          });
+          const { dataReconciliation } = await import("./reconciliation");
+          await dataReconciliation.requestManualFull();
+          const result = await dataReconciliation.requestDueSources("manual");
+          if (result.status === "cooldown") {
+            loadingActor.send({ type: "RESET" });
+          }
         } catch (e) {
           // Exit loading state so the button re-enables on error
           loadingActor.send({ type: "RESET" });
@@ -1076,18 +1076,11 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
                   feedStatusDict: {},
                 });
 
-                // Round up to the next whole minute so the button re-enables
-                // in sync with the background-refresh cron (runs every minute).
-                let cooldownMs: number | null = null;
-                if (initialChunk.nextRefreshAt) {
-                  const raw = new Date(initialChunk.nextRefreshAt).getTime();
-                  const MS_PER_MINUTE = 60_000;
-                  cooldownMs = Math.ceil(raw / MS_PER_MINUTE) * MS_PER_MINUTE;
-                }
-                loadingActor.send({
-                  type: "REFRESH_COOLDOWN_UPDATE",
-                  nextRefreshAt: cooldownMs,
-                });
+                updateRefreshCooldown(
+                  initialChunk.nextRefreshAt
+                    ? new Date(initialChunk.nextRefreshAt)
+                    : null,
+                );
 
                 loadingActor.send({
                   type: "BACKGROUND_REFRESH_START",
@@ -1544,6 +1537,36 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
 
               case "error":
                 console.error("Initial data error:", initialChunk.message);
+                break;
+            }
+            break;
+          }
+
+          case "rss": {
+            switch (chunk.type) {
+              case "refresh-start":
+                set({ feedStatusDict: {} });
+                updateRefreshCooldown(new Date(chunk.nextRefreshAt));
+                loadingActor.send({
+                  type: "BACKGROUND_REFRESH_START",
+                  totalFeeds: chunk.totalFeeds,
+                });
+                break;
+              case "feed-status": {
+                set({
+                  feedStatusDict: {
+                    ...get().feedStatusDict,
+                    [chunk.feedId]: chunk.status,
+                  },
+                });
+                loadingActor.send({ type: "FEED_STATUS" });
+                break;
+              }
+              case "feed-items":
+                mergeFeedItems(chunk.feedItems);
+                break;
+              case "rss-attempt-complete":
+                loadingActor.send({ type: "BACKGROUND_REFRESH_COMPLETE" });
                 break;
             }
             break;

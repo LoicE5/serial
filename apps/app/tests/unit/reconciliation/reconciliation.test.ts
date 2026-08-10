@@ -470,4 +470,27 @@ describe("reconciliation coordinator", () => {
       },
     ]);
   });
+
+  it("marks an inactive target dirty without eagerly scheduling repair", () => {
+    const harness = coordinatorHarness();
+
+    expect(
+      harness.send({ type: "targets-dirtied", targets: [OTHER_SCOPE] }),
+    ).toEqual([]);
+    expect(harness.state.inFlight).toBeNull();
+    expect(
+      harness.state.targets[getReconciliationTargetKey(OTHER_SCOPE)]?.status,
+    ).toBe("dirty");
+
+    const request = startedRequest(
+      harness.send({
+        type: "request-reconciliation",
+        intent: { type: "targeted", targets: [OTHER_SCOPE] },
+      }),
+    );
+    expect(request.intent).toEqual({
+      type: "targeted",
+      targets: [OTHER_SCOPE],
+    });
+  });
 });

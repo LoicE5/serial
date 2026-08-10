@@ -33,7 +33,7 @@ export default defineTask({
       hasSubscribers,
       publish: async (channel, chunk) => {
         await publisher.publish(channel, {
-          source: "initial",
+          source: "rss",
           chunk,
         });
       },

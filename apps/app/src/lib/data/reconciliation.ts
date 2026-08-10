@@ -5,9 +5,10 @@ import { contentCategoriesStore } from "./content-categories/store";
 import { feedCategoriesStore } from "./feed-categories/store";
 import { getFeedItemMembershipRevision } from "./feed-items/membershipRevision";
 import { feedsStore } from "./feeds/store";
-import { loadingActor } from "./loading-machine";
+import { loadingActor, updateRefreshCooldown } from "./loading-machine";
 import { getMixedScopeKey, mixedContentStore } from "./mixed-content/store";
 import { navigationSnapshotStore } from "./navigation/store";
+import { rssSummaryAffectsTarget } from "./rssRepair";
 import { applyPublishedChunks } from "./subscriptionCoordinator";
 import { feedItemsStore } from "./store";
 import { viewFeedsStore } from "./view-feeds/store";
@@ -28,9 +29,11 @@ import type {
   ReconciliationPageManifest,
   ReconciliationRequestDescriptor,
   ReconciliationScopeTarget,
+  ReconciliationTarget,
 } from "~/lib/reconciliation";
 import type { PublishedChunk } from "~/server/api/publisher";
 import type { ApplicationFeedItem } from "~/server/db/schema";
+import type { RssAttemptSummary, RssTrigger } from "~/lib/rss";
 import { orpcRouterClient } from "~/lib/orpc";
 import {
   createReconciliationRuntime,
@@ -263,6 +266,59 @@ function performanceMark(name: string, reconciliationId?: string) {
   if (reconciliationId) performance.mark(`${name}:${reconciliationId}`);
 }
 
+function rssRepairMemberships() {
+  return {
+    viewFeedIds: feedItemsStore.getState().viewFeedIds,
+    feedCategories: feedCategoriesStore.getState().feedCategories,
+  };
+}
+
+function rssSummaryFrom(payloads: PublishedChunk[]) {
+  return payloads
+    .flatMap((payload) =>
+      payload.source === "rss" && payload.chunk.type === "rss-attempt-complete"
+        ? [payload.chunk]
+        : [],
+    )
+    .at(-1);
+}
+
+function retainedRssTargets(
+  summary: RssAttemptSummary,
+  activeTarget: ReconciliationScopeTarget | null,
+) {
+  const activeKey = activeTarget
+    ? getReconciliationTargetKey(activeTarget)
+    : null;
+  return Object.values(mixedContentStore.getState().scopes)
+    .map(
+      ({ scope, contentStatus }) =>
+        ({
+          type: "scope",
+          scope,
+          contentStatus,
+        }) satisfies ReconciliationScopeTarget,
+    )
+    .filter(
+      (target) =>
+        getReconciliationTargetKey(target) !== activeKey &&
+        rssSummaryAffectsTarget(summary, target, rssRepairMemberships()),
+    );
+}
+
+let manualFullPromise: Promise<void> | null = null;
+let resolveManualFull: (() => void) | null = null;
+let rejectManualFull: ((error: Error) => void) | null = null;
+let supersededManualFullId: string | null = null;
+
+async function requestDueSources(trigger: RssTrigger) {
+  const result = await orpcRouterClient.initial.fetchDueSources({ trigger });
+  if (result.status !== "background-managed") {
+    updateRefreshCooldown(new Date(result.nextRefreshAt));
+  }
+  return result;
+}
+
 const runtime = createReconciliationRuntime<PublishedChunk[]>({
   sessionId: reconciliationSessionId,
   now: () =>
@@ -314,6 +370,26 @@ const runtime = createReconciliationRuntime<PublishedChunk[]>({
       refreshNavigation: false,
     });
     const activeTarget = currentSelection();
+    const summary = rssSummaryFrom(payloads);
+    const onlyRssPayloads = payloads.every(({ source }) => source === "rss");
+    if (onlyRssPayloads && !summary) return;
+    if (summary) {
+      const repairTargets: ReconciliationTarget[] = [];
+      if (summary.affectedFeeds.length > 0) {
+        repairTargets.push({ type: "navigation" });
+        if (
+          activeTarget &&
+          rssSummaryAffectsTarget(summary, activeTarget, rssRepairMemberships())
+        ) {
+          repairTargets.push(activeTarget);
+        }
+      }
+      return {
+        repairTargets,
+        dirtyTargets: retainedRssTargets(summary, activeTarget),
+        repairIntent: { type: "targeted", targets: repairTargets } as const,
+      };
+    }
     const activeScopeKey = activeTarget
       ? getMixedScopeKey(activeTarget.scope, activeTarget.contentStatus)
       : null;
@@ -329,8 +405,26 @@ const runtime = createReconciliationRuntime<PublishedChunk[]>({
     ];
   },
   getCurrentSelection: currentSelection,
+  deferLiveEventInvalidation: (payloads) =>
+    payloads.every(({ source }) => source === "rss"),
   mark: performanceMark,
-  onParityApplied: () => loadingActor.send({ type: "INITIAL_DATA_COMPLETE" }),
+  onParityApplied: ({ automaticRssOwner, reconciliationId }) => {
+    loadingActor.send({ type: "INITIAL_DATA_COMPLETE" });
+    if (resolveManualFull) {
+      if (reconciliationId !== supersededManualFullId) resolveManualFull();
+      return;
+    }
+    if (automaticRssOwner === "client") {
+      void requestDueSources("automatic").catch((error: unknown) => {
+        console.error("Automatic RSS attempt failed", error);
+      });
+    }
+  },
+  onFullReconciliationFailed: ({ reconciliationId }) => {
+    if (reconciliationId !== supersededManualFullId) {
+      rejectManualFull?.(new Error("Manual reconciliation failed"));
+    }
+  },
 });
 
 const organizationStores = [
@@ -398,7 +492,39 @@ export const dataReconciliation = {
     runtime.stop();
   },
   activateScope: runtime.activateScope,
-  receivePublishedChunks: runtime.receiveLiveEvent,
+  requestManualFull() {
+    if (manualFullPromise) return manualFullPromise;
+    manualFullPromise = new Promise<void>((resolve, reject) => {
+      resolveManualFull = resolve;
+      rejectManualFull = reject;
+      const inFlight = runtime.getState().inFlight;
+      supersededManualFullId =
+        inFlight?.intent.type === "full" ? inFlight.reconciliationId : null;
+      runtime.requestFull();
+    }).finally(() => {
+      manualFullPromise = null;
+      resolveManualFull = null;
+      rejectManualFull = null;
+      supersededManualFullId = null;
+    });
+    return manualFullPromise;
+  },
+  requestDueSources,
+  receivePublishedChunks(payloads: PublishedChunk[]) {
+    let start = 0;
+    while (start < payloads.length) {
+      const rss = payloads[start]?.source === "rss";
+      let end = start + 1;
+      while (
+        end < payloads.length &&
+        (payloads[end]?.source === "rss") === rss
+      ) {
+        end++;
+      }
+      runtime.receiveLiveEvent(payloads.slice(start, end));
+      start = end;
+    }
+  },
   sseConnectionChanged: runtime.sseConnectionChanged,
   getState: runtime.getState,
   subscribe: runtime.subscribe,

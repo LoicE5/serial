@@ -22,6 +22,8 @@ const EMPTY_REFRESH_STATS: RefreshStats = {
   emptyCount: 0,
   errorCount: 0,
   totalRowsWritten: 0,
+  affectedFeeds: [],
+  originFailureFeedIds: [],
 };
 
 describe("runBackgroundFeedRefresh", () => {
@@ -89,9 +91,12 @@ describe("runBackgroundFeedRefresh", () => {
     ).toHaveLength(27);
     expect(
       publishedChunkTypes.filter((type) => type === "refresh-complete"),
-    ).toHaveLength(27);
+    ).toHaveLength(0);
     expect(
       publishedChunkTypes.filter((type) => type === "navigation-snapshot"),
+    ).toHaveLength(0);
+    expect(
+      publishedChunkTypes.filter((type) => type === "rss-attempt-complete"),
     ).toHaveLength(27);
   });
 

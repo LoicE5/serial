@@ -43,6 +43,7 @@ import type {
 } from "~/server/mixed-content/sync";
 import type { NavigationSnapshot } from "~/server/navigation/snapshot";
 import type { ContentStatusFilter } from "~/lib/content-status";
+import type { RssPublishedChunk } from "~/lib/rss";
 import {
   contentStatusFilterSchema,
   DEFAULT_CONTENT_STATUS_FILTER,
@@ -98,6 +99,7 @@ import {
 import { queryNavigationSnapshot } from "~/server/navigation/snapshot";
 import { reconciliationInputSchema } from "~/server/reconciliation/input";
 import { reconcileApplicationState as streamApplicationReconciliation } from "~/server/reconciliation";
+import { fetchDueSources as runFetchDueSources } from "~/server/rss/fetchDueSources";
 
 export const reconcileApplicationState = protectedProcedure
   .input(reconciliationInputSchema)
@@ -108,6 +110,20 @@ export const reconcileApplicationState = protectedProcedure
       request: input,
     });
   });
+
+export const fetchDueSources = protectedProcedure
+  .input(z.object({ trigger: z.enum(["automatic", "manual"]) }))
+  .handler(async ({ context, input }) =>
+    runFetchDueSources({
+      database: context.db,
+      userId: context.user.id,
+      trigger: input.trigger,
+      channel: getUserChannel(context.user.id),
+      publish: async (channel, chunk) => {
+        await publisher.publish(channel, { source: "rss", chunk });
+      },
+    }),
+  );
 
 export type PaginationCursor = {
   placement?: number;
@@ -224,7 +240,8 @@ type RouterPublishedChunk =
   | { source: "feed"; chunk: GetItemsByFeedChunk }
   | { source: "category"; chunk: GetItemsByCategoryIdChunk }
   | { source: "bookmark"; chunk: BookmarkSyncChunk }
-  | { source: "mixed"; chunk: MixedContentChunk };
+  | { source: "mixed"; chunk: MixedContentChunk }
+  | { source: "rss"; chunk: RssPublishedChunk };
 
 type ChannelSubscription = {
   channel: string;

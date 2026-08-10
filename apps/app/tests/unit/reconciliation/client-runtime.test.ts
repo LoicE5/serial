@@ -90,6 +90,14 @@ function harness(
   events: (
     request: ReconciliationRequestDescriptor,
   ) => ReconciliationStreamEvent[],
+  applyLiveEvent?: (payload: string[]) =>
+    | ReconciliationScopeTarget[]
+    | {
+        repairTargets?: ReconciliationScopeTarget[];
+        dirtyTargets?: ReconciliationScopeTarget[];
+        repairIntent?: ReconciliationRequestDescriptor["intent"];
+      }
+    | void,
 ) {
   const requests: ReconciliationRequestDescriptor[] = [];
   const applications: string[] = [];
@@ -127,6 +135,7 @@ function harness(
     },
     applyLiveEvent: (payload) => {
       liveApplications.push(payload);
+      return applyLiveEvent?.(payload);
     },
     getCurrentSelection: () => currentSelection,
   });
@@ -293,5 +302,63 @@ describe("client reconciliation runtime", () => {
     expect(test.liveApplications).toEqual([]);
     test.runtime.hydrationComplete("bookmarks");
     expect(test.liveApplications).toEqual([["newer-live-state"]]);
+  });
+
+  it("keeps RSS detail events repair-silent and schedules one summary repair", async () => {
+    const test = harness(
+      (request) =>
+        request.intent.type === "full"
+          ? completeEpoch(request.reconciliationId)
+          : [
+              {
+                reconciliationId: request.reconciliationId,
+                chunk: { type: "active-first-page", page: PAGE },
+              },
+              {
+                reconciliationId: request.reconciliationId,
+                chunk: {
+                  type: "domain-complete",
+                  domain: "active-scope",
+                  target: ACTIVE_SCOPE,
+                },
+              },
+              {
+                reconciliationId: request.reconciliationId,
+                chunk: {
+                  type: "epoch-complete",
+                  requiredDomains: ["active-scope"],
+                },
+              },
+            ],
+      (payload) =>
+        payload.includes("rss-attempt-complete")
+          ? {
+              repairTargets: [ACTIVE_SCOPE],
+              repairIntent: {
+                type: "targeted",
+                targets: [ACTIVE_SCOPE],
+              },
+            }
+          : undefined,
+    );
+    test.setSelection(ACTIVE_SCOPE);
+    hydrate(test.runtime);
+    test.runtime.cacheUsable();
+    test.runtime.sseConnectionChanged(true);
+    test.runtime.start();
+    await vi.waitFor(() =>
+      expect(test.runtime.getState().trustedUpToDate).toBe(true),
+    );
+
+    test.runtime.receiveLiveEvent(["feed-status", "feed-items"]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(test.requests).toHaveLength(1);
+
+    test.runtime.receiveLiveEvent(["rss-attempt-complete"]);
+    await vi.waitFor(() => expect(test.requests).toHaveLength(2));
+    expect(test.requests[1]?.intent).toEqual({
+      type: "targeted",
+      targets: [ACTIVE_SCOPE],
+    });
   });
 });

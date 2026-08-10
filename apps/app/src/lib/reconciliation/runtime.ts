@@ -14,6 +14,7 @@ import type {
   OrganizationSnapshot,
   ReconciliationHydrationDomain,
   ReconciliationInput,
+  ReconciliationRequestIntent,
   ReconciliationScopeTarget,
   ReconciliationStreamEvent,
   ReconciliationTarget,
@@ -35,10 +36,22 @@ export type ReconciliationRuntimeDependencies<TLiveEvent> = {
     signal: AbortSignal,
   ) => Promise<AsyncIterable<ReconciliationStreamEvent>>;
   applyAuthoritative: (payload: ReconciliationAuthoritativePayload) => boolean;
-  applyLiveEvent: (payload: TLiveEvent) => ReconciliationTarget[] | void;
+  applyLiveEvent: (payload: TLiveEvent) =>
+    | ReconciliationTarget[]
+    | {
+        repairTargets?: ReconciliationTarget[];
+        dirtyTargets?: ReconciliationTarget[];
+        repairIntent?: ReconciliationRequestIntent;
+      }
+    | void;
   getCurrentSelection: () => ReconciliationScopeTarget | null;
+  deferLiveEventInvalidation?: (payload: TLiveEvent) => boolean;
   mark?: (name: string, reconciliationId?: string) => void;
-  onParityApplied?: () => void;
+  onParityApplied?: (input: {
+    reconciliationId: string | undefined;
+    automaticRssOwner: ReconciliationCoordinatorState["automaticRssOwner"];
+  }) => void;
+  onFullReconciliationFailed?: (input: { reconciliationId: string }) => void;
 };
 
 export type ReconciliationRuntime<TLiveEvent> = ReturnType<
@@ -113,13 +126,26 @@ export function createReconciliationRuntime<TLiveEvent>(
         continue;
       }
       if (command.type === "apply-live-event") {
-        const invalidatedTargets = dependencies.applyLiveEvent(command.payload);
-        if (invalidatedTargets && invalidatedTargets.length > 0) {
+        const effects = dependencies.applyLiveEvent(command.payload);
+        const repairTargets = Array.isArray(effects)
+          ? effects
+          : effects?.repairTargets;
+        const dirtyTargets = Array.isArray(effects)
+          ? undefined
+          : effects?.dirtyTargets;
+        const repairIntent = Array.isArray(effects)
+          ? undefined
+          : effects?.repairIntent;
+        if (dirtyTargets && dirtyTargets.length > 0) {
+          send({ type: "targets-dirtied", targets: dirtyTargets });
+        }
+        if (repairTargets && repairTargets.length > 0) {
           send({
             type: "live-event-received",
             eventId: `applied:${command.eventId}`,
-            targets: invalidatedTargets,
-            invalidates: invalidatedTargets,
+            targets: repairTargets,
+            invalidates: repairTargets,
+            repairIntent,
             requiresHydration: [],
           });
         }
@@ -158,7 +184,10 @@ export function createReconciliationRuntime<TLiveEvent>(
         "serial:server-parity-applied",
         state.latestFullEpoch?.reconciliationId,
       );
-      dependencies.onParityApplied?.();
+      dependencies.onParityApplied?.({
+        reconciliationId: state.latestFullEpoch?.reconciliationId,
+        automaticRssOwner: state.automaticRssOwner,
+      });
     }
     execute(transition.commands);
   };
@@ -249,6 +278,11 @@ export function createReconciliationRuntime<TLiveEvent>(
               failed: true,
               failedTargets: target ? [target] : undefined,
             });
+            if (request.intent.type === "full") {
+              dependencies.onFullReconciliationFailed?.({
+                reconciliationId: request.reconciliationId,
+              });
+            }
             settled = true;
             return;
           }
@@ -283,6 +317,11 @@ export function createReconciliationRuntime<TLiveEvent>(
           failed: true,
           failedTargets,
         });
+        if (request.intent.type === "full") {
+          dependencies.onFullReconciliationFailed?.({
+            reconciliationId: request.reconciliationId,
+          });
+        }
       }
     }
   }
@@ -354,16 +393,18 @@ export function createReconciliationRuntime<TLiveEvent>(
         intent: { type: "targeted", targets: [target] },
       });
     },
+    requestFull: requestCurrentFull,
     receiveLiveEvent(payload: TLiveEvent) {
       const inFlightFull = state.inFlight?.intent.type === "full";
       const selectedScope = dependencies.getCurrentSelection();
-      const invalidates = inFlightFull
-        ? ([
-            { type: "organization" },
-            ...(selectedScope ? [selectedScope] : []),
-            { type: "navigation" },
-          ] as ReconciliationTarget[])
-        : undefined;
+      const invalidates =
+        !dependencies.deferLiveEventInvalidation?.(payload) && inFlightFull
+          ? ([
+              { type: "organization" },
+              ...(selectedScope ? [selectedScope] : []),
+              { type: "navigation" },
+            ] as ReconciliationTarget[])
+          : undefined;
       send({
         type: "live-event-received",
         eventId: `live:${++liveSequence}`,

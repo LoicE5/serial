@@ -290,6 +290,18 @@ export const loadingMachine = setup({
 
 export const loadingActor = createActor(loadingMachine).start();
 
+export function updateRefreshCooldown(nextRefreshAt: Date | null) {
+  const raw = nextRefreshAt?.getTime();
+  const millisecondsPerMinute = 60_000;
+  loadingActor.send({
+    type: "REFRESH_COOLDOWN_UPDATE",
+    nextRefreshAt:
+      raw === undefined
+        ? null
+        : Math.ceil(raw / millisecondsPerMinute) * millisecondsPerMinute,
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Discriminated union consumed by UI components
 // ---------------------------------------------------------------------------
