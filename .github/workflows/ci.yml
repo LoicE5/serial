@@ -83,13 +83,28 @@ jobs:
             "$SERIAL_EXTENSION_VERSION"
 
   e2e:
+    name: e2e (${{ matrix.name }})
     needs: changes
     if: needs.changes.outputs.app == 'true'
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        suite: [main, self-hosted, demo]
+        include:
+          - name: main
+            suite: main
+          - name: demo
+            suite: demo
+          - name: self-hosted 1/3
+            suite: self-hosted
+            shard: --shard=1/3
+            verify_cleanup: true
+          - name: self-hosted 2/3
+            suite: self-hosted
+            shard: --shard=2/3
+          - name: self-hosted 3/3
+            suite: self-hosted
+            shard: --shard=3/3
     steps:
       - uses: actions/checkout@v4
 
@@ -110,11 +125,11 @@ jobs:
           curl -sSfL https://get.tur.so/install.sh | bash
           echo "$HOME/.turso" >> "$GITHUB_PATH"
 
-      - name: Run ${{ matrix.suite }} E2E tests
-        run: pnpm --filter @serial/app test:e2e:${{ matrix.suite }}
+      - name: Run ${{ matrix.name }} E2E tests
+        run: pnpm --filter @serial/app test:e2e:${{ matrix.suite }} ${{ matrix.shard }}
 
       - name: Verify E2E process cleanup
-        if: ${{ always() && matrix.suite == 'self-hosted' }}
+        if: ${{ always() && matrix.verify_cleanup }}
         run: pnpm --filter @serial/app test:e2e:cleanup
 
   gate:
