@@ -69,7 +69,10 @@ function completeBookmarkSyncPages(payloads: PublishedChunk[]) {
   return completed;
 }
 
-export function processPublishedChunks(payloads: PublishedChunk[]) {
+export function applyPublishedChunks(
+  payloads: PublishedChunk[],
+  options: { refreshNavigation?: boolean } = {},
+) {
   const affectedScopes = new Map<string, LoadedMixedScope>();
   let navigationSnapshotChanged = payloads.some(
     ({ chunk }) =>
@@ -101,7 +104,6 @@ export function processPublishedChunks(payloads: PublishedChunk[]) {
       itemIds: incomingItemIds,
       previousFeedItems,
       feedItems: feedItemsStore.getState().feedItemsDict,
-      bookmarks: bookmarksStore.getState().snapshot(),
       views: viewsStore.getState().views,
       feedCategories: feedCategoriesStore.getState().feedCategories,
     });
@@ -125,7 +127,6 @@ export function processPublishedChunks(payloads: PublishedChunk[]) {
     const affected = mixedContentStore.getState().reprojectUpsert({
       bookmark,
       previousBookmark,
-      feedItems: feedItemsStore.getState().feedItemsDict,
       views: viewsStore.getState().views,
     });
     for (const scope of affected) {
@@ -139,7 +140,6 @@ export function processPublishedChunks(payloads: PublishedChunk[]) {
     navigationSnapshotChanged = true;
     const affected = mixedContentStore.getState().reprojectDeletion({
       bookmarkId: bookmark.id,
-      feedItems: feedItemsStore.getState().feedItemsDict,
     });
     for (const scope of affected) {
       affectedScopes.set(
@@ -170,7 +170,6 @@ export function processPublishedChunks(payloads: PublishedChunk[]) {
         contentStatus: chunk.contentStatus,
         page: chunk.page,
         replacesScope: chunk.replacesScope,
-        feedItems: feedItemsStore.getState().feedItemsDict,
       });
       continue;
     }
@@ -191,7 +190,6 @@ export function processPublishedChunks(payloads: PublishedChunk[]) {
       const affected = mixedContentStore.getState().reprojectUpsert({
         bookmark: chunk.bookmark,
         previousBookmark,
-        feedItems: feedItemsStore.getState().feedItemsDict,
         views: viewsStore.getState().views,
       });
       for (const scope of affected) {
@@ -218,7 +216,6 @@ export function processPublishedChunks(payloads: PublishedChunk[]) {
         const affected = mixedContentStore.getState().reprojectUpsert({
           bookmark,
           previousBookmark: previousBookmarks.get(bookmark.id),
-          feedItems: feedItemsStore.getState().feedItemsDict,
           views: viewsStore.getState().views,
         });
         for (const scope of affected) {
@@ -234,7 +231,6 @@ export function processPublishedChunks(payloads: PublishedChunk[]) {
     bookmarksStore.getState().remove(chunk.id);
     const affected = mixedContentStore.getState().reprojectDeletion({
       bookmarkId: chunk.id,
-      feedItems: feedItemsStore.getState().feedItemsDict,
     });
     for (const scope of affected) {
       affectedScopes.set(
@@ -243,8 +239,18 @@ export function processPublishedChunks(payloads: PublishedChunk[]) {
       );
     }
   }
-  if (navigationSnapshotChanged) {
+  if (navigationSnapshotChanged && options.refreshNavigation !== false) {
     void refreshNavigationSnapshotSafely();
   }
-  return [...affectedScopes.values()];
+  return {
+    affectedScopes: [...affectedScopes.values()],
+    navigationSnapshotChanged,
+  };
+}
+
+export function processPublishedChunks(
+  payloads: PublishedChunk[],
+  options: { refreshNavigation?: boolean } = {},
+) {
+  return applyPublishedChunks(payloads, options).affectedScopes;
 }

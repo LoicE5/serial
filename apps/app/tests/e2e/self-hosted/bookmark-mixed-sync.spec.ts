@@ -60,7 +60,7 @@ test.describe("Bookmark mixed-content synchronization", () => {
     if (testEmail) await cleanupUser(SELF_HOSTED_TURSO_PORT, testEmail);
   });
 
-  test("hydrates normalized Bookmarks without eagerly fetching mixed scopes", async ({
+  test("hydrates only the first View's Inbox scope on cold startup", async ({
     page,
   }) => {
     const { email, password, feedItemId } = await seedArticleData(
@@ -76,25 +76,28 @@ test.describe("Bookmark mixed-content synchronization", () => {
 
     await signIn({ page, email, password });
 
+    const mixedScopePrefix =
+      "serial-mixed-content-store-v2::normalized:v1::record:scopes:";
+    const initialScopeKey =
+      mixedScopePrefix + encodeURIComponent(`view:${viewId}:inbox:unread`);
     await expect
       .poll(
         async () => {
-          const bookmarkCache = (await persistedValue(
-            page,
-            `serial-bookmarks-store::normalized:v1::record:bookmarksDict:${encodeURIComponent(bookmarkId)}`,
-          )) as { captureHash?: string } | null;
-          return bookmarkCache?.captureHash;
+          const mixedScopeKeys = (await persistedKeys(page)).filter(
+            (key) =>
+              typeof key === "string" && key.startsWith(mixedScopePrefix),
+          );
+          return mixedScopeKeys;
         },
         { timeout: 30_000 },
       )
-      .toBe(`hash-${bookmarkId}`);
+      .toEqual([initialScopeKey]);
 
-    const mixedScopePrefix =
-      "serial-mixed-content-store-v2::normalized:v1::record:scopes:";
-    const mixedScopeKeys = (await persistedKeys(page)).filter(
-      (key) => typeof key === "string" && key.startsWith(mixedScopePrefix),
+    const bookmarkCache = await persistedValue(
+      page,
+      `serial-bookmarks-store::normalized:v1::record:bookmarksDict:${encodeURIComponent(bookmarkId)}`,
     );
-    expect(mixedScopeKeys).toEqual([]);
+    expect(bookmarkCache).toBeUndefined();
     expect(viewId).toBeGreaterThan(0);
   });
 

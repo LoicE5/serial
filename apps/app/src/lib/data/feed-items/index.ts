@@ -282,13 +282,14 @@ export const useFilteredContentOrder = () => {
   }, [bookmarkRevision]);
 
   return useMemo(() => {
-    if (feedFilter >= 0) return feedItemsOrder;
     const scope =
-      categoryFilter >= 0
-        ? ({ type: "tag", tagId: categoryFilter } as const)
-        : viewFilter
-          ? ({ type: "view", viewId: viewFilter.id } as const)
-          : null;
+      feedFilter >= 0
+        ? ({ type: "feed", feedId: feedFilter } as const)
+        : categoryFilter >= 0
+          ? ({ type: "tag", tagId: categoryFilter } as const)
+          : viewFilter
+            ? ({ type: "view", viewId: viewFilter.id } as const)
+            : null;
     if (!scope) return feedItemsOrder;
     const loadedScope =
       mixedScopes[getMixedScopeKey(scope, contentStatusFilter)];
