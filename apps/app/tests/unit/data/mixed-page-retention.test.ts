@@ -99,4 +99,52 @@ describe("mixed-content page retention", () => {
       scope?.references.some(({ entityId }) => entityId.startsWith("page-1-")),
     ).toBe(false);
   });
+
+  it("retains a provisional tail only when the authoritative first page is unchanged", () => {
+    applyPages(3);
+    const contentStatus = {
+      saveStatus: "inbox",
+      archiveStatus: "unread",
+    } as const;
+    const scopeKey = getMixedScopeKey(SCOPE, contentStatus);
+
+    expect(
+      mixedContentStore.getState().reconcileFirstPage({
+        scope: SCOPE,
+        contentStatus,
+        page: {
+          references: references(0),
+          bookmarks: [],
+          feedItems: [],
+          cursor: cursor(0),
+          hasMore: true,
+        },
+      }),
+    ).toEqual({ firstPageChanged: false });
+    expect(
+      mixedContentStore.getState().scopes[scopeKey]?.references,
+    ).toHaveLength(90);
+
+    const changedReferences = references(9);
+    expect(
+      mixedContentStore.getState().reconcileFirstPage({
+        scope: SCOPE,
+        contentStatus,
+        page: {
+          references: changedReferences,
+          bookmarks: [],
+          feedItems: [],
+          cursor: cursor(9),
+          hasMore: false,
+        },
+      }),
+    ).toEqual({ firstPageChanged: true });
+    expect(mixedContentStore.getState().scopes[scopeKey]?.references).toEqual(
+      [...changedReferences].reverse(),
+    );
+    expect(mixedContentStore.getState().scopes[scopeKey]?.pages).toHaveLength(
+      1,
+    );
+    expect(mixedContentStore.getState().scopes[scopeKey]?.hasMore).toBe(false);
+  });
 });

@@ -109,12 +109,14 @@ export function useLoadMoreItems() {
 
   const mixedScope = useMemo(
     () =>
-      activeFilterType === "category"
-        ? ({ type: "tag", tagId: categoryFilter } as const)
-        : activeFilterType === "view" && viewId !== undefined
-          ? ({ type: "view", viewId } as const)
-          : null,
-    [activeFilterType, categoryFilter, viewId],
+      activeFilterType === "feed"
+        ? ({ type: "feed", feedId: feedFilter } as const)
+        : activeFilterType === "category"
+          ? ({ type: "tag", tagId: categoryFilter } as const)
+          : activeFilterType === "view" && viewId !== undefined
+            ? ({ type: "view", viewId } as const)
+            : null,
+    [activeFilterType, feedFilter, categoryFilter, viewId],
   );
   const mixedScopeKey = mixedScope
     ? getMixedScopeKey(mixedScope, contentStatusFilter)

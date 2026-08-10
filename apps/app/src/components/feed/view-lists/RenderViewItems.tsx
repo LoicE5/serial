@@ -40,10 +40,7 @@ import {
   useHasInitialData,
 } from "~/lib/data/store";
 import { useFeedItemNavigation } from "~/lib/hooks/useFeedItemNavigation";
-import { useLazyCategoryFilter } from "~/lib/hooks/useLazyCategoryFilter";
-import { useLazyFeedFilter } from "~/lib/hooks/useLazyFeedFilter";
 import { useShortcut } from "~/lib/hooks/useShortcut";
-import { useValidateViewItems } from "~/lib/hooks/useValidateViewItems";
 import { REMOTE_IMAGE_PROPS } from "~/lib/remoteMedia";
 import { showUndoToast } from "~/lib/undo";
 import { VIEW_LAYOUT } from "~/server/db/constants";
@@ -325,10 +322,6 @@ function ContentStatusSectionList({
 }
 
 export function RenderViewItems() {
-  useLazyFeedFilter();
-  useLazyCategoryFilter();
-  useValidateViewItems();
-
   const { feeds, hasFetchedFeeds } = useFeeds();
   const { hasFetchedFeedCategories } = useFeedCategories();
 

@@ -65,6 +65,11 @@ type MixedContentStore = {
     page: MixedContentPage;
     replacesScope: boolean;
   }) => void;
+  reconcileFirstPage: (input: {
+    scope: MixedContentScope;
+    contentStatus: ContentStatusFilter;
+    page: MixedContentPage;
+  }) => { firstPageChanged: boolean };
   reprojectUpsert: (input: {
     bookmark: ApplicationBookmark;
     previousBookmark: ApplicationBookmark | undefined;
@@ -168,6 +173,40 @@ const vanillaMixedContentStore = createStore<MixedContentStore>()(
           projectionIndexes,
           projectionIndexesComplete: true,
         });
+      },
+      reconcileFirstPage: ({ scope, contentStatus, page }) => {
+        const key = getMixedScopeKey(scope, contentStatus);
+        const current = get();
+        const existing = current.scopes[key];
+        const rootPage = existing?.pages.find(
+          (candidate) => candidate.requestCursorKey === "root",
+        );
+        const referencesByKey = new Map(
+          existing?.references.map((reference) => [
+            mixedReferenceKey(reference),
+            reference,
+          ]),
+        );
+        const retainedFirstPage = rootPage?.value.referenceKeys.flatMap(
+          (referenceKey) => {
+            const reference = referencesByKey.get(referenceKey);
+            return reference ? [reference] : [];
+          },
+        );
+        const firstPageChanged =
+          !retainedFirstPage ||
+          !referencesEqual(retainedFirstPage, page.references);
+
+        if (firstPageChanged || !existing || existing.pages.length <= 1) {
+          get().applyPage({
+            scope,
+            contentStatus,
+            page,
+            replacesScope: true,
+          });
+        }
+
+        return { firstPageChanged };
       },
       reprojectUpsert: ({ bookmark, previousBookmark, views }) => {
         if (!isBookmarkProjectionChange(previousBookmark, bookmark)) return [];

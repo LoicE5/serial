@@ -181,6 +181,10 @@ export type ReconciliationRequestIntent =
       selectedScope: ReconciliationScopeTarget;
     }
   | {
+      type: "full";
+      coldContentStatus: ContentStatusFilter;
+    }
+  | {
       type: "targeted";
       targets: ReconciliationTarget[];
     };

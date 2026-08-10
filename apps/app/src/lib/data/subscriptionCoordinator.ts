@@ -69,7 +69,10 @@ function completeBookmarkSyncPages(payloads: PublishedChunk[]) {
   return completed;
 }
 
-export function processPublishedChunks(payloads: PublishedChunk[]) {
+export function applyPublishedChunks(
+  payloads: PublishedChunk[],
+  options: { refreshNavigation?: boolean } = {},
+) {
   const affectedScopes = new Map<string, LoadedMixedScope>();
   let navigationSnapshotChanged = payloads.some(
     ({ chunk }) =>
@@ -236,8 +239,18 @@ export function processPublishedChunks(payloads: PublishedChunk[]) {
       );
     }
   }
-  if (navigationSnapshotChanged) {
+  if (navigationSnapshotChanged && options.refreshNavigation !== false) {
     void refreshNavigationSnapshotSafely();
   }
-  return [...affectedScopes.values()];
+  return {
+    affectedScopes: [...affectedScopes.values()],
+    navigationSnapshotChanged,
+  };
+}
+
+export function processPublishedChunks(
+  payloads: PublishedChunk[],
+  options: { refreshNavigation?: boolean } = {},
+) {
+  return applyPublishedChunks(payloads, options).affectedScopes;
 }
