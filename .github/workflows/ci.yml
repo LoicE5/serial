@@ -113,8 +113,8 @@ jobs:
       - name: Run ${{ matrix.suite }} E2E tests
         run: pnpm --filter @serial/app test:e2e:${{ matrix.suite }}
 
-      - name: Clean up E2E processes
-        if: always()
+      - name: Verify E2E process cleanup
+        if: ${{ always() && matrix.suite == 'self-hosted' }}
         run: pnpm --filter @serial/app test:e2e:cleanup
 
   gate:
