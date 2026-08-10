@@ -86,6 +86,10 @@ jobs:
     needs: changes
     if: needs.changes.outputs.app == 'true'
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [main, self-hosted, demo]
     steps:
       - uses: actions/checkout@v4
 
@@ -106,10 +110,12 @@ jobs:
           curl -sSfL https://get.tur.so/install.sh | bash
           echo "$HOME/.turso" >> "$GITHUB_PATH"
 
-      - name: Run app E2E tests
-        run: |
-          pnpm --filter @serial/app test:e2e
-          pnpm --filter @serial/app test:e2e:cleanup
+      - name: Run ${{ matrix.suite }} E2E tests
+        run: pnpm --filter @serial/app test:e2e:${{ matrix.suite }}
+
+      - name: Clean up E2E processes
+        if: always()
+        run: pnpm --filter @serial/app test:e2e:cleanup
 
   gate:
     if: always()
