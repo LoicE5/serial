@@ -6,11 +6,10 @@ import { orpcRouterClient } from "../orpc";
 import { getDataSubscriptionClientId } from "./clientChannel";
 import { combineAbortSignals } from "./combineAbortSignals";
 import { loadingActor } from "./loading-machine";
-import { bookmarksStore } from "./bookmarks/store";
-import { processPublishedChunks } from "./subscriptionCoordinator";
 import { shouldAlwaysKeepSSEConnectionAlive } from "./atoms";
 import { getFeedItemMembershipRevision } from "./feed-items/membershipRevision";
 import { setDataSubscriptionConnected } from "./subscriptionConnection";
+import { dataReconciliation } from "./reconciliation";
 import type { PublishedChunk } from "~/server/api/publisher";
 import type { ContentStatusFilter } from "~/lib/content-status";
 import type {
@@ -65,16 +64,8 @@ export function useDataSubscription() {
     const chunks = chunkBufferRef.current;
     if (chunks.length === 0) return;
     chunkBufferRef.current = [];
-    const affectedScopes = processPublishedChunks(chunks);
-    for (const scope of affectedScopes) {
-      void orpcRouterClient.mixedContent.requestPage({
-        clientId,
-        scope: scope.scope,
-        contentStatus: scope.contentStatus,
-        cursor: null,
-      });
-    }
-  }, [clientId]);
+    dataReconciliation.receivePublishedChunks(chunks);
+  }, []);
 
   // Cleanup aborts the stream and removes both direct subscriptions. The
   // subscription loop also combines its connection signal with this abort.
@@ -87,7 +78,6 @@ export function useDataSubscription() {
     // Per-connection controller — aborted on visibility change to force
     // a reconnect without tearing down the entire subscription lifecycle.
     let connectionController: AbortController | null = null;
-    let visibilityReconnect = false;
     let paused = false;
 
     async function runSubscriptionLoop() {
@@ -116,20 +106,7 @@ export function useDataSubscription() {
             { signal: connectionSignal },
           );
           setDataSubscriptionConnected(true);
-
-          // After reconnecting due to page refocus, re-request data so
-          // the server sends fresh metadata, diffs, and triggers a
-          // refresh if the cooldown elapsed while the tab was hidden.
-          if (visibilityReconnect) {
-            visibilityReconnect = false;
-            void Promise.all([
-              orpcRouterClient.initial.requestInitialData({ clientId }),
-              orpcRouterClient.mixedContent.synchronize({
-                clientId,
-                bookmarkManifest: bookmarksStore.getState().manifest(),
-              }),
-            ]);
-          }
+          dataReconciliation.sseConnectionChanged(true);
 
           for await (const payload of iterator as AsyncIterable<PublishedChunk>) {
             if (conn.signal.aborted) break;
@@ -142,6 +119,7 @@ export function useDataSubscription() {
           }
         } catch (error) {
           setDataSubscriptionConnected(false);
+          dataReconciliation.sseConnectionChanged(false);
 
           if (controller.signal.aborted) break;
 
@@ -160,6 +138,7 @@ export function useDataSubscription() {
           );
         } finally {
           setDataSubscriptionConnected(false);
+          dataReconciliation.sseConnectionChanged(false);
           cleanupConnectionSignal();
         }
       }
@@ -184,7 +163,6 @@ export function useDataSubscription() {
         (document.visibilityState === "hidden" && shouldStayAlive)
       ) {
         paused = false;
-        visibilityReconnect = true;
         // If the loop is waiting on the paused promise, the
         // visibilitychange listener inside it will resolve it.
         // If it's in a backoff sleep, the next iteration will
@@ -219,6 +197,7 @@ export function useDataSubscription() {
       unsubscribeAtom();
       controller.abort();
       setDataSubscriptionConnected(false);
+      dataReconciliation.sseConnectionChanged(false);
       // Cancel any pending RAF flush
       if (rafIdRef.current !== null) {
         cancelAnimationFrame(rafIdRef.current);
@@ -226,22 +205,11 @@ export function useDataSubscription() {
       }
       // Flush remaining chunks synchronously on unmount
       if (chunkBufferRef.current.length > 0) {
-        processPublishedChunks(chunkBufferRef.current);
+        dataReconciliation.receivePublishedChunks(chunkBufferRef.current);
         chunkBufferRef.current = [];
       }
     };
   }, [clientId, flushBuffer]);
-
-  // Request methods that trigger data fetching via the publisher
-  const requestInitialData = useCallback(() => {
-    return Promise.all([
-      orpcRouterClient.initial.requestInitialData({ clientId }),
-      orpcRouterClient.mixedContent.synchronize({
-        clientId,
-        bookmarkManifest: bookmarksStore.getState().manifest(),
-      }),
-    ]);
-  }, [clientId]);
 
   const requestFullTextForItems = useCallback(
     (itemIds: string[]) => {
@@ -311,7 +279,6 @@ export function useDataSubscription() {
   );
 
   return {
-    requestInitialData,
     requestFullTextForItems,
     requestItemsByContentStatus,
     requestItemsByFeed,
@@ -324,16 +291,6 @@ export function useDataSubscription() {
  * This allows accessing request methods from anywhere in the app.
  */
 export const dataSubscriptionActions = {
-  requestInitialData: () => {
-    const clientId = getDataSubscriptionClientId();
-    return Promise.all([
-      orpcRouterClient.initial.requestInitialData({ clientId }),
-      orpcRouterClient.mixedContent.synchronize({
-        clientId,
-        bookmarkManifest: bookmarksStore.getState().manifest(),
-      }),
-    ]);
-  },
   requestMixedContentPage: (
     scope: Parameters<
       typeof orpcRouterClient.mixedContent.requestPage
