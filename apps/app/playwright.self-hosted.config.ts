@@ -37,7 +37,7 @@ const bootstrapEnvironment = {
 
 export default defineConfig({
   ...baseConfig,
-  workers: process.env.CI ? 4 : undefined,
+  workers: process.env.CI ? 3 : undefined,
   globalSetup:
     process.env.SERIAL_E2E_CLEANUP_PROBE === "1"
       ? "./tests/global-setup.e2e-cleanup.ts"
@@ -47,7 +47,7 @@ export default defineConfig({
     {
       name: "self-hosted",
       testDir: "./tests/e2e/self-hosted",
-      workers: process.env.CI ? 4 : undefined,
+      workers: process.env.CI ? 3 : undefined,
       use: {
         ...baseConfig.use,
         ...devices["Desktop Chrome"],
