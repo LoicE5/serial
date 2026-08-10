@@ -10,7 +10,7 @@ import { INITIAL_ITEMS_PER_VIEW } from "../../../src/server/api/constants";
 import { SELF_HOSTED_RSS_SERVER_PORT } from "./ports";
 import { getTestClientIp, TEST_CLIENT_IP_HEADER } from "./client-ip";
 import type { BenchmarkProfileName } from "../../../scripts/performance/model";
-import type { VisibilityFilter } from "../../../src/lib/data/atoms";
+import type { ContentStatusFilter } from "../../../src/lib/content-status";
 import type { MixedViewSectionCase } from "./mixed-view-section-matrix";
 
 const ARTICLE_HTML = Array.from(
@@ -310,7 +310,10 @@ export async function seedMixedViewSectionCase(
   tursoPort: number,
   appPort: number,
   testCase: MixedViewSectionCase,
-  visibility: VisibilityFilter = "later",
+  contentStatus: ContentStatusFilter = {
+    saveStatus: "saved",
+    archiveStatus: "unread",
+  },
 ) {
   const {
     email,
@@ -395,8 +398,8 @@ export async function seedMixedViewSectionCase(
       thumbnail: "",
       content: ARTICLE_HTML,
       contentSnippet: "Matrix feed item",
-      isWatched: visibility === "read",
-      isWatchLater: visibility === "later",
+      isWatched: contentStatus.archiveStatus === "archived",
+      isWatchLater: contentStatus.saveStatus === "saved",
       progress: 0,
       duration: 0,
       orientation: "horizontal",
@@ -410,8 +413,8 @@ export async function seedMixedViewSectionCase(
     .update(schema.feedItems)
     .set({
       title: `Feed Section Feed Item ${testId}`,
-      isWatched: visibility === "read",
-      isWatchLater: visibility === "later",
+      isWatched: contentStatus.archiveStatus === "archived",
+      isWatchLater: contentStatus.saveStatus === "saved",
       isWatchedUpdatedAt: new Date(now.getTime() + 1000),
       isWatchLaterUpdatedAt: new Date(now.getTime() + 1000),
     })
@@ -509,8 +512,8 @@ export async function seedMixedViewSectionCase(
       userId: testUser.id,
       sourceUrl: `https://example.com/matrix/${testId}/bookmark-${index}`,
       canonicalUrl: `https://example.com/matrix/${testId}/bookmark-${index}`,
-      isSaved: visibility === "later",
-      isRead: visibility === "read",
+      isSaved: contentStatus.saveStatus === "saved",
+      isRead: contentStatus.archiveStatus === "archived",
       progress: 0,
       duration: 0,
       savedUpdatedAt: new Date(now.getTime() - (index + 4) * 1000),
@@ -620,7 +623,7 @@ export async function seedSidebarFeedSortCase(
       uncategorizedFeedItem: false,
       uncategorizedBookmark: false,
     },
-    "unread",
+    { saveStatus: "inbox", archiveStatus: "unread" },
   );
   const { db, client } = getDb(tursoPort);
   await Promise.all([

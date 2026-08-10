@@ -16,7 +16,7 @@ import {
   buildViewCategoryFilter,
   isFeedCompatibleWithContentFilter,
 } from "~/lib/data/feed-items/filters";
-import { INBOX_VIEW_ID } from "~/lib/data/views/constants";
+import { UNCATEGORIZED_VIEW_ID } from "~/lib/data/views/constants";
 
 // ---------- buildViewCategoryFilter (server) ----------
 
@@ -106,7 +106,7 @@ function makeView(
   } as unknown as ApplicationView;
 }
 
-const inboxView = makeView(INBOX_VIEW_ID);
+const uncategorizedView = makeView(UNCATEGORIZED_VIEW_ID);
 
 // Convenience wrapper that supplies sensible defaults for the production
 // filter. Callers may still pass `feeds` for fixture clarity (e.g. to make
@@ -129,7 +129,7 @@ function passes(
       : customViews;
   const filterIndex = createFeedItemFilterIndex(feedCategories, views);
   const doesFeedItemPassFilters = createFeedItemFilterPredicate({
-    visibilityFilter: "unread",
+    contentStatusFilter: { saveStatus: "inbox", archiveStatus: "unread" },
     categoryFilter: -1,
     feedFilter: -1,
     viewFilter,
@@ -166,14 +166,14 @@ describe("isFeedCompatibleWithContentFilter", () => {
   });
 });
 
-// ---------- doesFeedItemPassFilters: Inbox view ----------
+// ---------- doesFeedItemPassFilters: Uncategorized View ----------
 
-describe("doesFeedItemPassFilters – Inbox view", () => {
+describe("doesFeedItemPassFilters – Uncategorized View", () => {
   it("includes a feed with no categories and no direct view assignment", () => {
     const feed = makeFeed(1);
     const item = makeItem(1);
     expect(
-      passes(item, inboxView, {
+      passes(item, uncategorizedView, {
         feeds: [feed],
         feedCategories: [],
         customViews: [],
@@ -187,7 +187,7 @@ describe("doesFeedItemPassFilters – Inbox view", () => {
     const view = makeView(10, { categoryIds: [100], contentFilter: 7 });
 
     expect(
-      passes(item, inboxView, {
+      passes(item, uncategorizedView, {
         feeds: [feed],
         feedCategories: [{ feedId: 1, categoryId: 100 }],
         customViews: [view],
@@ -195,20 +195,22 @@ describe("doesFeedItemPassFilters – Inbox view", () => {
     ).toBe(false);
   });
 
-  it("keeps a feed in Inbox when its only assigned View is incompatible", () => {
+  it("keeps a Feed in Uncategorized when its only assigned View is incompatible", () => {
     const feed = makeFeed(1, "website");
     const item = makeItem(1, "website");
     const customView = makeView(10, {
       categoryIds: [100],
       contentFilter: 2,
     });
-    // Realistic Inbox: carries the set of "uncategorized" category ids,
+    // Realistic Uncategorized View: carries the set of unassigned category ids,
     // i.e. categories NOT assigned to any custom view. Category 100 is in
-    // customView, so it's NOT in Inbox's categoryIds.
-    const realisticInbox = makeView(INBOX_VIEW_ID, { categoryIds: [200] });
+    // customView, so it is not in Uncategorized's categoryIds.
+    const realisticUncategorized = makeView(UNCATEGORIZED_VIEW_ID, {
+      categoryIds: [200],
+    });
 
     expect(
-      passes(item, realisticInbox, {
+      passes(item, realisticUncategorized, {
         feeds: [feed],
         feedCategories: [{ feedId: 1, categoryId: 100 }],
         customViews: [customView],
@@ -222,7 +224,7 @@ describe("doesFeedItemPassFilters – Inbox view", () => {
     const view = makeView(10, { feedIds: [1], contentFilter: 7 });
 
     expect(
-      passes(item, inboxView, {
+      passes(item, uncategorizedView, {
         feeds: [feed],
         feedCategories: [],
         customViews: [view],
@@ -232,7 +234,7 @@ describe("doesFeedItemPassFilters – Inbox view", () => {
 
   it("INCLUDES a feed directly assigned to an incompatible custom view (regression: #2)", () => {
     // The bug: a website feed directly assigned to a "vertical-video" view was
-    // hidden from Inbox AND filtered out of the video view, orphaning items.
+    // hidden from Uncategorized and filtered out of the video View, orphaning items.
     const feed = makeFeed(1, "website");
     const item = makeItem(1, "website");
     const view = makeView(10, {
@@ -241,7 +243,7 @@ describe("doesFeedItemPassFilters – Inbox view", () => {
     });
 
     expect(
-      passes(item, inboxView, {
+      passes(item, uncategorizedView, {
         feeds: [feed],
         feedCategories: [],
         customViews: [view],
@@ -259,7 +261,7 @@ describe("doesFeedItemPassFilters – Inbox view", () => {
     const compatible = makeView(11, { feedIds: [1], contentFilter: 7 });
 
     expect(
-      passes(item, inboxView, {
+      passes(item, uncategorizedView, {
         feeds: [feed],
         feedCategories: [],
         customViews: [incompatible, compatible],
@@ -274,7 +276,7 @@ describe("doesFeedItemPassFilters – Inbox view", () => {
     const v2 = makeView(11, { feedIds: [1], contentFilter: 4 });
 
     expect(
-      passes(item, inboxView, {
+      passes(item, uncategorizedView, {
         feeds: [feed],
         feedCategories: [],
         customViews: [v1, v2],
@@ -289,7 +291,7 @@ describe("doesFeedItemPassFilters – Inbox view", () => {
     const view = makeView(10, { categoryIds: [999] });
 
     expect(
-      passes(item, inboxView, {
+      passes(item, uncategorizedView, {
         feeds: [feed],
         feedCategories: [{ feedId: 1, categoryId: 100 }],
         customViews: [view],
@@ -444,9 +446,9 @@ describe("buildViewCategoryFilter – server", () => {
     expect(params).not.toContain(4);
   });
 
-  describe("Inbox view", () => {
+  describe("Uncategorized View", () => {
     it("includes uncategorized feeds and excludes feeds visible in a compatible custom view", () => {
-      const inbox = makeView(INBOX_VIEW_ID, { categoryIds: [200] });
+      const inbox = makeView(UNCATEGORIZED_VIEW_ID, { categoryIds: [200] });
       const customView = makeView(10, {
         categoryIds: [100],
         contentFilter: 7,
@@ -474,7 +476,7 @@ describe("buildViewCategoryFilter – server", () => {
     });
 
     it("excludes feeds directly assigned to a compatible custom view", () => {
-      const inbox = makeView(INBOX_VIEW_ID, { categoryIds: [200] });
+      const inbox = makeView(UNCATEGORIZED_VIEW_ID, { categoryIds: [200] });
       const customView = makeView(10, { feedIds: [1], contentFilter: 7 });
       const feeds = [makeFeed(1, "youtube"), makeFeed(2, "website")];
       const sql = buildViewCategoryFilter(
@@ -492,8 +494,8 @@ describe("buildViewCategoryFilter – server", () => {
     });
 
     it("does NOT exclude feeds directly assigned to an incompatible custom view (regression: #2)", () => {
-      // Website feed directly assigned to a video-only view should stay in Inbox.
-      const inbox = makeView(INBOX_VIEW_ID, { categoryIds: [200] });
+      // Website Feed assigned to a video-only View should stay in Uncategorized.
+      const inbox = makeView(UNCATEGORIZED_VIEW_ID, { categoryIds: [200] });
       const videoView = makeView(10, {
         feedIds: [1],
         contentFilter: 2,
@@ -512,7 +514,7 @@ describe("buildViewCategoryFilter – server", () => {
     });
 
     it("excludes a directly-assigned feed when at least one assigning view is compatible", () => {
-      const inbox = makeView(INBOX_VIEW_ID, { categoryIds: [200] });
+      const inbox = makeView(UNCATEGORIZED_VIEW_ID, { categoryIds: [200] });
       const incompatible = makeView(10, {
         feedIds: [1],
         contentFilter: 4,

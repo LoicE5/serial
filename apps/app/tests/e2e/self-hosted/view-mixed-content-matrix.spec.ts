@@ -36,10 +36,12 @@ async function renderedItemIds(locator: Locator) {
   ).sort();
 }
 
-function visibilityTab(page: Page, name: string | RegExp) {
+function contentStatusTab(page: Page, name: string) {
+  const axisAnchor = name === "Inbox" || name === "Saved" ? "Inbox" : "Unread";
+
   return page
     .locator('[data-slot="tabs-list"]')
-    .filter({ has: page.getByRole("tab", { name: /Saved/ }) })
+    .filter({ has: page.getByRole("tab", { name: axisAnchor, exact: true }) })
     .getByRole("tab", { name, exact: false });
 }
 
@@ -130,7 +132,7 @@ test.describe("exhaustive mixed-content View section matrix", () => {
         email: fixture.email,
         password: fixture.password,
       });
-      await visibilityTab(page, "Saved").click();
+      await contentStatusTab(page, "Saved").click();
 
       const feedMain = page
         .locator("main")
@@ -162,7 +164,6 @@ test.describe("exhaustive mixed-content View section matrix", () => {
       const sections = [0, 1, 2].map((sectionIndex) =>
         feedMain.locator(`#section-${sectionIndex}`),
       );
-      await expect(feedMain.locator('[id^="section-"]')).toHaveCount(3);
 
       for (const [itemId, expectedSectionIndex] of expectedSectionByItemId) {
         const globalItem = feedMain.locator(`[data-item-id="${itemId}"]`);
@@ -184,37 +185,39 @@ test.describe("exhaustive mixed-content View section matrix", () => {
           )
           .sort(),
       );
+      await expect(feedMain.locator('[id^="section-"]')).toHaveCount(
+        expectedItemIds.length === 0 ? 0 : 3,
+      );
       for (const [sectionIndex, section] of sections.entries()) {
         await expect
           .poll(() => renderedItemIds(section.locator("[data-item-id]")))
           .toEqual(expectedSectionItemIds[sectionIndex]);
 
-        if (expectedSectionItemIds[sectionIndex]?.length) {
-          await expect(section).toBeVisible();
-        }
-      }
-
-      const expectedHeadings = ["Test Blog", fixture.tagName, "Uncategorized"];
-      for (const [sectionIndex, section] of sections.entries()) {
         const heading = section.getByRole("heading", {
-          name: expectedHeadings[sectionIndex],
+          name: ["Test Blog", fixture.tagName, "Uncategorized"][sectionIndex],
           exact: true,
         });
-        await expect(heading).toBeVisible();
+        if (expectedSectionItemIds[sectionIndex]?.length) {
+          await expect(section).toBeVisible();
+          await expect(heading).toBeVisible();
+        } else {
+          await expect(heading).toHaveCount(0);
+        }
       }
 
       expect(await finishSkeletonObservation(page)).toBe(false);
     });
   }
 
-  for (const visibility of ["unread", "later", "read"] as const) {
-    const tabName = {
-      unread: "Unread",
-      later: "Saved",
-      read: "Archived",
-    }[visibility];
+  for (const contentStatus of [
+    { saveStatus: "inbox", archiveStatus: "unread" },
+    { saveStatus: "inbox", archiveStatus: "archived" },
+    { saveStatus: "saved", archiveStatus: "unread" },
+    { saveStatus: "saved", archiveStatus: "archived" },
+  ] as const) {
+    const statusName = `${contentStatus.saveStatus} + ${contentStatus.archiveStatus}`;
 
-    test(`visibly renders configured content in ${tabName}`, async ({
+    test(`visibly renders configured content in ${statusName}`, async ({
       page,
     }) => {
       test.setTimeout(45_000);
@@ -228,7 +231,7 @@ test.describe("exhaustive mixed-content View section matrix", () => {
           uncategorizedFeedItem: true,
           uncategorizedBookmark: true,
         },
-        visibility,
+        contentStatus,
       );
       testEmail = fixture.email;
 
@@ -237,7 +240,14 @@ test.describe("exhaustive mixed-content View section matrix", () => {
         email: fixture.email,
         password: fixture.password,
       });
-      await visibilityTab(page, tabName).click();
+      await contentStatusTab(
+        page,
+        contentStatus.saveStatus === "saved" ? "Saved" : "Inbox",
+      ).click();
+      await contentStatusTab(
+        page,
+        contentStatus.archiveStatus === "archived" ? "Archived" : "Unread",
+      ).click();
 
       const feedMain = page
         .locator("main")
@@ -270,28 +280,6 @@ test.describe("exhaustive mixed-content View section matrix", () => {
         },
       ];
 
-      // Read/Archived views intentionally use one chronological section. The
-      // sectioned layout applies to unread and saved views only.
-      if (visibility === "read") {
-        const archivedSection = feedMain.locator("#section-0");
-        await expect(feedMain.locator('[id^="section-"]')).toHaveCount(1);
-        await expect(archivedSection).toBeVisible({ timeout: 30_000 });
-        await expect(
-          archivedSection.getByRole("heading", {
-            name: fixture.viewName,
-            exact: true,
-          }),
-        ).toBeVisible();
-        await expect
-          .poll(() =>
-            renderedItemIds(archivedSection.locator("[data-item-id]")),
-          )
-          .toEqual(
-            expectedSections.flatMap((section) => section.itemIds).sort(),
-          );
-        return;
-      }
-
       for (const [
         sectionIndex,
         expectedSection,
@@ -311,7 +299,7 @@ test.describe("exhaustive mixed-content View section matrix", () => {
     });
   }
 
-  test("advances in Saved Unread and retains selection in Saved All", async ({
+  test("advances in Saved Unread and exposes the item in Saved Archived", async ({
     page,
   }) => {
     test.setTimeout(60_000);
@@ -325,7 +313,7 @@ test.describe("exhaustive mixed-content View section matrix", () => {
         uncategorizedFeedItem: true,
         uncategorizedBookmark: true,
       },
-      "later",
+      { saveStatus: "saved", archiveStatus: "unread" },
     );
     testEmail = fixture.email;
 
@@ -334,7 +322,7 @@ test.describe("exhaustive mixed-content View section matrix", () => {
       email: fixture.email,
       password: fixture.password,
     });
-    await visibilityTab(page, "Saved").click();
+    await contentStatusTab(page, "Saved").click();
 
     const feedMain = page
       .locator("main")
@@ -349,14 +337,10 @@ test.describe("exhaustive mixed-content View section matrix", () => {
     const feedItem = feedMain.locator(
       `article[data-item-id="${fixture.items.feedSectionFeedItem}"]`,
     );
-    const bookmark = feedMain.locator(
-      `article[data-item-id="${fixture.items.tagSectionBookmark}"]`,
-    );
     const nextFeedItem = feedMain.locator(
       `article[data-item-id="${fixture.items.tagSectionFeedItem}"]`,
     );
     await expect(feedItem).toBeVisible({ timeout: 30_000 });
-    await expect(bookmark).toBeVisible();
 
     await feedItem.getByRole("link").hover();
     await page.keyboard.press("e");
@@ -364,37 +348,13 @@ test.describe("exhaustive mixed-content View section matrix", () => {
     await expect(nextFeedItem.getByRole("link")).toHaveClass(/md:bg-muted/);
     await expect(
       feedMain.getByRole("heading", { name: "Test Blog", exact: true }),
-    ).toBeVisible();
+    ).toHaveCount(0);
 
-    const feedSection = feedMain.locator("#section-0");
-    const tagSection = feedMain.locator("#section-1");
-    await expect(feedMain.getByRole("tab", { name: "All" })).toHaveCount(3);
-
-    await expect(
-      feedSection.getByRole("tab", { name: "Unread" }),
-    ).toHaveAttribute("aria-selected", "true");
-    await feedSection.getByRole("tab", { name: "All" }).click();
-    await expect(feedSection.getByRole("tab", { name: "All" })).toHaveAttribute(
-      "aria-selected",
-      "true",
-    );
+    await contentStatusTab(page, "Archived").click();
     await expect(feedItem).toBeVisible();
-    await expect(bookmark).toBeVisible();
-
-    await tagSection.getByRole("tab", { name: "All" }).click();
-    await bookmark.getByRole("link").hover();
-    await page.keyboard.press("e");
-    await expect(bookmark).toBeVisible();
-    await expect(bookmark.getByRole("link")).toHaveClass(/md:bg-muted/);
-
-    await tagSection.getByRole("tab", { name: "Unread" }).click();
-    await expect(bookmark).toHaveCount(0);
-
-    await feedSection.getByRole("tab", { name: "Unread" }).click();
-    await expect(feedItem).toHaveCount(0);
   });
 
-  test("loads archived Saved content only for the selected section", async ({
+  test("loads Saved Archived as one ordinary page across sections", async ({
     page,
   }) => {
     test.setTimeout(45_000);
@@ -408,7 +368,7 @@ test.describe("exhaustive mixed-content View section matrix", () => {
         uncategorizedFeedItem: false,
         uncategorizedBookmark: false,
       },
-      "later",
+      { saveStatus: "saved", archiveStatus: "unread" },
     );
     await archiveMixedViewItems(SELF_HOSTED_TURSO_PORT, {
       feedItemIds: [fixture.items.feedSectionFeedItem],
@@ -416,18 +376,13 @@ test.describe("exhaustive mixed-content View section matrix", () => {
     });
     testEmail = fixture.email;
 
-    const archiveRequests: string[] = [];
-    page.on("request", (request) => {
-      if (request.url().includes("mixedContent/getSavedSectionPage")) {
-        archiveRequests.push(request.postData() ?? "");
-      }
-    });
     await signIn({
       page,
       email: fixture.email,
       password: fixture.password,
     });
-    await visibilityTab(page, "Saved").click();
+    await contentStatusTab(page, "Saved").click();
+    await contentStatusTab(page, "Archived").click();
 
     const feedMain = page
       .locator("main")
@@ -447,23 +402,8 @@ test.describe("exhaustive mixed-content View section matrix", () => {
     const archivedBookmark = tagSection.locator(
       `article[data-item-id="${fixture.items.tagSectionBookmark}"]`,
     );
-    await expect(archivedFeedItem).toHaveCount(0);
-    await expect(archivedBookmark).toHaveCount(0);
-    await expect(
-      tagSection.locator(
-        `article[data-item-id="${fixture.items.tagSectionFeedItem}"]`,
-      ),
-    ).toBeVisible();
-
-    await feedSection.getByRole("tab", { name: "All" }).click();
     await expect(archivedFeedItem).toBeVisible({ timeout: 10_000 });
-    await expect(archivedBookmark).toHaveCount(0);
-    expect(archiveRequests).toHaveLength(1);
-
-    await tagSection.getByRole("tab", { name: "All" }).click();
     await expect(archivedBookmark).toBeVisible({ timeout: 10_000 });
-    expect(archiveRequests).toHaveLength(2);
-    expect(archiveRequests[0]).not.toEqual(archiveRequests[1]);
   });
 
   test("shows a feed item immediately after saving it and entering its View", async ({
@@ -480,7 +420,7 @@ test.describe("exhaustive mixed-content View section matrix", () => {
         uncategorizedFeedItem: false,
         uncategorizedBookmark: false,
       },
-      "unread",
+      { saveStatus: "inbox", archiveStatus: "unread" },
     );
     testEmail = fixture.email;
 
@@ -504,14 +444,14 @@ test.describe("exhaustive mixed-content View section matrix", () => {
     await item.getByRole("link").hover();
     await page.keyboard.press("s");
 
-    await visibilityTab(page, "Saved").click();
+    await contentStatusTab(page, "Saved").click();
     await feedMain
       .getByRole("radio", { name: fixture.viewName, exact: true })
       .click();
     await expect(item).toBeVisible({ timeout: 5_000 });
   });
 
-  test("refreshes a loaded View when a newly saved item enters its visibility", async ({
+  test("refreshes a loaded View when a newly saved item enters its content status", async ({
     page,
   }) => {
     test.setTimeout(60_000);
@@ -537,7 +477,7 @@ test.describe("exhaustive mixed-content View section matrix", () => {
       exact: true,
     });
 
-    await visibilityTab(page, "Saved").click();
+    await contentStatusTab(page, "Saved").click();
     await targetViewChip.click();
     await expect(feedMain.locator("article[data-item-id]").first()).toBeVisible(
       {
@@ -548,7 +488,7 @@ test.describe("exhaustive mixed-content View section matrix", () => {
 
     const loadedScopeKey =
       `serial-mixed-content-store-v2::normalized:v1::record:scopes:` +
-      encodeURIComponent(`view:${fixture.targetViewId}:later`);
+      encodeURIComponent(`view:${fixture.targetViewId}:saved:unread`);
     await expect
       .poll(
         async () => {
@@ -559,7 +499,7 @@ test.describe("exhaustive mixed-content View section matrix", () => {
       )
       .toBe(true);
 
-    await visibilityTab(page, "Unread").click();
+    await contentStatusTab(page, "Inbox").click();
     const targetItem = feedMain.locator(
       `article[data-item-id="${fixture.targetItemId}"]`,
     );
@@ -567,11 +507,11 @@ test.describe("exhaustive mixed-content View section matrix", () => {
     await targetItem.getByRole("link").hover();
     await page.keyboard.press("s");
 
-    await visibilityTab(page, "Saved").click();
+    await contentStatusTab(page, "Saved").click();
     await expect(targetItem).toBeVisible({ timeout: 5_000 });
   });
 
-  test("renders mixed Feed items and Bookmarks in configured sections in Read", async ({
+  test("renders mixed Feed items and Bookmarks in configured sections in Archived", async ({
     page,
   }) => {
     test.setTimeout(45_000);
@@ -586,7 +526,7 @@ test.describe("exhaustive mixed-content View section matrix", () => {
       SELF_HOSTED_TURSO_PORT,
       SELF_HOSTED_APP_PORT,
       fullyMixedCase,
-      "read",
+      { saveStatus: "inbox", archiveStatus: "archived" },
     );
     testEmail = fixture.email;
 
@@ -595,7 +535,7 @@ test.describe("exhaustive mixed-content View section matrix", () => {
       email: fixture.email,
       password: fixture.password,
     });
-    await visibilityTab(page, "Archived").click();
+    await contentStatusTab(page, "Archived").click();
 
     const feedMain = page
       .locator("main")
@@ -619,12 +559,12 @@ test.describe("exhaustive mixed-content View section matrix", () => {
       feedMain.locator(`#section-${sectionIndex}`),
     );
 
-    // Read/Archived views intentionally flatten their content into one
-    // chronological section instead of rendering configured subview sections.
-    await expect(feedMain.locator('[id^="section-"]')).toHaveCount(1);
-    await expect
-      .poll(() => renderedItemIds(sections[0]!.locator("[data-item-id]")))
-      .toEqual(expectedSectionItemIds.flat().sort());
+    await expect(feedMain.locator('[id^="section-"]')).toHaveCount(3);
+    for (const [sectionIndex, section] of sections.entries()) {
+      await expect
+        .poll(() => renderedItemIds(section.locator("[data-item-id]")))
+        .toEqual(expectedSectionItemIds[sectionIndex]);
+    }
     await expect(
       feedMain.locator(`[data-item-id="${fixture.items.outsideFeedItem}"]`),
     ).toHaveCount(0);

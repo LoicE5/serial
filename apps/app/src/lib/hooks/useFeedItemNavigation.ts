@@ -15,10 +15,10 @@ import {
 import type { KeyboardEvent } from "react";
 import {
   categoryFilterAtom,
+  contentStatusFilterAtom,
   feedFilterAtom,
   selectedItemIdAtom,
   viewFilterIdAtom,
-  visibilityFilterAtom,
 } from "~/lib/data/atoms";
 import {
   getShortcutAllowRepeat,
@@ -35,7 +35,6 @@ import {
 interface SectionInfo {
   size: number;
   isGrid: boolean;
-  showsArchivedSavedItems: boolean;
 }
 
 interface SelectNextItemOptions {
@@ -150,7 +149,7 @@ export function useFeedItemNavigation(
   const viewFilterId = useAtomValue(viewFilterIdAtom);
   const categoryFilter = useAtomValue(categoryFilterAtom);
   const feedFilter = useAtomValue(feedFilterAtom);
-  const visibilityFilter = useAtomValue(visibilityFilterAtom);
+  const contentStatusFilter = useAtomValue(contentStatusFilterAtom);
   const { pathname } = useLocation();
 
   const prevViewFilterIdRef = useRef<number | null>(null);
@@ -561,20 +560,9 @@ export function useFeedItemNavigation(
       const didToggleRead = selectedItemActions.toggleRead();
       if (!didToggleRead) return;
 
-      const selectedSectionIndex =
-        hasSections && idx >= 0
-          ? getSectionIndex(idx, sectionBoundaries)
-          : null;
-      const savedSectionVisibility =
-        visibilityFilter === "later" && selectedSectionIndex !== null
-          ? sections?.[selectedSectionIndex]?.showsArchivedSavedItems
-            ? "all"
-            : "unread"
-          : null;
       if (
         shouldAdvanceAfterToggleRead({
-          visibilityFilter,
-          savedSectionVisibility,
+          contentStatusFilter,
         })
       ) {
         selectItemAfterCurrentItemLeavesView(idx);
@@ -585,10 +573,7 @@ export function useFeedItemNavigation(
       selectedItemId,
       selectedItemActions,
       items,
-      visibilityFilter,
-      hasSections,
-      sectionBoundaries,
-      sections,
+      contentStatusFilter,
       selectItemAfterCurrentItemLeavesView,
     ],
   );

@@ -203,9 +203,9 @@ describe("legacy server workload contracts", () => {
         });
 
         session.instrumentation.reset();
-        const stream = await api.initial.getItemsByVisibility({
+        const stream = await api.initial.getItemsByContentStatus({
           viewId: 1,
-          visibilityFilter: "unread",
+          contentStatusFilter: { saveStatus: "inbox", archiveStatus: "unread" },
           cursor: {
             postedAt: new Date(now.getTime() - 1_000),
             id: "item-001",

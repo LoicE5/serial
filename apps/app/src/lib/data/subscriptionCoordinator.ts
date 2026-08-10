@@ -107,7 +107,7 @@ export function processPublishedChunks(payloads: PublishedChunk[]) {
     });
     for (const scope of affected) {
       affectedScopes.set(
-        JSON.stringify([scope.scope, scope.visibility]),
+        JSON.stringify([scope.scope, scope.contentStatus]),
         scope,
       );
     }
@@ -130,7 +130,7 @@ export function processPublishedChunks(payloads: PublishedChunk[]) {
     });
     for (const scope of affected) {
       affectedScopes.set(
-        JSON.stringify([scope.scope, scope.visibility]),
+        JSON.stringify([scope.scope, scope.contentStatus]),
         scope,
       );
     }
@@ -143,7 +143,7 @@ export function processPublishedChunks(payloads: PublishedChunk[]) {
     });
     for (const scope of affected) {
       affectedScopes.set(
-        JSON.stringify([scope.scope, scope.visibility]),
+        JSON.stringify([scope.scope, scope.contentStatus]),
         scope,
       );
     }
@@ -152,7 +152,7 @@ export function processPublishedChunks(payloads: PublishedChunk[]) {
   for (const payload of payloads) {
     if (payload.source === "mixed") {
       const { chunk } = payload;
-      const scopeKey = getMixedScopeKey(chunk.scope, chunk.visibility);
+      const scopeKey = getMixedScopeKey(chunk.scope, chunk.contentStatus);
       const requestCursor =
         chunk.replacesScope === true
           ? null
@@ -167,7 +167,7 @@ export function processPublishedChunks(payloads: PublishedChunk[]) {
       });
       mixedContentStore.getState().applyPage({
         scope: chunk.scope,
-        visibility: chunk.visibility,
+        contentStatus: chunk.contentStatus,
         page: chunk.page,
         replacesScope: chunk.replacesScope,
         feedItems: feedItemsStore.getState().feedItemsDict,
@@ -196,7 +196,7 @@ export function processPublishedChunks(payloads: PublishedChunk[]) {
       });
       for (const scope of affected) {
         affectedScopes.set(
-          JSON.stringify([scope.scope, scope.visibility]),
+          JSON.stringify([scope.scope, scope.contentStatus]),
           scope,
         );
       }
@@ -223,7 +223,7 @@ export function processPublishedChunks(payloads: PublishedChunk[]) {
         });
         for (const scope of affected) {
           affectedScopes.set(
-            JSON.stringify([scope.scope, scope.visibility]),
+            JSON.stringify([scope.scope, scope.contentStatus]),
             scope,
           );
         }
@@ -238,7 +238,7 @@ export function processPublishedChunks(payloads: PublishedChunk[]) {
     });
     for (const scope of affected) {
       affectedScopes.set(
-        JSON.stringify([scope.scope, scope.visibility]),
+        JSON.stringify([scope.scope, scope.contentStatus]),
         scope,
       );
     }

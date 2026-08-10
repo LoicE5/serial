@@ -57,7 +57,10 @@ beforeEach(() => {
   const view = makeView();
   viewsStore.getState().set([view]);
   viewsStore.getState().setViewAvailability({
-    [VIEW_ID]: { unread: true, read: false, later: false },
+    [VIEW_ID]: {
+      inbox: { unread: true, archived: false },
+      saved: { unread: false, archived: false },
+    },
   });
   feedItemsStore.getState().reset();
 });
@@ -74,7 +77,10 @@ describe("navigation refresh transitions", () => {
     feedItemsStore.getState().setFeedItems([nextItem]);
     feedItemsStore.setState({
       scopeFeedItemIds: {
-        [getFeedItemScopeKey("view", VIEW_ID, "unread")]: [],
+        [getFeedItemScopeKey("view", VIEW_ID, {
+          saveStatus: "inbox",
+          archiveStatus: "unread",
+        })]: [],
       },
     });
 
@@ -87,13 +93,22 @@ describe("navigation refresh transitions", () => {
     const previousItem = makeItem(true);
     const nextItem = makeItem(false);
     viewsStore.getState().setViewAvailability({
-      [VIEW_ID]: { unread: false, read: true, later: false },
+      [VIEW_ID]: {
+        inbox: { unread: false, archived: true },
+        saved: { unread: false, archived: false },
+      },
     });
     feedItemsStore.getState().setFeedItems([nextItem]);
     feedItemsStore.setState({
       scopeFeedItemIds: {
-        [getFeedItemScopeKey("view", VIEW_ID, "read")]: [],
-        [getFeedItemScopeKey("view", VIEW_ID, "unread")]: [nextItem.id],
+        [getFeedItemScopeKey("view", VIEW_ID, {
+          saveStatus: "inbox",
+          archiveStatus: "archived",
+        })]: [],
+        [getFeedItemScopeKey("view", VIEW_ID, {
+          saveStatus: "inbox",
+          archiveStatus: "unread",
+        })]: [nextItem.id],
       },
     });
 
@@ -106,13 +121,22 @@ describe("navigation refresh transitions", () => {
     const previousItem = makeItem(false);
     const nextItem = makeItem(true);
     viewsStore.getState().setViewAvailability({
-      [VIEW_ID]: { unread: true, read: true, later: false },
+      [VIEW_ID]: {
+        inbox: { unread: true, archived: true },
+        saved: { unread: false, archived: false },
+      },
     });
     feedItemsStore.getState().setFeedItems([nextItem]);
     feedItemsStore.setState({
       scopeFeedItemIds: {
-        [getFeedItemScopeKey("view", VIEW_ID, "unread")]: ["another-item"],
-        [getFeedItemScopeKey("view", VIEW_ID, "read")]: [nextItem.id],
+        [getFeedItemScopeKey("view", VIEW_ID, {
+          saveStatus: "inbox",
+          archiveStatus: "unread",
+        })]: ["another-item"],
+        [getFeedItemScopeKey("view", VIEW_ID, {
+          saveStatus: "inbox",
+          archiveStatus: "archived",
+        })]: [nextItem.id],
       },
     });
 
@@ -129,12 +153,18 @@ describe("navigation refresh transitions", () => {
     };
     const nextItem = { ...previousItem, isWatchLater: false };
     viewsStore.getState().setViewAvailability({
-      [VIEW_ID]: { unread: true, read: false, later: true },
+      [VIEW_ID]: {
+        inbox: { unread: true, archived: false },
+        saved: { unread: true, archived: false },
+      },
     });
     feedItemsStore.getState().setFeedItems([nextItem]);
     feedItemsStore.setState({
       scopeFeedItemIds: {
-        [getFeedItemScopeKey("view", VIEW_ID, "later")]: [],
+        [getFeedItemScopeKey("view", VIEW_ID, {
+          saveStatus: "saved",
+          archiveStatus: "unread",
+        })]: [],
       },
     });
 

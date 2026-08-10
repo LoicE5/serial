@@ -346,11 +346,11 @@ export const getAll = protectedProcedure.handler(async ({ context }) => {
     viewSections: sectionsByViewId.get(view.id) ?? [],
   }));
 
-  const inboxView = buildUncategorizedView(
+  const uncategorizedView = buildUncategorizedView(
     context.user.id,
     contentCategoriesList,
     customViews,
   );
 
-  return sortViewsByPlacement([...customViews, inboxView]);
+  return sortViewsByPlacement([...customViews, uncategorizedView]);
 });

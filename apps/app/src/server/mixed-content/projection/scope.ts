@@ -2,7 +2,7 @@ import { and, asc, eq, exists, gte, inArray, not, or, sql } from "drizzle-orm";
 import type { MixedContentScope } from "../projection";
 import type { db as defaultDatabase } from "~/server/db";
 import type { DatabaseView, DatabaseViewSection } from "~/server/db/schema";
-import { INBOX_VIEW_ID } from "~/lib/data/views/constants";
+import { UNCATEGORIZED_VIEW_ID } from "~/lib/data/views/constants";
 import {
   CONTENT_FILTER_OPTION,
   contentFilterColumnAllowsDescriptor,
@@ -60,7 +60,7 @@ export async function loadScopeData(input: {
       sections: [],
     };
   }
-  if (scope.viewId === INBOX_VIEW_ID) {
+  if (scope.viewId === UNCATEGORIZED_VIEW_ID) {
     return {
       valid: true,
       targetView: null,
@@ -127,7 +127,10 @@ function compatibleFeedViewCondition() {
   );
 }
 
-function feedInboxCondition(database: MixedContentDatabase, userId: string) {
+function feedUncategorizedCondition(
+  database: MixedContentDatabase,
+  userId: string,
+) {
   const compatibleView = compatibleFeedViewCondition();
   const direct = exists(
     database
@@ -156,7 +159,7 @@ function feedInboxCondition(database: MixedContentDatabase, userId: string) {
   return and(not(direct), not(tagged));
 }
 
-function bookmarkInboxCondition(
+function bookmarkUncategorizedCondition(
   database: MixedContentDatabase,
   userId: string,
 ) {
@@ -212,8 +215,8 @@ export function feedScopeCondition(input: {
         ),
     );
   }
-  if (scope.viewId === INBOX_VIEW_ID) {
-    return feedInboxCondition(database, userId);
+  if (scope.viewId === UNCATEGORIZED_VIEW_ID) {
+    return feedUncategorizedCondition(database, userId);
   }
   const targetView = scopeData.targetView!;
   const membership =
@@ -272,8 +275,8 @@ export function bookmarkScopeCondition(input: {
         ),
     );
   }
-  if (scope.viewId === INBOX_VIEW_ID) {
-    return bookmarkInboxCondition(database, userId);
+  if (scope.viewId === UNCATEGORIZED_VIEW_ID) {
+    return bookmarkUncategorizedCondition(database, userId);
   }
   const targetView = scopeData.targetView!;
   const contentFilter = contentFilterSqlPredicate({

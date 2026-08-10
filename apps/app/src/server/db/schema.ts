@@ -348,14 +348,14 @@ export const feedItems = sqliteTable(
       example.isWatchLater,
       example.postedAt,
     ),
-    // Covers the "later" visibility filter which only checks isWatchLater
+    // Covers Saved content ordered by its save-state update time.
     // without constraining isWatched, so it can't use the wider composite.
     index("feed_item_feed_id_is_watch_later_posted_at_idx").on(
       example.feedId,
       example.isWatchLater,
       example.postedAt,
     ),
-    // Covers the "read" visibility filter ordered by isWatchedUpdatedAt.
+    // Covers Archived content ordered by its archive-state update time.
     index("feed_item_feed_id_is_watched_updated_at_idx").on(
       example.feedId,
       example.isWatched,

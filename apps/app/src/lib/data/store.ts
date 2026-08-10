@@ -36,16 +36,23 @@ import type {
   RetainedFeedPage,
   RetainFeedItemPageInput,
 } from "./feed-page-retention";
-import type { VisibilityFilter } from "./atoms";
 import type { FetchFeedsStatus } from "~/server/rss/fetchFeeds";
 import type { ApplicationFeedItem } from "~/server/db/schema";
 import type {
   DiffEntry,
-  GetItemsByVisibilityChunk,
+  GetItemsByContentStatusChunk,
   PaginationCursor,
 } from "~/server/api/routers/initialRouter";
 import type { PublishedChunk } from "~/server/api/publisher";
 import type { IncomingFeedItem } from "./feed-items/mergeFeedItem";
+import type {
+  ContentStatusFilter,
+  ContentStatusKey,
+} from "~/lib/content-status";
+import {
+  buildContentStatusKey,
+  DEFAULT_CONTENT_STATUS_FILTER,
+} from "~/lib/content-status";
 import { getQueryClient } from "~/lib/query-client";
 import { orpc } from "~/lib/orpc";
 
@@ -157,53 +164,53 @@ export type ApplicationStore = {
   currentViewId: number | null;
   viewFeedIds: Record<number, number[]>;
   setViewFeedIds: (viewId: number, feedIds: number[]) => void;
-  // Pagination state per view and visibility filter
+  // Pagination state per View and content status.
   viewPaginationState: Record<
     number,
-    Partial<Record<VisibilityFilter, PaginationState>>
+    Partial<Record<ContentStatusKey, PaginationState>>
   >;
-  // Track which visibility filters have been fetched for each view
-  fetchedVisibilityFilters: Record<number, Set<VisibilityFilter>>;
-  // Fetch items for a specific visibility filter (lazy loading)
-  fetchItemsForVisibility: (
+  // Track which content statuses have been fetched for each View.
+  fetchedContentStatusFilters: Record<number, Set<ContentStatusKey>>;
+  // Fetch items for a specific content status (lazy loading).
+  fetchItemsForContentStatus: (
     viewId: number,
-    visibilityFilter: VisibilityFilter,
+    contentStatusFilter: ContentStatusFilter,
   ) => Promise<void>;
   // Fetch more items with cursor (pagination)
   fetchMoreItems: (
     viewId: number,
-    visibilityFilter: VisibilityFilter,
+    contentStatusFilter: ContentStatusFilter,
     options?: { force?: boolean },
   ) => Promise<void>;
-  // Get pagination state for a view and visibility filter
+  // Get pagination state for a View and content status.
   getPaginationState: (
     viewId: number,
-    visibilityFilter: VisibilityFilter,
+    contentStatusFilter: ContentStatusFilter,
   ) => PaginationState | undefined;
   // Feed-specific pagination state
   feedPaginationState: Record<
     number,
-    Partial<Record<VisibilityFilter, PaginationState>>
+    Partial<Record<ContentStatusKey, PaginationState>>
   >;
   // Category-specific pagination state
   categoryPaginationState: Record<
     number,
-    Partial<Record<VisibilityFilter, PaginationState>>
+    Partial<Record<ContentStatusKey, PaginationState>>
   >;
-  // Track which visibility filters have been fetched for each feed
-  fetchedFeedFilters: Record<number, Set<VisibilityFilter>>;
-  // Track which visibility filters have been fetched for each category
-  fetchedCategoryFilters: Record<number, Set<VisibilityFilter>>;
+  // Track which content statuses have been fetched for each Feed.
+  fetchedFeedFilters: Record<number, Set<ContentStatusKey>>;
+  // Track which content statuses have been fetched for each Tag.
+  fetchedCategoryFilters: Record<number, Set<ContentStatusKey>>;
   // Fetch more items for a feed (pagination)
   fetchMoreItemsForFeed: (
     feedId: number,
-    visibilityFilter: VisibilityFilter,
+    contentStatusFilter: ContentStatusFilter,
     options?: { force?: boolean; resetCursor?: boolean },
   ) => Promise<void>;
   // Fetch more items for a category (pagination)
   fetchMoreItemsForCategory: (
     categoryId: number,
-    visibilityFilter: VisibilityFilter,
+    contentStatusFilter: ContentStatusFilter,
     options?: { force?: boolean; resetCursor?: boolean },
   ) => Promise<void>;
   // Process chunks received from the publisher subscription
@@ -212,10 +219,10 @@ export type ApplicationStore = {
   processChunks: (payloads: PublishedChunk[]) => void;
   // Internal: Track oldest item per view during initial data processing for cursor computation
   _lastItemByView: Record<number, ApplicationFeedItem | null>;
-  // Internal: Track pagination cursors from view-diff chunks per view per visibility
+  // Internal: track pagination cursors per View and content status.
   _pendingViewCursors: Record<
     number,
-    Partial<Record<VisibilityFilter, PaginationCursor>>
+    Partial<Record<ContentStatusKey, PaginationCursor>>
   >;
   // Item IDs that need fulltext content fetched after receiving lightweight items
   pendingFulltextItems: string[];
@@ -255,7 +262,7 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
           currentViewId: null,
           viewFeedIds: {},
           viewPaginationState: {},
-          fetchedVisibilityFilters: {},
+          fetchedContentStatusFilters: {},
           feedPaginationState: {},
           categoryPaginationState: {},
           fetchedFeedFilters: {},
@@ -362,7 +369,7 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
           },
         }),
       viewPaginationState: {},
-      fetchedVisibilityFilters: {},
+      fetchedContentStatusFilters: {},
       feedPaginationState: {},
       categoryPaginationState: {},
       fetchedFeedFilters: {},
@@ -424,22 +431,26 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
         }, DEBOUNCE_MS);
       },
 
-      getPaginationState: (viewId, visibilityFilter) => {
-        return get().viewPaginationState[viewId]?.[visibilityFilter];
+      getPaginationState: (viewId, contentStatusFilter) => {
+        return get().viewPaginationState[viewId]?.[
+          buildContentStatusKey(contentStatusFilter)
+        ];
       },
 
-      fetchItemsForVisibility: async (viewId, visibilityFilter) => {
+      fetchItemsForContentStatus: async (viewId, contentStatusFilter) => {
         const state = get();
 
         // Check if already fetched for this view/filter
-        const fetchedFilters = state.fetchedVisibilityFilters[viewId];
-        if (fetchedFilters?.has(visibilityFilter)) {
+        const fetchedFilters = state.fetchedContentStatusFilters[viewId];
+        if (fetchedFilters?.has(buildContentStatusKey(contentStatusFilter))) {
           return;
         }
 
         // Check if already fetching
         const paginationState =
-          state.viewPaginationState[viewId]?.[visibilityFilter];
+          state.viewPaginationState[viewId]?.[
+            buildContentStatusKey(contentStatusFilter)
+          ];
         if (paginationState?.isFetching) {
           return;
         }
@@ -450,7 +461,7 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
             ...state.viewPaginationState,
             [viewId]: {
               ...state.viewPaginationState[viewId],
-              [visibilityFilter]: {
+              [buildContentStatusKey(contentStatusFilter)]: {
                 cursor: null,
                 hasMore: true,
                 isFetching: true,
@@ -460,12 +471,12 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
         });
 
         try {
-          for await (const chunk of (await orpcRouterClient.initial.getItemsByVisibility(
+          for await (const chunk of (await orpcRouterClient.initial.getItemsByContentStatus(
             {
               viewId,
-              visibilityFilter,
+              contentStatusFilter,
             },
-          )) as AsyncIterable<GetItemsByVisibilityChunk>) {
+          )) as AsyncIterable<GetItemsByContentStatusChunk>) {
             if (chunk.type === "error") {
               console.error("Error fetching items:", chunk.message);
               continue;
@@ -491,7 +502,11 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
               feedItemsOrder,
               scopeFeedItemIds: applyMergedScopeMembershipUpdate({
                 scopeFeedItemIds: get().scopeFeedItemIds,
-                scopeKey: getFeedItemScopeKey("view", viewId, visibilityFilter),
+                scopeKey: getFeedItemScopeKey(
+                  "view",
+                  viewId,
+                  contentStatusFilter,
+                ),
                 itemIds: chunk.feedItems.map((item) => item.id),
                 replace: chunk.replacesScope === true,
                 feedItemsDict,
@@ -501,7 +516,7 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
                 ...get().viewPaginationState,
                 [viewId]: {
                   ...get().viewPaginationState[viewId],
-                  [visibilityFilter]: {
+                  [buildContentStatusKey(contentStatusFilter)]: {
                     cursor: chunk.nextCursor,
                     hasMore: chunk.hasMore,
                     isFetching: false,
@@ -510,7 +525,11 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
               },
             });
             get().retainFeedItemPage({
-              scopeKey: getFeedItemScopeKey("view", viewId, visibilityFilter),
+              scopeKey: getFeedItemScopeKey(
+                "view",
+                viewId,
+                contentStatusFilter,
+              ),
               itemIds: chunk.feedItems.map((item) => item.id),
               requestCursor: null,
               nextCursor: chunk.nextCursor,
@@ -518,25 +537,25 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
             });
           }
 
-          // Mark visibility filter as fetched
+          // Mark the content status as fetched.
           set({
-            fetchedVisibilityFilters: {
-              ...get().fetchedVisibilityFilters,
+            fetchedContentStatusFilters: {
+              ...get().fetchedContentStatusFilters,
               [viewId]: new Set([
-                ...(get().fetchedVisibilityFilters[viewId] ?? []),
-                visibilityFilter,
+                ...(get().fetchedContentStatusFilters[viewId] ?? []),
+                buildContentStatusKey(contentStatusFilter),
               ]),
             },
           });
         } catch (error) {
-          console.error("Error fetching items for visibility:", error);
+          console.error("Error fetching items for content status:", error);
           // Reset fetching state on error
           set({
             viewPaginationState: {
               ...get().viewPaginationState,
               [viewId]: {
                 ...get().viewPaginationState[viewId],
-                [visibilityFilter]: {
+                [buildContentStatusKey(contentStatusFilter)]: {
                   cursor: null,
                   hasMore: false,
                   isFetching: false,
@@ -546,14 +565,16 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
           });
         } finally {
           const finalState =
-            get().viewPaginationState[viewId]?.[visibilityFilter];
+            get().viewPaginationState[viewId]?.[
+              buildContentStatusKey(contentStatusFilter)
+            ];
           if (finalState?.isFetching) {
             set({
               viewPaginationState: {
                 ...get().viewPaginationState,
                 [viewId]: {
                   ...get().viewPaginationState[viewId],
-                  [visibilityFilter]: {
+                  [buildContentStatusKey(contentStatusFilter)]: {
                     ...finalState,
                     isFetching: false,
                   },
@@ -564,10 +585,10 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
         }
       },
 
-      fetchMoreItems: async (viewId, visibilityFilter, options) => {
+      fetchMoreItems: async (viewId, contentStatusFilter, options) => {
         const state = get();
         const paginationState = state.viewPaginationState[viewId]?.[
-          visibilityFilter
+          buildContentStatusKey(contentStatusFilter)
         ] ?? {
           cursor: null,
           hasMore: true,
@@ -589,7 +610,7 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
             ...state.viewPaginationState,
             [viewId]: {
               ...state.viewPaginationState[viewId],
-              [visibilityFilter]: {
+              [buildContentStatusKey(contentStatusFilter)]: {
                 ...paginationState,
                 isFetching: true,
               },
@@ -598,13 +619,13 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
         });
 
         try {
-          for await (const chunk of (await orpcRouterClient.initial.getItemsByVisibility(
+          for await (const chunk of (await orpcRouterClient.initial.getItemsByContentStatus(
             {
               viewId,
-              visibilityFilter,
+              contentStatusFilter,
               cursor: paginationState.cursor,
             },
-          )) as AsyncIterable<GetItemsByVisibilityChunk>) {
+          )) as AsyncIterable<GetItemsByContentStatusChunk>) {
             if (chunk.type === "error") {
               console.error("Error fetching more items:", chunk.message);
               continue;
@@ -630,7 +651,11 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
               feedItemsOrder,
               scopeFeedItemIds: applyMergedScopeMembershipUpdate({
                 scopeFeedItemIds: get().scopeFeedItemIds,
-                scopeKey: getFeedItemScopeKey("view", viewId, visibilityFilter),
+                scopeKey: getFeedItemScopeKey(
+                  "view",
+                  viewId,
+                  contentStatusFilter,
+                ),
                 itemIds: chunk.feedItems.map((item) => item.id),
                 replace: false,
                 feedItemsDict,
@@ -640,7 +665,7 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
                 ...get().viewPaginationState,
                 [viewId]: {
                   ...get().viewPaginationState[viewId],
-                  [visibilityFilter]: {
+                  [buildContentStatusKey(contentStatusFilter)]: {
                     cursor: chunk.nextCursor,
                     hasMore: chunk.hasMore,
                     isFetching: false,
@@ -649,7 +674,11 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
               },
             });
             get().retainFeedItemPage({
-              scopeKey: getFeedItemScopeKey("view", viewId, visibilityFilter),
+              scopeKey: getFeedItemScopeKey(
+                "view",
+                viewId,
+                contentStatusFilter,
+              ),
               itemIds: chunk.feedItems.map((item) => item.id),
               requestCursor: paginationState.cursor,
               nextCursor: chunk.nextCursor,
@@ -664,8 +693,10 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
               ...get().viewPaginationState,
               [viewId]: {
                 ...get().viewPaginationState[viewId],
-                [visibilityFilter]: {
-                  ...get().viewPaginationState[viewId]?.[visibilityFilter],
+                [buildContentStatusKey(contentStatusFilter)]: {
+                  ...get().viewPaginationState[viewId]?.[
+                    buildContentStatusKey(contentStatusFilter)
+                  ],
                   isFetching: false,
                 } as PaginationState,
               },
@@ -674,14 +705,16 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
         } finally {
           // Defensive: ensure isFetching is reset even if stream ends with only error chunks
           const finalState =
-            get().viewPaginationState[viewId]?.[visibilityFilter];
+            get().viewPaginationState[viewId]?.[
+              buildContentStatusKey(contentStatusFilter)
+            ];
           if (finalState?.isFetching) {
             set({
               viewPaginationState: {
                 ...get().viewPaginationState,
                 [viewId]: {
                   ...get().viewPaginationState[viewId],
-                  [visibilityFilter]: {
+                  [buildContentStatusKey(contentStatusFilter)]: {
                     ...finalState,
                     isFetching: false,
                   },
@@ -692,10 +725,10 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
         }
       },
 
-      fetchMoreItemsForFeed: async (feedId, visibilityFilter, options) => {
+      fetchMoreItemsForFeed: async (feedId, contentStatusFilter, options) => {
         const state = get();
         const paginationState = state.feedPaginationState[feedId]?.[
-          visibilityFilter
+          buildContentStatusKey(contentStatusFilter)
         ] ?? {
           cursor: null,
           hasMore: true,
@@ -719,7 +752,7 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
             ...state.feedPaginationState,
             [feedId]: {
               ...state.feedPaginationState[feedId],
-              [visibilityFilter]: {
+              [buildContentStatusKey(contentStatusFilter)]: {
                 ...paginationState,
                 cursor: requestCursor,
                 hasMore: shouldResetCursor ? true : paginationState.hasMore,
@@ -733,7 +766,7 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
         try {
           await orpcRouterClient.initial.requestItemsByFeed({
             feedId,
-            visibilityFilter,
+            contentStatusFilter,
             cursor: requestCursor,
             clientId: getDataSubscriptionClientId(),
           });
@@ -744,8 +777,10 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
               ...get().feedPaginationState,
               [feedId]: {
                 ...get().feedPaginationState[feedId],
-                [visibilityFilter]: {
-                  ...get().feedPaginationState[feedId]?.[visibilityFilter],
+                [buildContentStatusKey(contentStatusFilter)]: {
+                  ...get().feedPaginationState[feedId]?.[
+                    buildContentStatusKey(contentStatusFilter)
+                  ],
                   isFetching: false,
                 } as PaginationState,
               },
@@ -756,12 +791,12 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
 
       fetchMoreItemsForCategory: async (
         categoryId,
-        visibilityFilter,
+        contentStatusFilter,
         options,
       ) => {
         const state = get();
         const paginationState = state.categoryPaginationState[categoryId]?.[
-          visibilityFilter
+          buildContentStatusKey(contentStatusFilter)
         ] ?? {
           cursor: null,
           hasMore: true,
@@ -785,7 +820,7 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
             ...state.categoryPaginationState,
             [categoryId]: {
               ...state.categoryPaginationState[categoryId],
-              [visibilityFilter]: {
+              [buildContentStatusKey(contentStatusFilter)]: {
                 ...paginationState,
                 cursor: requestCursor,
                 hasMore: shouldResetCursor ? true : paginationState.hasMore,
@@ -799,7 +834,7 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
         try {
           await orpcRouterClient.initial.requestItemsByCategoryId({
             categoryId,
-            visibilityFilter,
+            contentStatusFilter,
             cursor: requestCursor,
             clientId: getDataSubscriptionClientId(),
           });
@@ -810,9 +845,9 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
               ...get().categoryPaginationState,
               [categoryId]: {
                 ...get().categoryPaginationState[categoryId],
-                [visibilityFilter]: {
+                [buildContentStatusKey(contentStatusFilter)]: {
                   ...get().categoryPaginationState[categoryId]?.[
-                    visibilityFilter
+                    buildContentStatusKey(contentStatusFilter)
                   ],
                   isFetching: false,
                 } as PaginationState,
@@ -1078,30 +1113,35 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
                 viewFeedsStore.getState().fetch();
 
                 // Build pagination state from view-diff cursors collected
-                // during the unread diff phase. read/later cursors arrive
-                // after initial-data-complete and are applied via fetchedVisibilityFilters.
+                // during the default content-status diff phase. Other status
+                // cursors arrive
+                // after initial-data-complete and are applied via fetchedContentStatusFilters.
                 const allViews = viewsStore.getState().views;
                 const pendingViewCursors = get()._pendingViewCursors;
                 const lastItemByView = get()._lastItemByView;
-                const fetchedFilters: Record<number, Set<VisibilityFilter>> = {
+                const fetchedFilters: Record<number, Set<ContentStatusKey>> = {
                   // Merge any filters already tracked from view-diff chunks
-                  ...get().fetchedVisibilityFilters,
+                  ...get().fetchedContentStatusFilters,
                 };
                 const paginationState: Record<
                   number,
-                  Partial<Record<VisibilityFilter, PaginationState>>
+                  Partial<Record<ContentStatusKey, PaginationState>>
                 > = {};
 
                 for (const view of allViews) {
-                  // Ensure "unread" is always marked as fetched
+                  const defaultContentStatusKey = buildContentStatusKey(
+                    DEFAULT_CONTENT_STATUS_FILTER,
+                  );
+                  // The initial request always fetches the default status.
                   fetchedFilters[view.id] = new Set([
                     ...(fetchedFilters[view.id] ?? []),
-                    "unread",
+                    defaultContentStatusKey,
                   ]);
 
                   // Use cursor from view-diff chunk if available,
                   // otherwise fall back to oldest item tracking (legacy path)
-                  const unreadCursor = pendingViewCursors[view.id]?.unread;
+                  const unreadCursor =
+                    pendingViewCursors[view.id]?.[defaultContentStatusKey];
                   const hasUnreadCursor = unreadCursor !== undefined;
                   const lastItem = hasUnreadCursor
                     ? undefined
@@ -1117,7 +1157,7 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
                     : lastItem !== undefined;
 
                   paginationState[view.id] = {
-                    unread: {
+                    [defaultContentStatusKey]: {
                       cursor,
                       hasMore,
                       isFetching: false,
@@ -1129,10 +1169,10 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
                 // the subsequent "refresh-start" chunk will transition the machine.
                 set({
                   fetchFeedItemsLastFetchedAt: Date.now(),
-                  fetchedVisibilityFilters: fetchedFilters,
+                  fetchedContentStatusFilters: fetchedFilters,
                   viewPaginationState: paginationState,
                   _lastItemByView: {}, // Clear after use
-                  // Don't clear _pendingViewCursors — read/later cursors arrive after this
+                  // Keep pending cursors until the remaining status pages arrive.
                 });
                 loadingActor.send({ type: "INITIAL_DATA_COMPLETE" });
 
@@ -1180,15 +1220,15 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
 
                 // Only track view-specific data if viewId is present
                 if (viewId !== undefined) {
-                  if (initialChunk.visibilityFilter) {
-                    const visibilityFilter =
-                      initialChunk.visibilityFilter as VisibilityFilter;
+                  if (initialChunk.contentStatusFilter) {
+                    const contentStatusFilter =
+                      initialChunk.contentStatusFilter;
                     scopeFeedItemIds = applyMergedScopeMembershipUpdate({
                       scopeFeedItemIds,
                       scopeKey: getFeedItemScopeKey(
                         "view",
                         viewId,
-                        visibilityFilter,
+                        contentStatusFilter,
                       ),
                       itemIds: initialChunk.feedItems.map((item) => item.id),
                       replace: true,
@@ -1219,16 +1259,13 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
                   }
                   updates._lastItemByView = lastItemByView;
 
-                  // Track fetched visibility filter for this view (when fetching non-unread filters)
-                  if (
-                    initialChunk.visibilityFilter &&
-                    initialChunk.visibilityFilter !== "unread"
-                  ) {
-                    updates.fetchedVisibilityFilters = {
-                      ...get().fetchedVisibilityFilters,
+                  // Track the fetched content status for this view.
+                  if (initialChunk.contentStatusFilter) {
+                    updates.fetchedContentStatusFilters = {
+                      ...get().fetchedContentStatusFilters,
                       [viewId]: new Set([
-                        ...(get().fetchedVisibilityFilters[viewId] ?? []),
-                        initialChunk.visibilityFilter as VisibilityFilter,
+                        ...(get().fetchedContentStatusFilters[viewId] ?? []),
+                        buildContentStatusKey(initialChunk.contentStatusFilter),
                       ]),
                     };
                   }
@@ -1256,7 +1293,7 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
                 );
 
                 const viewId = initialChunk.viewId;
-                const vf = initialChunk.visibilityFilter as VisibilityFilter;
+                const vf = initialChunk.contentStatusFilter;
 
                 const updates: Partial<ApplicationStore> = {
                   feedItemsDict,
@@ -1268,7 +1305,7 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
                   const pendingCursors = { ...get()._pendingViewCursors };
                   pendingCursors[viewId] = {
                     ...pendingCursors[viewId],
-                    [vf]: initialChunk.cursor,
+                    [buildContentStatusKey(vf)]: initialChunk.cursor,
                   };
                   updates._pendingViewCursors = pendingCursors;
                   updates.scopeFeedItemIds = applyMergedScopeMembershipUpdate({
@@ -1283,7 +1320,7 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
                     ...get().viewPaginationState,
                     [viewId]: {
                       ...get().viewPaginationState[viewId],
-                      [vf]: {
+                      [buildContentStatusKey(vf)]: {
                         cursor: initialChunk.cursor,
                         hasMore: initialChunk.hasMore,
                         isFetching: false,
@@ -1291,13 +1328,13 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
                     },
                   };
 
-                  // Track fetched visibility filter
+                  // Track the fetched content status.
                   if (vf) {
-                    updates.fetchedVisibilityFilters = {
-                      ...get().fetchedVisibilityFilters,
+                    updates.fetchedContentStatusFilters = {
+                      ...get().fetchedContentStatusFilters,
                       [viewId]: new Set([
-                        ...(get().fetchedVisibilityFilters[viewId] ?? []),
-                        vf,
+                        ...(get().fetchedContentStatusFilters[viewId] ?? []),
+                        buildContentStatusKey(vf),
                       ]),
                     };
                   }
@@ -1351,7 +1388,7 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
                 }
 
                 const viewId = initialChunk.viewId;
-                const vf = initialChunk.visibilityFilter as VisibilityFilter;
+                const vf = initialChunk.contentStatusFilter;
 
                 const updates: Partial<ApplicationStore> = {
                   feedItemsDict,
@@ -1375,14 +1412,14 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
                   const pendingCursors = { ...get()._pendingViewCursors };
                   pendingCursors[viewId] = {
                     ...pendingCursors[viewId],
-                    [vf]: initialChunk.cursor,
+                    [buildContentStatusKey(vf)]: initialChunk.cursor,
                   };
                   updates._pendingViewCursors = pendingCursors;
                   updates.viewPaginationState = {
                     ...get().viewPaginationState,
                     [viewId]: {
                       ...get().viewPaginationState[viewId],
-                      [vf]: {
+                      [buildContentStatusKey(vf)]: {
                         cursor: initialChunk.cursor,
                         hasMore: initialChunk.hasMore,
                         isFetching: false,
@@ -1390,13 +1427,13 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
                     },
                   };
 
-                  // Track fetched visibility filter
+                  // Track the fetched content status.
                   if (vf) {
-                    updates.fetchedVisibilityFilters = {
-                      ...get().fetchedVisibilityFilters,
+                    updates.fetchedContentStatusFilters = {
+                      ...get().fetchedContentStatusFilters,
                       [viewId]: new Set([
-                        ...(get().fetchedVisibilityFilters[viewId] ?? []),
-                        vf,
+                        ...(get().fetchedContentStatusFilters[viewId] ?? []),
+                        buildContentStatusKey(vf),
                       ]),
                     };
                   }
@@ -1515,9 +1552,9 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
             break;
           }
 
-          case "visibility": {
+          case "content-status": {
             if (chunk.type === "error") {
-              console.error("Visibility fetch error:", chunk.message);
+              console.error("Content-status fetch error:", chunk.message);
               break;
             }
 
@@ -1532,7 +1569,7 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
               const feedItemsDict = { ...get().feedItemsDict };
               const feedItemsOrder = [...get().feedItemsOrder];
               const existingIds = new Set(feedItemsOrder);
-              const vf = chunk.visibilityFilter as VisibilityFilter;
+              const vf = chunk.contentStatusFilter;
               applyDiffEntityUpdates(
                 feedItemsDict,
                 feedItemsOrder,
@@ -1549,7 +1586,9 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
               const requestCursor =
                 chunk.replacesScope === true
                   ? null
-                  : get().viewPaginationState[chunk.viewId]?.[vf]?.cursor;
+                  : get().viewPaginationState[chunk.viewId]?.[
+                      buildContentStatusKey(vf)
+                    ]?.cursor;
 
               set({
                 feedItemsDict,
@@ -1566,14 +1605,14 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
                   ...get().viewPaginationState,
                   [chunk.viewId]: {
                     ...get().viewPaginationState[chunk.viewId],
-                    [vf]: paginationState,
+                    [buildContentStatusKey(vf)]: paginationState,
                   },
                 },
-                fetchedVisibilityFilters: {
-                  ...get().fetchedVisibilityFilters,
+                fetchedContentStatusFilters: {
+                  ...get().fetchedContentStatusFilters,
                   [chunk.viewId]: new Set([
-                    ...(get().fetchedVisibilityFilters[chunk.viewId] ?? []),
-                    vf,
+                    ...(get().fetchedContentStatusFilters[chunk.viewId] ?? []),
+                    buildContentStatusKey(vf),
                   ]),
                 },
               });
@@ -1591,18 +1630,18 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
             if (chunk.type === "feed-items") {
               mergeFeedItems(chunk.feedItems);
 
-              const visibilityFilter =
-                chunk.visibilityFilter as VisibilityFilter;
+              const contentStatusFilter = chunk.contentStatusFilter;
               const scopeKey = getFeedItemScopeKey(
                 "view",
                 chunk.viewId,
-                visibilityFilter,
+                contentStatusFilter,
               );
               const requestCursor =
                 chunk.replacesScope === true
                   ? null
-                  : get().viewPaginationState[chunk.viewId]?.[visibilityFilter]
-                      ?.cursor;
+                  : get().viewPaginationState[chunk.viewId]?.[
+                      buildContentStatusKey(contentStatusFilter)
+                    ]?.cursor;
               set({
                 scopeFeedItemIds: applyMergedScopeMembershipUpdate({
                   scopeFeedItemIds: get().scopeFeedItemIds,
@@ -1616,18 +1655,18 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
                   ...get().viewPaginationState,
                   [chunk.viewId]: {
                     ...get().viewPaginationState[chunk.viewId],
-                    [visibilityFilter]: {
+                    [buildContentStatusKey(contentStatusFilter)]: {
                       cursor: chunk.nextCursor,
                       hasMore: chunk.hasMore,
                       isFetching: false,
                     },
                   },
                 },
-                fetchedVisibilityFilters: {
-                  ...get().fetchedVisibilityFilters,
+                fetchedContentStatusFilters: {
+                  ...get().fetchedContentStatusFilters,
                   [chunk.viewId]: new Set([
-                    ...(get().fetchedVisibilityFilters[chunk.viewId] ?? []),
-                    visibilityFilter,
+                    ...(get().fetchedContentStatusFilters[chunk.viewId] ?? []),
+                    buildContentStatusKey(contentStatusFilter),
                   ]),
                 },
               });
@@ -1651,18 +1690,19 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
             // chunk.type is "feed-items"
             mergeFeedItems(chunk.feedItems);
 
-            // Update pagination state for this feed/visibility filter
-            const visibilityFilter = chunk.visibilityFilter as VisibilityFilter;
+            // Update pagination state for this Feed/content status.
+            const contentStatusFilter = chunk.contentStatusFilter;
             const scopeKey = getFeedItemScopeKey(
               "feed",
               chunk.feedId,
-              visibilityFilter,
+              contentStatusFilter,
             );
             const requestCursor =
               chunk.replacesScope === true
                 ? null
-                : get().feedPaginationState[chunk.feedId]?.[visibilityFilter]
-                    ?.cursor;
+                : get().feedPaginationState[chunk.feedId]?.[
+                    buildContentStatusKey(contentStatusFilter)
+                  ]?.cursor;
             set({
               scopeFeedItemIds: applyMergedScopeMembershipUpdate({
                 scopeFeedItemIds: get().scopeFeedItemIds,
@@ -1676,7 +1716,7 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
                 ...get().feedPaginationState,
                 [chunk.feedId]: {
                   ...get().feedPaginationState[chunk.feedId],
-                  [visibilityFilter]: {
+                  [buildContentStatusKey(contentStatusFilter)]: {
                     cursor: chunk.nextCursor,
                     hasMore: chunk.hasMore,
                     isFetching: false,
@@ -1687,7 +1727,7 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
                 ...get().fetchedFeedFilters,
                 [chunk.feedId]: new Set([
                   ...(get().fetchedFeedFilters[chunk.feedId] ?? []),
-                  visibilityFilter,
+                  buildContentStatusKey(contentStatusFilter),
                 ]),
               },
             });
@@ -1710,18 +1750,18 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
             // chunk.type is "feed-items"
             mergeFeedItems(chunk.feedItems);
 
-            // Update pagination state for this category/visibility filter
-            const visibilityFilter = chunk.visibilityFilter as VisibilityFilter;
+            // Update pagination state for this Tag/content status.
+            const contentStatusFilter = chunk.contentStatusFilter;
             const scopeKey = getFeedItemScopeKey(
               "category",
               chunk.categoryId,
-              visibilityFilter,
+              contentStatusFilter,
             );
             const requestCursor =
               chunk.replacesScope === true
                 ? null
                 : get().categoryPaginationState[chunk.categoryId]?.[
-                    visibilityFilter
+                    buildContentStatusKey(contentStatusFilter)
                   ]?.cursor;
             set({
               scopeFeedItemIds: applyMergedScopeMembershipUpdate({
@@ -1736,7 +1776,7 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
                 ...get().categoryPaginationState,
                 [chunk.categoryId]: {
                   ...get().categoryPaginationState[chunk.categoryId],
-                  [visibilityFilter]: {
+                  [buildContentStatusKey(contentStatusFilter)]: {
                     cursor: chunk.nextCursor,
                     hasMore: chunk.hasMore,
                     isFetching: false,
@@ -1747,7 +1787,7 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
                 ...get().fetchedCategoryFilters,
                 [chunk.categoryId]: new Set([
                   ...(get().fetchedCategoryFilters[chunk.categoryId] ?? []),
-                  visibilityFilter,
+                  buildContentStatusKey(contentStatusFilter),
                 ]),
               },
             });
@@ -1785,7 +1825,7 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
           chunk: {
             type: "view-diff";
             viewId: number;
-            visibilityFilter: string;
+            contentStatusFilter: string;
             diff: DiffEntry[];
             cursor: PaginationCursor;
             hasMore: boolean;
@@ -1821,7 +1861,7 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
             const feedItemsOrder = [...get().feedItemsOrder];
             const existingIds = new Set(feedItemsOrder);
             const pendingCursors = { ...get()._pendingViewCursors };
-            let fetchedVisibilityFilters = get().fetchedVisibilityFilters;
+            let fetchedContentStatusFilters = get().fetchedContentStatusFilters;
             let filtersChanged = false;
 
             const firstView = viewsStore.getState().views[0];
@@ -1837,10 +1877,10 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
               );
 
               // Track cursor
-              const vf = chunk.visibilityFilter as VisibilityFilter;
+              const vf = chunk.contentStatusFilter as ContentStatusFilter;
               pendingCursors[chunk.viewId] = {
                 ...pendingCursors[chunk.viewId],
-                [vf]: chunk.cursor,
+                [buildContentStatusKey(vf)]: chunk.cursor,
               };
               updates.scopeFeedItemIds = applyMergedScopeMembershipUpdate({
                 scopeFeedItemIds:
@@ -1855,12 +1895,14 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
               // Track fetched filters
               if (vf) {
                 if (!filtersChanged) {
-                  fetchedVisibilityFilters = { ...fetchedVisibilityFilters };
+                  fetchedContentStatusFilters = {
+                    ...fetchedContentStatusFilters,
+                  };
                   filtersChanged = true;
                 }
-                fetchedVisibilityFilters[chunk.viewId] = new Set([
-                  ...(fetchedVisibilityFilters[chunk.viewId] ?? []),
-                  vf,
+                fetchedContentStatusFilters[chunk.viewId] = new Set([
+                  ...(fetchedContentStatusFilters[chunk.viewId] ?? []),
+                  buildContentStatusKey(vf),
                 ]);
               }
 
@@ -1878,19 +1920,19 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
             updates.feedItemsOrder = feedItemsOrder;
             updates._pendingViewCursors = pendingCursors;
             if (filtersChanged) {
-              updates.fetchedVisibilityFilters = fetchedVisibilityFilters;
+              updates.fetchedContentStatusFilters = fetchedContentStatusFilters;
             }
 
             set(updates);
             for (const payload of pendingInitialViewDiffs) {
               const chunk = payload.chunk;
-              const visibilityFilter =
-                chunk.visibilityFilter as VisibilityFilter;
+              const contentStatusFilter =
+                chunk.contentStatusFilter as ContentStatusFilter;
               get().retainFeedItemPage({
                 scopeKey: getFeedItemScopeKey(
                   "view",
                   chunk.viewId,
-                  visibilityFilter,
+                  contentStatusFilter,
                 ),
                 itemIds: getServerItemIdsFromDiff(chunk.diff),
                 requestCursor: null,
@@ -1912,7 +1954,7 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
             const lastItemByView = { ...get()._lastItemByView };
             let scopeFeedItemIds = get().scopeFeedItemIds;
             let scopeItemsChanged = false;
-            let fetchedVisibilityFilters = get().fetchedVisibilityFilters;
+            let fetchedContentStatusFilters = get().fetchedContentStatusFilters;
             let filtersChanged = false;
 
             const firstView = viewsStore.getState().views[0];
@@ -1923,7 +1965,7 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
                 viewId?: number;
                 feedId?: number;
                 feedItems: ApplicationFeedItem[];
-                visibilityFilter?: string;
+                contentStatusFilter?: ContentStatusFilter;
               };
 
               for (const item of chunk.feedItems) {
@@ -1950,13 +1992,13 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
               }
 
               if (viewId !== undefined) {
-                if (chunk.visibilityFilter) {
+                if (chunk.contentStatusFilter) {
                   scopeFeedItemIds = applyMergedScopeMembershipUpdate({
                     scopeFeedItemIds,
                     scopeKey: getFeedItemScopeKey(
                       "view",
                       viewId,
-                      chunk.visibilityFilter as VisibilityFilter,
+                      chunk.contentStatusFilter,
                     ),
                     itemIds: chunk.feedItems.map((item) => item.id),
                     replace: true,
@@ -1984,17 +2026,16 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
                   }
                 }
 
-                if (
-                  chunk.visibilityFilter &&
-                  chunk.visibilityFilter !== "unread"
-                ) {
+                if (chunk.contentStatusFilter) {
                   if (!filtersChanged) {
-                    fetchedVisibilityFilters = { ...fetchedVisibilityFilters };
+                    fetchedContentStatusFilters = {
+                      ...fetchedContentStatusFilters,
+                    };
                     filtersChanged = true;
                   }
-                  fetchedVisibilityFilters[viewId] = new Set([
-                    ...(fetchedVisibilityFilters[viewId] ?? []),
-                    chunk.visibilityFilter as VisibilityFilter,
+                  fetchedContentStatusFilters[viewId] = new Set([
+                    ...(fetchedContentStatusFilters[viewId] ?? []),
+                    buildContentStatusKey(chunk.contentStatusFilter),
                   ]);
                 }
               }
@@ -2007,7 +2048,7 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
               updates.scopeFeedItemIds = scopeFeedItemIds;
             }
             if (filtersChanged) {
-              updates.fetchedVisibilityFilters = fetchedVisibilityFilters;
+              updates.fetchedContentStatusFilters = fetchedContentStatusFilters;
             }
 
             set(updates);

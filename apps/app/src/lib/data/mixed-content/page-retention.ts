@@ -7,7 +7,7 @@ import {
   selectPersistedPages,
 } from "../page-retention";
 import type { RetainedCursorPage } from "../page-retention";
-import type { VisibilityFilter } from "../atoms";
+import type { ContentStatusFilter } from "~/lib/content-status";
 import type {
   MixedContentCursor,
   MixedContentPage,
@@ -21,7 +21,7 @@ type MixedPageRetentionValue = {
 
 export type LoadedMixedScope = {
   scope: MixedContentScope;
-  visibility: VisibilityFilter;
+  contentStatus: ContentStatusFilter;
   references: MixedContentReference[];
   pages: Array<RetainedCursorPage<MixedPageRetentionValue>>;
   cursor: MixedContentCursor;

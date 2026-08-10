@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createIndexedDbSchemaGate,
   INDEXED_DB_SCHEMA_KEY,
+  INDEXED_DB_SCHEMA_VERSION,
 } from "~/lib/data/indexed-db-schema";
 
 function createMemoryStore(entries: Record<string, unknown> = {}) {
@@ -21,6 +22,10 @@ function createMemoryStore(entries: Record<string, unknown> = {}) {
 }
 
 describe("IndexedDB schema gate", () => {
+  it("uses the two-axis content-status cache schema", () => {
+    expect(INDEXED_DB_SCHEMA_VERSION).toBe(3);
+  });
+
   it.each([
     ["missing", undefined],
     ["mismatched", 1],

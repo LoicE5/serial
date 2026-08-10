@@ -1,6 +1,10 @@
 import { useMutation } from "@tanstack/react-query";
 import { useFetchViews, useSetViews, viewsStore } from "./store";
-import { INBOX_VIEW_ID, INBOX_VIEW_PLACEMENT, useUpdateViewFilter } from ".";
+import {
+  UNCATEGORIZED_VIEW_ID,
+  UNCATEGORIZED_VIEW_PLACEMENT,
+  useUpdateViewFilter,
+} from ".";
 import type { ApplicationView } from "~/server/db/schema";
 import { orpc } from "~/lib/orpc";
 import { feedItemsStore, useRevalidateView } from "~/lib/data/store";
@@ -98,7 +102,7 @@ export function useDeleteViewMutation() {
         setViews([]);
         await fetchViews();
         await fetchViewFeeds();
-        updateViewFilter(INBOX_VIEW_ID, viewsStore.getState().views);
+        updateViewFilter(UNCATEGORIZED_VIEW_ID, viewsStore.getState().views);
         await refreshNavigationSnapshotSafely();
       },
     }),
@@ -106,12 +110,14 @@ export function useDeleteViewMutation() {
 }
 
 export function calculateViewsPlacement(views: ApplicationView[]) {
-  const inboxIndex = views.findIndex((view) => view.id === INBOX_VIEW_ID);
+  const inboxIndex = views.findIndex(
+    (view) => view.id === UNCATEGORIZED_VIEW_ID,
+  );
   if (inboxIndex === -1) return views;
 
   return views.map((view, viewIndex) => ({
     ...view,
-    placement: inboxIndex - viewIndex + INBOX_VIEW_PLACEMENT,
+    placement: inboxIndex - viewIndex + UNCATEGORIZED_VIEW_PLACEMENT,
   }));
 }
 

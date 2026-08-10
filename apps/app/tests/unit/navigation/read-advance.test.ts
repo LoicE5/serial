@@ -5,26 +5,26 @@ describe("read navigation advance", () => {
   it("advances in global Unread", () => {
     expect(
       shouldAdvanceAfterToggleRead({
-        visibilityFilter: "unread",
-        savedSectionVisibility: null,
+        contentStatusFilter: { saveStatus: "inbox", archiveStatus: "unread" },
       }),
     ).toBe(true);
   });
 
-  it("advances in a Saved section showing Unread", () => {
+  it("advances in Saved + Unread", () => {
     expect(
       shouldAdvanceAfterToggleRead({
-        visibilityFilter: "later",
-        savedSectionVisibility: "unread",
+        contentStatusFilter: { saveStatus: "saved", archiveStatus: "unread" },
       }),
     ).toBe(true);
   });
 
-  it("stays selected in a Saved section showing All", () => {
+  it("stays selected in Saved + Archived", () => {
     expect(
       shouldAdvanceAfterToggleRead({
-        visibilityFilter: "later",
-        savedSectionVisibility: "all",
+        contentStatusFilter: {
+          saveStatus: "saved",
+          archiveStatus: "archived",
+        },
       }),
     ).toBe(false);
   });

@@ -168,7 +168,7 @@ test.describe("feed item actions", () => {
     await expect(player).not.toHaveAttribute("sandbox", /.*/);
   });
 
-  test("marking a saved item read in All keeps it selected", async ({
+  test("archiving a saved item preserves it in Saved Archived", async ({
     page,
   }) => {
     test.setTimeout(30000);
@@ -209,12 +209,6 @@ test.describe("feed item actions", () => {
     await expect(page.locator("article").first()).toBeVisible({
       timeout: 10000,
     });
-    await page
-      .locator('[id^="section-"]')
-      .first()
-      .getByRole("tab", { name: "All" })
-      .click();
-
     const savedItemIds = await page
       .locator("article")
       .evaluateAll((articles) =>
@@ -236,8 +230,9 @@ test.describe("feed item actions", () => {
     });
 
     await page.keyboard.press("e");
-    await expect(itemLink(firstSavedItemId)).toHaveClass(selectedItemClass, {
-      timeout: 5000,
-    });
+    await expect(itemLink(firstSavedItemId)).toHaveCount(0);
+
+    await page.getByRole("tab", { name: "Archived", exact: true }).click();
+    await expect(itemLink(firstSavedItemId)).toBeVisible({ timeout: 5000 });
   });
 });

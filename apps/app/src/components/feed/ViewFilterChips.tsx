@@ -6,7 +6,7 @@ import { PlusIcon } from "lucide-react";
 import { useDialogStore } from "./dialogStore";
 import { Button } from "~/components/ui/button";
 import { ToggleGroup, ToggleGroupItem } from "~/components/ui/toggle-group";
-import { viewFilterIdAtom, visibilityFilterAtom } from "~/lib/data/atoms";
+import { contentStatusFilterAtom, viewFilterIdAtom } from "~/lib/data/atoms";
 import { useUpdateViewFilter, useViews } from "~/lib/data/views";
 import { KeyboardShortcutDisplay } from "~/components/ButtonWithShortcut";
 import {
@@ -15,6 +15,7 @@ import {
 } from "~/lib/constants/shortcuts";
 import { getNavigationAvailability } from "~/lib/data/navigation/store";
 import { Skeleton } from "~/components/ui/skeleton";
+import { isContentStatusAvailable } from "~/lib/content-status";
 
 const VIEW_FILTER_SKELETON_WIDTHS = ["w-16", "w-22", "w-18", "w-26"];
 
@@ -31,7 +32,7 @@ function ViewFilterChipSkeletons() {
 export function ViewFilterChips() {
   const { views, viewAvailability, hasFetchedViews } = useViews();
   const [viewFilter] = useAtom(viewFilterIdAtom);
-  const visibilityFilter = useAtomValue(visibilityFilterAtom);
+  const contentStatusFilter = useAtomValue(contentStatusFilterAtom);
 
   const updateViewFilter = useUpdateViewFilter();
 
@@ -71,10 +72,10 @@ export function ViewFilterChips() {
         return (
           <ToggleGroupItem
             className={clsx("relative", {
-              "opacity-50": !getNavigationAvailability(
-                viewAvailability,
-                view.id,
-              )[visibilityFilter],
+              "opacity-50": !isContentStatusAvailable(
+                getNavigationAvailability(viewAvailability, view.id),
+                contentStatusFilter,
+              ),
             })}
             key={view.id}
             value={view.id.toString()}

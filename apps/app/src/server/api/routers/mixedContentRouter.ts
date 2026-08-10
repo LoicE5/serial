@@ -1,9 +1,10 @@
 import { z } from "zod";
 import type { MixedContentScope } from "~/server/mixed-content/projection";
+import type { ContentStatusFilter } from "~/lib/content-status";
 import { getClientChannel } from "~/server/api/channels";
 import { ITEMS_PER_PAGE } from "~/server/api/constants";
 import { publisher } from "~/server/api/publisher";
-import { visibilityFilterSchema } from "~/lib/data/atoms";
+import { contentStatusFilterSchema } from "~/lib/content-status";
 import { protectedProcedure } from "~/server/orpc/base";
 import {
   loadApplicationBookmarks,
@@ -67,7 +68,7 @@ async function publishPage(input: {
   userId: string;
   clientId: string;
   scope: MixedContentScope;
-  visibility: "unread" | "read" | "later";
+  contentStatus: ContentStatusFilter;
   cursor?: Parameters<typeof queryMixedContentPage>[0]["cursor"];
   limit: number;
 }) {
@@ -77,7 +78,7 @@ async function publishPage(input: {
     chunk: {
       type: "mixed-content-page",
       scope: input.scope,
-      visibility: input.visibility,
+      contentStatus: input.contentStatus,
       page,
       replacesScope: !input.cursor,
     },
@@ -89,7 +90,7 @@ export const requestPage = protectedProcedure
     z.object({
       clientId: clientIdSchema,
       scope: scopeSchema,
-      visibility: visibilityFilterSchema,
+      contentStatus: contentStatusFilterSchema,
       cursor: cursorSchema.optional(),
       limit: z.number().int().min(1).max(500).optional(),
     }),
@@ -100,37 +101,12 @@ export const requestPage = protectedProcedure
       userId: context.user.id,
       clientId: input.clientId,
       scope: input.scope,
-      visibility: input.visibility,
+      contentStatus: input.contentStatus,
       cursor: input.cursor,
       limit: input.limit ?? ITEMS_PER_PAGE,
     });
     return { status: "completed" as const };
   });
-
-export const getSavedSectionPage = protectedProcedure
-  .input(
-    z.object({
-      scope: z.object({
-        type: z.literal("view"),
-        viewId: z.number().int(),
-      }),
-      sectionPlacement: z.number().int().nonnegative().nullable(),
-      cursor: cursorSchema.optional(),
-      limit: z.number().int().min(1).max(500).optional(),
-    }),
-  )
-  .handler(async ({ context, input }) =>
-    queryMixedContentPage({
-      database: context.db,
-      userId: context.user.id,
-      scope: input.scope,
-      visibility: "later",
-      savedState: "archived",
-      sectionPlacement: input.sectionPlacement,
-      cursor: input.cursor,
-      limit: input.limit ?? ITEMS_PER_PAGE,
-    }),
-  );
 
 export const synchronize = protectedProcedure
   .input(

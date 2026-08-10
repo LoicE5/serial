@@ -8,11 +8,14 @@ import {
   viewFilterIdAtom,
   viewsAtom,
 } from "../atoms";
-import { INBOX_VIEW_ID, INBOX_VIEW_PLACEMENT } from "./constants";
+import {
+  UNCATEGORIZED_VIEW_ID,
+  UNCATEGORIZED_VIEW_PLACEMENT,
+} from "./constants";
 import { useViewAvailability, useViewsFetchStatus } from "./store";
 import type { ApplicationView } from "~/server/db/schema";
 
-export { INBOX_VIEW_ID, INBOX_VIEW_PLACEMENT };
+export { UNCATEGORIZED_VIEW_ID, UNCATEGORIZED_VIEW_PLACEMENT };
 
 export function useDeselectViewFilter() {
   const setViewFilter = useSetAtom(viewFilterIdAtom);
@@ -67,7 +70,7 @@ export function useCustomViewsData() {
   const views = useAtomValue(viewsAtom);
 
   const customViews = useMemo(() => {
-    return views.filter((v) => v.id !== INBOX_VIEW_ID);
+    return views.filter((v) => v.id !== UNCATEGORIZED_VIEW_ID);
   }, [views]);
 
   const customViewCategoryIds = useMemo(() => {

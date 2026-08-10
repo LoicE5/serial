@@ -5,7 +5,13 @@ import type {
   NavigationAvailability,
   NavigationSnapshot,
 } from "~/server/navigation/snapshot";
+import type { ContentAvailability } from "~/lib/content-status";
 import { orpcRouterClient } from "~/lib/orpc";
+
+const EMPTY_CONTENT_AVAILABILITY: ContentAvailability = {
+  inbox: { unread: false, archived: false },
+  saved: { unread: false, archived: false },
+};
 
 const EMPTY_SNAPSHOT: NavigationSnapshot = {
   views: {},
@@ -80,7 +86,7 @@ export function getNavigationAvailability(
   availability: Record<number, NavigationAvailability>,
   id: number,
 ): NavigationAvailability {
-  return availability[id] ?? { unread: false, read: false, later: false };
+  return availability[id] ?? EMPTY_CONTENT_AVAILABILITY;
 }
 
 export const {

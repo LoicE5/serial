@@ -5,9 +5,9 @@ import { useAtomValue } from "jotai";
 import type { ClientManifestEntry } from "~/server/api/routers/initialRouter";
 import {
   categoryFilterAtom,
+  contentStatusFilterAtom,
   feedFilterAtom,
   viewFilterAtom,
-  visibilityFilterAtom,
 } from "~/lib/data/atoms";
 import { feedItemsStore } from "~/lib/data/store";
 import { dataSubscriptionActions } from "~/lib/data/useDataSubscription";
@@ -17,11 +17,12 @@ import {
   mixedContentStore,
 } from "~/lib/data/mixed-content/store";
 import { ITEMS_PER_PAGE } from "~/server/api/constants";
+import { buildContentStatusKey } from "~/lib/content-status";
 
 const validatingCombos = new Set<string>();
 
 /**
- * Background-validates the cached items for the current view + visibility
+ * Background-validates the cached items for the current View + content status
  * filter by sending a manifest of cached item IDs + contentHash to the
  * server. The server diffs the manifest against its ground truth and streams
  * back a `view-diff` chunk (handled by the store's `processChunk`).
@@ -36,7 +37,7 @@ const validatingCombos = new Set<string>();
  */
 export function useValidateViewItems() {
   const viewFilter = useAtomValue(viewFilterAtom);
-  const visibilityFilter = useAtomValue(visibilityFilterAtom);
+  const contentStatusFilter = useAtomValue(contentStatusFilterAtom);
   const feedFilter = useAtomValue(feedFilterAtom);
   const categoryFilter = useAtomValue(categoryFilterAtom);
   const filteredItemIds = useFilteredFeedItemsOrder();
@@ -59,13 +60,13 @@ export function useValidateViewItems() {
     const viewId = viewFilter?.id;
     if (viewId === undefined || viewId === null) return;
 
-    const key = `${viewId}-${visibilityFilter}`;
+    const key = `${viewId}-${buildContentStatusKey(contentStatusFilter)}`;
     if (validatingCombos.has(key)) return;
     validatingCombos.add(key);
 
     // The server validates against the first paginated page for this
-    // visibility. Keep the manifest scoped to that same client-side page;
-    // otherwise cached read/later items outside the first page look deleted.
+    // content status. Keep the manifest scoped to that same client-side page;
+    // otherwise cached items outside the first status page look deleted.
     const state = feedItemsStore.getState();
     const manifestItemIds = filteredItemIdsRef.current.slice(0, ITEMS_PER_PAGE);
     const manifest: ClientManifestEntry[] = [];
@@ -82,31 +83,31 @@ export function useValidateViewItems() {
     }
 
     const mixedScope = { type: "view", viewId } as const;
-    const mixedScopeKey = getMixedScopeKey(mixedScope, visibilityFilter);
+    const mixedScopeKey = getMixedScopeKey(mixedScope, contentStatusFilter);
     const hasLoadedMixedScope =
       mixedContentStore.getState().scopes[mixedScopeKey] !== undefined;
 
     void Promise.all([
-      dataSubscriptionActions.requestItemsByVisibility(
+      dataSubscriptionActions.requestItemsByContentStatus(
         viewId,
-        visibilityFilter,
+        contentStatusFilter,
         undefined,
         undefined,
         manifest.length > 0 ? manifest : undefined,
       ),
       // A loaded mixed scope is authoritative for View ordering. Refresh it
-      // when entering a View or changing visibility so a newly saved feed item
+      // when entering a View or changing content status so a newly saved Feed item
       // cannot remain hidden behind its stale persisted membership. Unloaded
       // scopes keep using the local projection, which avoids a loading flash.
       hasLoadedMixedScope
         ? dataSubscriptionActions.requestMixedContentPage(
             mixedScope,
-            visibilityFilter,
+            contentStatusFilter,
             null,
           )
         : Promise.resolve(),
     ]).finally(() => {
       validatingCombos.delete(key);
     });
-  }, [viewFilter, visibilityFilter, feedFilter, categoryFilter]);
+  }, [viewFilter, contentStatusFilter, feedFilter, categoryFilter]);
 }

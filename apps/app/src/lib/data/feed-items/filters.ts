@@ -1,8 +1,8 @@
 import { and, eq, gte, inArray } from "drizzle-orm";
 
-import { INBOX_VIEW_ID } from "../views/constants";
+import { UNCATEGORIZED_VIEW_ID } from "../views/constants";
 import type { SQL } from "drizzle-orm";
-import type { VisibilityFilter } from "../atoms";
+import type { ContentStatusFilter } from "~/lib/content-status";
 import type {
   ApplicationView,
   DatabaseFeed,
@@ -45,35 +45,14 @@ export function isFeedCompatibleWithContentFilter(
   return hasContentFilterOption(contentFilter, CONTENT_FILTER_OPTION.VIDEOS);
 }
 
-/**
- * Build a Drizzle filter condition for visibility (unread/read/later)
- *
- * - "unread": items that are not watched AND not watch later
- * - "read": items that are watched AND not watch later
- * - "later": unread items that are marked as watch later
- */
-export function buildVisibilityFilter(
-  visibilityFilter: VisibilityFilter,
-): SQL | undefined {
-  switch (visibilityFilter) {
-    case "unread":
-      return and(
-        eq(feedItems.isWatched, false),
-        eq(feedItems.isWatchLater, false),
-      );
-    case "read":
-      return and(
-        eq(feedItems.isWatched, true),
-        eq(feedItems.isWatchLater, false),
-      );
-    case "later":
-      return and(
-        eq(feedItems.isWatchLater, true),
-        eq(feedItems.isWatched, false),
-      );
-    default:
-      return undefined;
-  }
+/** Build the independent save/archive predicate for Feed items. */
+export function buildContentStatusFilter(
+  contentStatusFilter: ContentStatusFilter,
+): SQL {
+  return and(
+    eq(feedItems.isWatchLater, contentStatusFilter.saveStatus === "saved"),
+    eq(feedItems.isWatched, contentStatusFilter.archiveStatus === "archived"),
+  )!;
 }
 
 /**
@@ -114,7 +93,7 @@ export function buildViewCategoryFilter(
   ];
 
   // For Uncategorized view, also include uncategorized feeds, but exclude feeds in custom views
-  if (viewFilter.id === INBOX_VIEW_ID) {
+  if (viewFilter.id === UNCATEGORIZED_VIEW_ID) {
     const categorizedFeedIds = new Set(feedCategories.map((fc) => fc.feedId));
     const uncategorizedFeedIds = allFeedIds.filter(
       (id) => !categorizedFeedIds.has(id),
@@ -130,7 +109,7 @@ export function buildViewCategoryFilter(
     // Also exclude feeds directly assigned to any custom view, but only if
     // the assigned view's content type is compatible with the feed's platform
     // (otherwise the feed would be orphaned: filtered out of the custom view
-    // by the content-type filter, and excluded from Inbox here too).
+    // by the content-type filter, and excluded from Uncategorized here too).
     if (customViewFeedIds && customViews) {
       for (const feedId of customViewFeedIds) {
         const feed = feedsById.get(feedId);

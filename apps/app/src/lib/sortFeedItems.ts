@@ -26,10 +26,10 @@ export function compareSavedOrderCoordinates(
 ) {
   const leftSavedAt = left.isWatchLaterUpdatedAt
     ? dateValue(left.isWatchLaterUpdatedAt)
-    : Number.NEGATIVE_INFINITY;
+    : dateValue(left.postedAt);
   const rightSavedAt = right.isWatchLaterUpdatedAt
     ? dateValue(right.isWatchLaterUpdatedAt)
-    : Number.NEGATIVE_INFINITY;
+    : dateValue(right.postedAt);
   if (leftSavedAt !== rightSavedAt) return rightSavedAt - leftSavedAt;
 
   const leftPostedAt = dateValue(left.postedAt);
@@ -118,12 +118,12 @@ export function sortFeedItemsOrderByWatchedAt(
       ? itemA.isWatchedUpdatedAt instanceof Date
         ? itemA.isWatchedUpdatedAt.getTime()
         : new Date(itemA.isWatchedUpdatedAt).getTime()
-      : 0;
+      : dateValue(itemA.postedAt);
     const watchedTimeB = itemB.isWatchedUpdatedAt
       ? itemB.isWatchedUpdatedAt instanceof Date
         ? itemB.isWatchedUpdatedAt.getTime()
         : new Date(itemB.isWatchedUpdatedAt).getTime()
-      : 0;
+      : dateValue(itemB.postedAt);
 
     if (watchedTimeB !== watchedTimeA) {
       return watchedTimeB - watchedTimeA;

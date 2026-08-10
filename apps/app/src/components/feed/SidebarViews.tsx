@@ -40,7 +40,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "~/components/ui/sidebar";
-import { viewFilterIdAtom, visibilityFilterAtom } from "~/lib/data/atoms";
+import { contentStatusFilterAtom, viewFilterIdAtom } from "~/lib/data/atoms";
 import { useUpdateViewFilter, useViews } from "~/lib/data/views";
 import {
   calculateViewsPlacement,
@@ -53,6 +53,7 @@ import {
 } from "~/lib/data/navigation/store";
 import { Skeleton } from "~/components/ui/skeleton";
 import { useSetViews } from "~/lib/data/views/store";
+import { isContentStatusAvailable } from "~/lib/content-status";
 
 type ViewOption = ApplicationView & { hasEntries: boolean };
 
@@ -136,7 +137,7 @@ export function SidebarViews() {
   const { views } = useViews();
   const navigationSnapshot = useNavigationSnapshot();
   const navigationSnapshotStatus = useNavigationSnapshotStatus();
-  const visibilityFilter = useAtomValue(visibilityFilterAtom);
+  const contentStatusFilter = useAtomValue(contentStatusFilterAtom);
   const setViews = useSetViews();
 
   const { mutateAsync: updateViewsPlacement } =
@@ -144,9 +145,10 @@ export function SidebarViews() {
 
   const viewOptions = views.map((view) => ({
     ...view,
-    hasEntries: getNavigationAvailability(navigationSnapshot.views, view.id)[
-      visibilityFilter
-    ],
+    hasEntries: isContentStatusAvailable(
+      getNavigationAvailability(navigationSnapshot.views, view.id),
+      contentStatusFilter,
+    ),
   }));
 
   function handleDragEnd(event: DragEndEvent) {

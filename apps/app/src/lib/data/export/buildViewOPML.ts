@@ -9,7 +9,7 @@ import type {
   DatabaseViewFeed,
 } from "~/server/db/schema";
 import { isFeedCompatibleWithContentFilter } from "~/lib/data/feed-items/filters";
-import { INBOX_VIEW_ID } from "~/lib/data/views/constants";
+import { UNCATEGORIZED_VIEW_ID } from "~/lib/data/views/constants";
 import { VIEW_LAYOUT_ITEM_TYPE } from "~/server/db/constants";
 
 type BuildViewOPMLInput = {
@@ -153,7 +153,7 @@ export function buildViewOPML(input: BuildViewOPMLInput) {
   const feedsById = new Map<number, ApplicationFeed>();
   feeds.forEach((feed) => feedsById.set(feed.id, feed));
 
-  const customViews = views.filter((view) => view.id !== INBOX_VIEW_ID);
+  const customViews = views.filter((view) => view.id !== UNCATEGORIZED_VIEW_ID);
   const groups: OPMLGroup[] = [];
   const groupedFeedIds = new Set<number>();
   const categoryNameById = getCategoryNameById(contentCategories);

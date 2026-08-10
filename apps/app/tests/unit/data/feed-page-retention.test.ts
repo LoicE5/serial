@@ -7,7 +7,7 @@ import {
 } from "~/lib/data/page-retention";
 import { feedItemsStore } from "~/lib/data/store";
 
-const SCOPE_KEY = "view:7:unread";
+const SCOPE_KEY = "view:7:inbox:unread";
 
 function makeItem(pageIndex: number, itemIndex: number): ApplicationFeedItem {
   const id = `page-${pageIndex}-item-${itemIndex}`;

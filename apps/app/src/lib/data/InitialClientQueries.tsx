@@ -28,7 +28,7 @@ export function InitialClientQueries({ children }: PropsWithChildren) {
   const setViewsAtom = useSetAtom(viewsAtom);
   const updateViewFilter = useUpdateViewFilter();
 
-  // Read filter atoms for auto-selection logic
+  // Read content-status atoms for auto-selection logic
   const viewFilterId = useAtomValue(viewFilterIdAtom);
   const feedFilter = useAtomValue(feedFilterAtom);
   const categoryFilter = useAtomValue(categoryFilterAtom);

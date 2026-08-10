@@ -8,6 +8,10 @@ import {
 import { feedCategoriesStore } from "~/lib/data/feed-categories/store";
 import { feedItemsStore, getFeedItemScopeKey } from "~/lib/data/store";
 import { viewsStore } from "~/lib/data/views/store";
+import {
+  buildContentStatusKey,
+  CONTENT_STATUS_FILTERS,
+} from "~/lib/content-status";
 
 const FIXTURE_TIME = new Date("2026-01-15T12:00:00.000Z");
 
@@ -87,11 +91,42 @@ describe("Feed-item list projection", () => {
       feedItemsOrder: [item.id],
       feedItemProjectionRevision: 0,
       scopeFeedItemIds: {
-        [getFeedItemScopeKey("view", view.id, "unread")]: [item.id],
-        [getFeedItemScopeKey("view", view.id, "read")]: [],
+        [getFeedItemScopeKey("view", view.id, {
+          saveStatus: "inbox",
+          archiveStatus: "unread",
+        })]: [item.id],
+        [getFeedItemScopeKey("view", view.id, {
+          saveStatus: "inbox",
+          archiveStatus: "archived",
+        })]: [],
       },
     });
   });
+
+  it.each(CONTENT_STATUS_FILTERS)(
+    "matches only the $saveStatus + $archiveStatus truth-table cell",
+    (contentStatusFilter) => {
+      const predicate = createFeedItemFilterPredicate({
+        contentStatusFilter,
+        categoryFilter: -1,
+        feedFilter: -1,
+        viewFilter: null,
+        filterIndex: createFeedItemFilterIndex([], []),
+        now: FIXTURE_TIME,
+      });
+      const matchingKey = buildContentStatusKey(contentStatusFilter);
+      const matches = CONTENT_STATUS_FILTERS.filter((candidate) =>
+        predicate(
+          makeItem(buildContentStatusKey(candidate), {
+            isWatchLater: candidate.saveStatus === "saved",
+            isWatched: candidate.archiveStatus === "archived",
+          }),
+        ),
+      ).map(buildContentStatusKey);
+
+      expect(matches).toEqual([matchingKey]);
+    },
+  );
 
   it("classifies progress and full-text patches as list-neutral", () => {
     const item = feedItemsStore.getState().feedItemsDict["item-1"]!;
@@ -172,7 +207,7 @@ describe("Feed-item list projection", () => {
     expect(state.scopeFeedItemIds).toBe(scopes);
   });
 
-  it("reconciles compiled View and visibility membership for relevant patches", () => {
+  it("reconciles compiled View and content-status membership for relevant patches", () => {
     const item = feedItemsStore.getState().feedItemsDict["item-1"]!;
     feedItemsStore.getState().setFeedItem(item.id, {
       ...item,
@@ -183,10 +218,20 @@ describe("Feed-item list projection", () => {
     const state = feedItemsStore.getState();
     expect(state.feedItemProjectionRevision).toBe(1);
     expect(
-      state.scopeFeedItemIds[getFeedItemScopeKey("view", 10, "unread")],
+      state.scopeFeedItemIds[
+        getFeedItemScopeKey("view", 10, {
+          saveStatus: "inbox",
+          archiveStatus: "unread",
+        })
+      ],
     ).toEqual([]);
     expect(
-      state.scopeFeedItemIds[getFeedItemScopeKey("view", 10, "read")],
+      state.scopeFeedItemIds[
+        getFeedItemScopeKey("view", 10, {
+          saveStatus: "inbox",
+          archiveStatus: "archived",
+        })
+      ],
     ).toEqual([item.id]);
   });
 
@@ -197,7 +242,7 @@ describe("Feed-item list projection", () => {
       [view],
     );
     const inView = createFeedItemFilterPredicate({
-      visibilityFilter: "unread",
+      contentStatusFilter: { saveStatus: "inbox", archiveStatus: "unread" },
       categoryFilter: -1,
       feedFilter: -1,
       viewFilter: view,
@@ -205,7 +250,7 @@ describe("Feed-item list projection", () => {
       now: FIXTURE_TIME,
     });
     const inTag = createFeedItemFilterPredicate({
-      visibilityFilter: "unread",
+      contentStatusFilter: { saveStatus: "inbox", archiveStatus: "unread" },
       categoryFilter: 100,
       feedFilter: -1,
       viewFilter: null,
@@ -213,7 +258,7 @@ describe("Feed-item list projection", () => {
       now: FIXTURE_TIME,
     });
     const inFeed = createFeedItemFilterPredicate({
-      visibilityFilter: "unread",
+      contentStatusFilter: { saveStatus: "inbox", archiveStatus: "unread" },
       categoryFilter: -1,
       feedFilter: 1,
       viewFilter: null,

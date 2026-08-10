@@ -16,7 +16,7 @@ import { useContentCategories } from "~/lib/data/content-categories";
 import { useCreateContentCategoryMutation } from "~/lib/data/content-categories/mutations";
 import { useViews } from "~/lib/data/views";
 import { useQuickCreateViewMutation } from "~/lib/data/views/mutations";
-import { INBOX_VIEW_ID } from "~/lib/data/views/constants";
+import { UNCATEGORIZED_VIEW_ID } from "~/lib/data/views/constants";
 import {
   Dialog,
   DialogContent,
@@ -56,7 +56,7 @@ export function BookmarkOrganizationEditor({
     useCreateContentCategoryMutation();
 
   const viewOptions = views
-    .filter((view) => view.id !== INBOX_VIEW_ID)
+    .filter((view) => view.id !== UNCATEGORIZED_VIEW_ID)
     .map((view) => ({ id: view.id, label: view.name }));
   const tagOptions = contentCategories.map((tag) => ({
     id: tag.id,

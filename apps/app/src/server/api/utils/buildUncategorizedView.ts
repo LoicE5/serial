@@ -3,8 +3,8 @@ import type {
   DatabaseContentCategory,
 } from "~/server/db/schema";
 import {
-  INBOX_VIEW_ID,
-  INBOX_VIEW_PLACEMENT,
+  UNCATEGORIZED_VIEW_ID,
+  UNCATEGORIZED_VIEW_PLACEMENT,
 } from "~/lib/data/views/constants";
 import { VIEW_LAYOUT, VIEW_READ_STATUS } from "~/server/db/constants";
 import { DEFAULT_CONTENT_FILTER } from "~/lib/views/contentFilter";
@@ -28,13 +28,13 @@ export function buildUncategorizedView(
   const now = new Date();
 
   return {
-    id: INBOX_VIEW_ID,
+    id: UNCATEGORIZED_VIEW_ID,
     name: "Uncategorized",
     daysWindow: 0,
     contentFilter: DEFAULT_CONTENT_FILTER,
     layout: VIEW_LAYOUT.LIST,
     readStatus: VIEW_READ_STATUS.UNREAD,
-    placement: INBOX_VIEW_PLACEMENT,
+    placement: UNCATEGORIZED_VIEW_PLACEMENT,
     userId,
     createdAt: now,
     updatedAt: now,
