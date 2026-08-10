@@ -83,7 +83,7 @@ export function ContentStatusControls() {
               <TabsTrigger
                 className="relative"
                 value={option.value}
-                aria-label={`Switch to ${option.label} visibility`}
+                aria-label={`Switch to ${option.value} content`}
               >
                 <TooltipTrigger>
                   {option.Icon}
