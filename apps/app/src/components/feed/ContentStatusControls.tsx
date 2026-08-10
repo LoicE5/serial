@@ -1,6 +1,8 @@
 "use client";
 
 import { useAtom } from "jotai";
+import { ArchiveIcon, InboxIcon } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@serial/ui";
 import type { ArchiveStatus, SaveStatus } from "~/lib/content-status";
 import { Tabs, TabsList, TabsTrigger } from "~/components/ui/tabs";
 import { contentStatusFilterAtom } from "~/lib/data/atoms";
@@ -20,12 +22,19 @@ const ARCHIVE_STATUS_OPTIONS: Array<{
   value: ArchiveStatus;
   label: string;
   shortcut: string;
+  Icon: React.ReactNode;
 }> = [
-  { value: "unread", label: "Unread", shortcut: SHORTCUT_KEYS.UNREAD },
+  {
+    value: "unread",
+    label: "Unread",
+    shortcut: SHORTCUT_KEYS.UNREAD,
+    Icon: <InboxIcon />,
+  },
   {
     value: "archived",
     label: "Archived",
     shortcut: SHORTCUT_KEYS.ARCHIVED,
+    Icon: <ArchiveIcon />,
   },
 ];
 
@@ -70,14 +79,19 @@ export function ContentStatusControls() {
       >
         <TabsList>
           {ARCHIVE_STATUS_OPTIONS.map((option) => (
-            <TabsTrigger
-              className="relative"
-              key={option.value}
-              value={option.value}
-            >
-              {option.label}
-              <KeyboardShortcutDisplay shortcut={option.shortcut} />
-            </TabsTrigger>
+            <Tooltip key={option.value}>
+              <TabsTrigger
+                className="relative"
+                value={option.value}
+                aria-label={`Switch to ${option.label} visibility`}
+              >
+                <TooltipTrigger>
+                  {option.Icon}
+                  <KeyboardShortcutDisplay shortcut={option.shortcut} />
+                </TooltipTrigger>
+              </TabsTrigger>
+              <TooltipContent>{option.label}</TooltipContent>
+            </Tooltip>
           ))}
         </TabsList>
       </Tabs>
