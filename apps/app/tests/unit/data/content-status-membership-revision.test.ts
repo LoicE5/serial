@@ -60,11 +60,11 @@ function makeItem(): ApplicationFeedItem {
 
 function replacementPayload(membershipRevision: number): PublishedChunk {
   return {
-    source: "visibility",
+    source: "content-status",
     chunk: {
       type: "view-diff",
       viewId: VIEW_ID,
-      visibilityFilter: "unread",
+      contentStatusFilter: { saveStatus: "inbox", archiveStatus: "unread" },
       diff: [],
       cursor: null,
       hasMore: false,
@@ -79,10 +79,13 @@ beforeEach(() => {
   viewsStore.getState().set([makeView()]);
 });
 
-describe("visibility membership revisions", () => {
+describe("content-status membership revisions", () => {
   it("does not let a pre-mutation replacement erase restored membership", () => {
     const item = makeItem();
-    const scopeKey = getFeedItemScopeKey("view", VIEW_ID, "unread");
+    const scopeKey = getFeedItemScopeKey("view", VIEW_ID, {
+      saveStatus: "inbox",
+      archiveStatus: "unread",
+    });
     feedItemsStore.getState().setFeedItems([item]);
     feedItemsStore.setState({ scopeFeedItemIds: { [scopeKey]: [item.id] } });
 
@@ -97,7 +100,10 @@ describe("visibility membership revisions", () => {
 
   it("accepts a replacement from the current membership revision", () => {
     const item = makeItem();
-    const scopeKey = getFeedItemScopeKey("view", VIEW_ID, "unread");
+    const scopeKey = getFeedItemScopeKey("view", VIEW_ID, {
+      saveStatus: "inbox",
+      archiveStatus: "unread",
+    });
     feedItemsStore.getState().setFeedItems([item]);
     feedItemsStore.setState({ scopeFeedItemIds: { [scopeKey]: [item.id] } });
 

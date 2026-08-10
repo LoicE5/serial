@@ -4,18 +4,22 @@ import {
 } from "./feed-items/listProjection";
 import { feedCategoriesStore } from "./feed-categories/store";
 import { viewsStore } from "./views/store";
-import type { VisibilityFilter } from "./atoms";
 import type { DiffEntry } from "~/server/api/routers/initialRouter";
 import type { ApplicationFeedItem } from "~/server/db/schema";
+import type { ContentStatusFilter } from "~/lib/content-status";
+import {
+  buildContentStatusKey,
+  contentStatusFilterSchema,
+} from "~/lib/content-status";
 
 export type FeedItemScopeType = "view" | "feed" | "category";
 
 export function getFeedItemScopeKey(
   scopeType: FeedItemScopeType,
   scopeId: number,
-  visibilityFilter: VisibilityFilter,
+  contentStatusFilter: ContentStatusFilter,
 ) {
-  return `${scopeType}:${scopeId}:${visibilityFilter}`;
+  return `${scopeType}:${scopeId}:${buildContentStatusKey(contentStatusFilter)}`;
 }
 
 function mergeScopeItemIds(
@@ -72,23 +76,28 @@ function parseFeedItemScopeKey(scopeKey: string):
   | {
       scopeType: FeedItemScopeType;
       scopeId: number;
-      visibilityFilter: VisibilityFilter;
+      contentStatusFilter: ContentStatusFilter;
     }
   | undefined {
-  const [scopeType, scopeIdValue, visibilityFilter] = scopeKey.split(":");
+  const [scopeType, scopeIdValue, saveStatus, archiveStatus] =
+    scopeKey.split(":");
   const isKnownScope =
     scopeType === "view" || scopeType === "feed" || scopeType === "category";
-  const isKnownVisibilityFilter =
-    visibilityFilter === "unread" ||
-    visibilityFilter === "read" ||
-    visibilityFilter === "later";
+  const contentStatusResult = contentStatusFilterSchema.safeParse({
+    saveStatus,
+    archiveStatus,
+  });
 
-  if (!isKnownScope || !isKnownVisibilityFilter) return undefined;
+  if (!isKnownScope || !contentStatusResult.success) return undefined;
 
   const scopeId = Number(scopeIdValue);
   if (!Number.isFinite(scopeId)) return undefined;
 
-  return { scopeType, scopeId, visibilityFilter };
+  return {
+    scopeType,
+    scopeId,
+    contentStatusFilter: contentStatusResult.data,
+  };
 }
 
 function reconcileScopeMemberships(
@@ -115,7 +124,7 @@ function reconcileScopeMemberships(
     if (scope.scopeType === "view" && !viewFilter) continue;
 
     const doesItemBelongToScope = createFeedItemFilterPredicate({
-      visibilityFilter: scope.visibilityFilter,
+      contentStatusFilter: scope.contentStatusFilter,
       categoryFilter: scope.scopeType === "category" ? scope.scopeId : -1,
       feedFilter: scope.scopeType === "feed" ? scope.scopeId : -1,
       viewFilter,

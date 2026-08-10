@@ -1,12 +1,12 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useAtomValue, useSetAtom } from "jotai";
 import {
+  contentStatusFilterAtom,
   viewFilterIdAtom,
   viewsAtom,
-  visibilityFilterAtom,
 } from "~/lib/data/atoms";
 import { ClientDatetime } from "~/components/feed/ClientDatetime";
-import { ItemVisibilityChips } from "~/components/feed/ItemVisibilityChips";
+import { ContentStatusControls } from "~/components/feed/ContentStatusControls";
 import { MarkVisibleAsReadButton } from "~/components/feed/MarkVisibleAsReadButton";
 import { RenderViewItems } from "~/components/feed/view-lists";
 import { ViewFilterChips } from "~/components/feed/ViewFilterChips";
@@ -27,7 +27,7 @@ function Home() {
   const views = useAtomValue(viewsAtom);
   const viewFilterId = useAtomValue(viewFilterIdAtom);
   const updateViewFilter = useUpdateViewFilter();
-  const setVisibilityFilter = useSetAtom(visibilityFilterAtom);
+  const setContentStatus = useSetAtom(contentStatusFilterAtom);
 
   useShortcut(
     SHORTCUT_KEYS.VIEW_1,
@@ -70,9 +70,21 @@ function Home() {
     () => views[9] && updateViewFilter(views[9].id),
   );
 
-  useShortcut(SHORTCUT_KEYS.UNREAD, () => setVisibilityFilter("unread"));
-  useShortcut(SHORTCUT_KEYS.READ, () => setVisibilityFilter("read"));
-  useShortcut(SHORTCUT_KEYS.SAVED, () => setVisibilityFilter("later"));
+  useShortcut(SHORTCUT_KEYS.INBOX, () =>
+    setContentStatus((current) => ({ ...current, saveStatus: "inbox" })),
+  );
+  useShortcut(SHORTCUT_KEYS.SAVED, () =>
+    setContentStatus((current) => ({ ...current, saveStatus: "saved" })),
+  );
+  useShortcut(SHORTCUT_KEYS.UNREAD, () =>
+    setContentStatus((current) => ({ ...current, archiveStatus: "unread" })),
+  );
+  useShortcut(SHORTCUT_KEYS.ARCHIVED, () =>
+    setContentStatus((current) => ({
+      ...current,
+      archiveStatus: "archived",
+    })),
+  );
 
   useShortcut(SHORTCUT_KEYS.PREV_VIEW, () => {
     if (views.length === 0) return;
@@ -102,7 +114,7 @@ function Home() {
           <ClientDatetime />
         </p>
         <div className="flex w-max gap-1 pt-1">
-          <ItemVisibilityChips />
+          <ContentStatusControls />
         </div>
         <div className="w-max pt-3">
           <ViewFilterChips />

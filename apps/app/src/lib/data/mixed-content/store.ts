@@ -9,8 +9,8 @@ import {
 import { createNormalizedIDBStorage } from "../normalized-idb-storage";
 import { createSelectorHooks } from "../createSelectorHooks";
 import {
+  bookmarkContentStatus,
   bookmarkReference,
-  bookmarkVisibility,
   buildProjectionIndexes,
   canonicalize,
   collisionScopeKeys,
@@ -40,7 +40,6 @@ import type {
   PersistedMixedContentState,
   SuppressedReferences,
 } from "./page-retention";
-import type { VisibilityFilter } from "../atoms";
 import type {
   ApplicationFeedItem,
   ApplicationView,
@@ -52,6 +51,8 @@ import type {
   MixedContentReference,
   MixedContentScope,
 } from "~/server/mixed-content/projection";
+import type { ContentStatusFilter } from "~/lib/content-status";
+import { buildContentStatusKey } from "~/lib/content-status";
 
 export { getMixedScopeKey } from "./bookmarkProjection";
 export type { LoadedMixedScope } from "./page-retention";
@@ -66,7 +67,7 @@ type MixedContentStore = {
   setScopeFetching: (scopeKey: string, isFetching: boolean) => void;
   applyPage: (input: {
     scope: MixedContentScope;
-    visibility: VisibilityFilter;
+    contentStatus: ContentStatusFilter;
     page: MixedContentPage;
     replacesScope: boolean;
     feedItems: Record<string, ApplicationFeedItem>;
@@ -93,16 +94,16 @@ type MixedContentStore = {
 
 function feedItemReference(input: {
   item: ApplicationFeedItem;
-  visibility: VisibilityFilter;
+  contentStatus: ContentStatusFilter;
   view: ApplicationView | null;
   filterIndex: ReturnType<typeof createFeedItemFilterIndex>;
 }): MixedContentReference {
-  const { item, visibility, view, filterIndex } = input;
+  const { item, contentStatus, view, filterIndex } = input;
   const normalizedAt =
-    visibility === "later"
-      ? (item.isWatchLaterUpdatedAt ?? item.postedAt)
-      : visibility === "read"
-        ? (item.isWatchedUpdatedAt ?? item.postedAt)
+    contentStatus.archiveStatus === "archived"
+      ? (item.isWatchedUpdatedAt ?? item.postedAt)
+      : contentStatus.saveStatus === "saved"
+        ? (item.isWatchLaterUpdatedAt ?? item.postedAt)
         : item.postedAt;
   return {
     entityKind: "feed-item",
@@ -135,8 +136,8 @@ const vanillaMixedContentStore = createStore<MixedContentStore>()(
             [scopeKey]: isFetching,
           },
         })),
-      applyPage: ({ scope, visibility, page, replacesScope, feedItems }) => {
-        const key = getMixedScopeKey(scope, visibility);
+      applyPage: ({ scope, contentStatus, page, replacesScope, feedItems }) => {
+        const key = getMixedScopeKey(scope, contentStatus);
         const current = get();
         const existing = current.scopes[key];
         const requestCursor = replacesScope ? null : existing?.cursor;
@@ -150,7 +151,7 @@ const vanillaMixedContentStore = createStore<MixedContentStore>()(
         const pinnedEntityIds = getMixedRetentionPins();
         const nextScope = {
           scope,
-          visibility,
+          contentStatus,
           references: uniqueReferences(
             replacesScope
               ? page.references
@@ -273,7 +274,8 @@ const vanillaMixedContentStore = createStore<MixedContentStore>()(
               !newlySuppressedIds.has(reference.entityId),
           );
           if (
-            bookmarkVisibility(bookmark) === scopeState.visibility &&
+            buildContentStatusKey(bookmarkContentStatus(bookmark)) ===
+              buildContentStatusKey(scopeState.contentStatus) &&
             matchesScope(bookmark, scopeState.scope, views)
           ) {
             references = [
@@ -439,7 +441,7 @@ const vanillaMixedContentStore = createStore<MixedContentStore>()(
               : null;
           if (scope.type === "view" && !view) continue;
           const doesItemBelongToScope = createFeedItemFilterPredicate({
-            visibilityFilter: scopeState.visibility,
+            contentStatusFilter: scopeState.contentStatus,
             categoryFilter: scope.type === "tag" ? scope.tagId : -1,
             feedFilter: -1,
             viewFilter: view,
@@ -453,7 +455,7 @@ const vanillaMixedContentStore = createStore<MixedContentStore>()(
             if (!item) continue;
             const nextReference = feedItemReference({
               item,
-              visibility: scopeState.visibility,
+              contentStatus: scopeState.contentStatus,
               view,
               filterIndex,
             });

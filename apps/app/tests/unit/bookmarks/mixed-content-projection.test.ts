@@ -2,7 +2,7 @@ import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createBookmarkTestDatabase } from "./database";
 import type { MixedContentCursor } from "~/server/mixed-content/projection";
-import { INBOX_VIEW_ID } from "~/lib/data/views/constants";
+import { UNCATEGORIZED_VIEW_ID } from "~/lib/data/views/constants";
 import {
   bookmarks,
   bookmarkTags,
@@ -159,7 +159,7 @@ describe("mixed-content projection", () => {
       database,
       userId: "user-one",
       scope: { type: "view", viewId: 10 },
-      visibility: "unread",
+      contentStatus: { saveStatus: "inbox", archiveStatus: "unread" },
       limit: 20,
     });
     expect(
@@ -170,7 +170,7 @@ describe("mixed-content projection", () => {
       database,
       userId: "user-one",
       scope: { type: "view", viewId: 11 },
-      visibility: "unread",
+      contentStatus: { saveStatus: "inbox", archiveStatus: "unread" },
       limit: 20,
     });
     expect(emptyView.references).toEqual([]);
@@ -178,8 +178,8 @@ describe("mixed-content projection", () => {
     const inbox = await queryMixedContentPage({
       database,
       userId: "user-one",
-      scope: { type: "view", viewId: INBOX_VIEW_ID },
-      visibility: "unread",
+      scope: { type: "view", viewId: UNCATEGORIZED_VIEW_ID },
+      contentStatus: { saveStatus: "inbox", archiveStatus: "unread" },
       limit: 20,
     });
     expect(inbox.references.map((reference) => reference.entityId)).toEqual([
@@ -200,7 +200,7 @@ describe("mixed-content projection", () => {
       database,
       userId: "user-one",
       scope: { type: "view", viewId: 10 },
-      visibility: "later",
+      contentStatus: { saveStatus: "saved", archiveStatus: "unread" },
       limit: 20,
     });
     expect(
@@ -211,7 +211,7 @@ describe("mixed-content projection", () => {
       database,
       userId: "user-one",
       scope: { type: "view", viewId: 11 },
-      visibility: "later",
+      contentStatus: { saveStatus: "saved", archiveStatus: "unread" },
       limit: 20,
     });
     expect(emptyView.references).toEqual([]);
@@ -219,8 +219,8 @@ describe("mixed-content projection", () => {
     const inbox = await queryMixedContentPage({
       database,
       userId: "user-one",
-      scope: { type: "view", viewId: INBOX_VIEW_ID },
-      visibility: "later",
+      scope: { type: "view", viewId: UNCATEGORIZED_VIEW_ID },
+      contentStatus: { saveStatus: "saved", archiveStatus: "unread" },
       limit: 20,
     });
     expect(inbox.references.map((reference) => reference.entityId)).toEqual([
@@ -261,7 +261,7 @@ describe("mixed-content projection", () => {
       database,
       userId: "user-one",
       scope: { type: "view", viewId: 10 },
-      visibility: "unread",
+      contentStatus: { saveStatus: "inbox", archiveStatus: "unread" },
       limit: 20,
     });
     expect(
@@ -285,7 +285,7 @@ describe("mixed-content projection", () => {
       database,
       userId: "user-one",
       scope: { type: "view", viewId: 10 },
-      visibility: "unread",
+      contentStatus: { saveStatus: "inbox", archiveStatus: "unread" },
       limit: 20,
     });
     expect(restored.references.map((reference) => reference.entityId)).toEqual([
@@ -331,7 +331,7 @@ describe("mixed-content projection", () => {
       database,
       userId: "user-one",
       scope: { type: "view", viewId: 10 },
-      visibility: "later",
+      contentStatus: { saveStatus: "saved", archiveStatus: "unread" },
       limit: 20,
     });
     expect(
@@ -348,8 +348,8 @@ describe("mixed-content projection", () => {
     const uncategorized = await queryMixedContentPage({
       database,
       userId: "user-one",
-      scope: { type: "view", viewId: INBOX_VIEW_ID },
-      visibility: "later",
+      scope: { type: "view", viewId: UNCATEGORIZED_VIEW_ID },
+      contentStatus: { saveStatus: "saved", archiveStatus: "unread" },
       limit: 20,
     });
     expect(
@@ -360,7 +360,7 @@ describe("mixed-content projection", () => {
       database,
       userId: "user-one",
       scope: { type: "tag", tagId: 2 },
-      visibility: "later",
+      contentStatus: { saveStatus: "saved", archiveStatus: "unread" },
       limit: 20,
     });
     expect(
@@ -389,7 +389,7 @@ describe("mixed-content projection", () => {
       database,
       userId: "user-one",
       scope: { type: "view", viewId: 10 },
-      visibility: "read",
+      contentStatus: { saveStatus: "inbox", archiveStatus: "archived" },
       limit: 20,
     });
     expect(
@@ -440,7 +440,7 @@ describe("mixed-content projection", () => {
       database,
       userId: "user-one",
       scope: { type: "view", viewId: 10 },
-      visibility: "later",
+      contentStatus: { saveStatus: "saved", archiveStatus: "unread" },
       limit: 20,
     });
 
@@ -455,7 +455,7 @@ describe("mixed-content projection", () => {
     ]);
   });
 
-  it("applies Saved dominance and visibility-specific normalized ordering to both entity kinds", async () => {
+  it("applies archive-then-save ordering to both entity kinds", async () => {
     await seedView(10, "Everything");
     await seedFeed(1);
     await database.insert(viewFeeds).values({ viewId: 10, feedId: 1 });
@@ -497,7 +497,7 @@ describe("mixed-content projection", () => {
       database,
       userId: "user-one",
       scope: { type: "view", viewId: 10 },
-      visibility: "later",
+      contentStatus: { saveStatus: "saved", archiveStatus: "unread" },
       limit: 20,
     });
     expect(saved.references.map((reference) => reference.entityId)).toEqual([
@@ -509,8 +509,7 @@ describe("mixed-content projection", () => {
       database,
       userId: "user-one",
       scope: { type: "view", viewId: 10 },
-      visibility: "later",
-      savedState: "archived",
+      contentStatus: { saveStatus: "saved", archiveStatus: "archived" },
       sectionPlacement: null,
       limit: 20,
     });
@@ -522,7 +521,7 @@ describe("mixed-content projection", () => {
       database,
       userId: "user-one",
       scope: { type: "view", viewId: 10 },
-      visibility: "unread",
+      contentStatus: { saveStatus: "inbox", archiveStatus: "unread" },
       limit: 20,
     });
     expect(unread.references.map((reference) => reference.entityId)).toContain(
@@ -536,7 +535,7 @@ describe("mixed-content projection", () => {
       database,
       userId: "user-one",
       scope: { type: "view", viewId: 10 },
-      visibility: "read",
+      contentStatus: { saveStatus: "inbox", archiveStatus: "archived" },
       limit: 20,
     });
     expect(archived.references.map((reference) => reference.entityId)).toEqual([
@@ -544,7 +543,7 @@ describe("mixed-content projection", () => {
     ]);
   });
 
-  it("loads archived Saved content only for the requested View section", async () => {
+  it("applies Saved + Archived within an ordinary View section page", async () => {
     await seedView(10, "Sectioned Saved");
     await database.insert(contentCategories).values([
       { id: 1, userId: "user-one", name: "First" },
@@ -571,7 +570,7 @@ describe("mixed-content projection", () => {
       database,
       userId: "user-one",
       scope: { type: "view", viewId: 10 },
-      visibility: "later",
+      contentStatus: { saveStatus: "saved", archiveStatus: "unread" },
       limit: 20,
     });
     expect(
@@ -582,8 +581,7 @@ describe("mixed-content projection", () => {
       database,
       userId: "user-one",
       scope: { type: "view", viewId: 10 },
-      visibility: "later",
-      savedState: "archived",
+      contentStatus: { saveStatus: "saved", archiveStatus: "archived" },
       sectionPlacement: 1,
       limit: 20,
     });
@@ -638,7 +636,7 @@ describe("mixed-content projection", () => {
       database,
       userId: "user-one",
       scope: { type: "view", viewId: 10 },
-      visibility: "later",
+      contentStatus: { saveStatus: "saved", archiveStatus: "unread" },
       limit: 20,
     });
     const expectedIds = fullPage.references.map(
@@ -651,7 +649,7 @@ describe("mixed-content projection", () => {
         database,
         userId: "user-one",
         scope: { type: "view", viewId: 10 },
-        visibility: "later",
+        contentStatus: { saveStatus: "saved", archiveStatus: "unread" },
         cursor,
         limit: 1,
       });
@@ -704,7 +702,7 @@ describe("mixed-content projection", () => {
       database,
       userId: "user-one",
       scope: { type: "view", viewId: 10 },
-      visibility: "later",
+      contentStatus: { saveStatus: "saved", archiveStatus: "unread" },
       limit: 20,
     });
     expect(page.feedItems.map((item) => item.id)).toContain("owned-feed");

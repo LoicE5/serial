@@ -18,25 +18,17 @@ import { ViewItemGrid } from "./ViewItemGrid";
 import { ViewItemLargeGrid } from "./ViewItemLargeGrid";
 import { ViewItemLargeList } from "./ViewItemLargeList";
 import { ViewItemStandardList } from "./ViewItemStandardList";
-import {
-  createSavedArchiveSnapshot,
-  filterSavedSectionItems,
-  mergeSavedSectionItems,
-} from "./savedArchiveVisibility";
-import { useSavedSectionArchives } from "./useSavedSectionArchives";
-import type { SavedSectionArchiveState } from "./useSavedSectionArchives";
 import type { ViewSection } from "./useViewSections";
-import type { MixedContentReference } from "~/server/mixed-content/projection";
 import { ButtonWithShortcut } from "~/components/ButtonWithShortcut";
-import { Tabs, TabsList, TabsTrigger } from "~/components/ui/tabs";
 import FeedLoading from "~/components/loading";
+import { buildContentStatusKey, isInboxUnread } from "~/lib/content-status";
 import { SHORTCUT_KEYS } from "~/lib/constants/shortcuts";
 import {
   categoryFilterAtom,
+  contentStatusFilterAtom,
   feedFilterAtom,
   selectedItemIdAtom,
   viewFilterAtom,
-  visibilityFilterAtom,
 } from "~/lib/data/atoms";
 import { bookmarksStore } from "~/lib/data/bookmarks/store";
 import { useFeedCategories } from "~/lib/data/feed-categories";
@@ -44,12 +36,10 @@ import { useFilteredContentOrder } from "~/lib/data/feed-items";
 import { useFeeds } from "~/lib/data/feeds";
 import { setMixedReadValue } from "~/lib/data/mixed-content/mutations";
 import {
-  useFeedItemsListProjection,
   useFetchFeedItemsLastFetchedAt,
   useHasInitialData,
 } from "~/lib/data/store";
 import { useFeedItemNavigation } from "~/lib/hooks/useFeedItemNavigation";
-import { useInfiniteScroll } from "~/lib/hooks/useInfiniteScroll";
 import { useLazyCategoryFilter } from "~/lib/hooks/useLazyCategoryFilter";
 import { useLazyFeedFilter } from "~/lib/hooks/useLazyFeedFilter";
 import { useShortcut } from "~/lib/hooks/useShortcut";
@@ -105,9 +95,6 @@ function SectionHeading({
   sectionItems,
   sectionIndex,
   onMarkAsRead,
-  showArchiveFilter,
-  showArchived,
-  onShowArchivedChange,
 }: {
   name: string;
   itemType?: "feed" | "tag";
@@ -115,11 +102,8 @@ function SectionHeading({
   sectionItems: string[];
   sectionIndex: number;
   onMarkAsRead?: (sectionIndex: number) => void;
-  showArchiveFilter: boolean;
-  showArchived: boolean;
-  onShowArchivedChange: (pressed: boolean) => void;
 }) {
-  const visibilityFilter = useAtomValue(visibilityFilterAtom);
+  const contentStatusFilter = useAtomValue(contentStatusFilterAtom);
   const selectedItemId = useAtomValue(selectedItemIdAtom);
   const [isLoading, setIsLoading] = useState(false);
   const [isStuck, setIsStuck] = useState(false);
@@ -136,7 +120,8 @@ function SectionHeading({
   }, []);
 
   const handleMarkSectionAsRead = async () => {
-    if (visibilityFilter !== "unread" || sectionItems.length === 0) return;
+    if (!isInboxUnread(contentStatusFilter) || sectionItems.length === 0)
+      return;
 
     setIsLoading(true);
     try {
@@ -190,21 +175,7 @@ function SectionHeading({
           )}
           <h2 className="line-clamp-1 text-lg font-semibold">{name}</h2>
           <div className="flex-1" />
-          {showArchiveFilter && (
-            <Tabs
-              value={showArchived ? "all" : "unread"}
-              onValueChange={(value) => {
-                if (!value) return;
-                onShowArchivedChange(value === "all");
-              }}
-            >
-              <TabsList>
-                <TabsTrigger value="unread">Unread</TabsTrigger>
-                <TabsTrigger value="all">All</TabsTrigger>
-              </TabsList>
-            </Tabs>
-          )}
-          {visibilityFilter === "unread" && sectionItems.length > 0 && (
+          {isInboxUnread(contentStatusFilter) && sectionItems.length > 0 && (
             <ButtonWithShortcut
               variant="outline"
               size="sm"
@@ -230,11 +201,6 @@ function LayoutSection({
   onMarkAsRead,
   sectionItemsForAction,
   showHeading,
-  showArchiveFilter,
-  showArchived,
-  onShowArchivedChange,
-  archiveState,
-  onLoadMoreArchived,
 }: {
   section: ViewSection;
   handleMouseSelect: (itemId: string) => void;
@@ -242,11 +208,6 @@ function LayoutSection({
   onMarkAsRead?: (sectionIndex: number) => void;
   sectionItemsForAction: string[];
   showHeading: boolean;
-  showArchiveFilter: boolean;
-  showArchived: boolean;
-  onShowArchivedChange: (pressed: boolean) => void;
-  archiveState?: SavedSectionArchiveState;
-  onLoadMoreArchived: () => void;
 }) {
   const { items, layout, name, itemType, itemId } = section;
 
@@ -266,9 +227,6 @@ function LayoutSection({
           sectionItems={sectionItemsForAction}
           sectionIndex={sectionIndex}
           onMarkAsRead={onMarkAsRead}
-          showArchiveFilter={showArchiveFilter}
-          showArchived={showArchived}
-          onShowArchivedChange={onShowArchivedChange}
         />
       )}
       {items.length > 0 && (
@@ -285,51 +243,13 @@ function LayoutSection({
           )}
         </>
       )}
-      <SavedSectionArchivePagination
-        enabled={showArchived}
-        state={archiveState}
-        onLoadMore={onLoadMoreArchived}
-      />
     </div>
   );
 }
 
-function SavedSectionArchivePagination({
-  enabled,
-  state,
-  onLoadMore,
-}: {
-  enabled: boolean;
-  state?: SavedSectionArchiveState;
-  onLoadMore: () => void;
-}) {
-  const { sentinelRef } = useInfiniteScroll({
-    onLoadMore,
-    hasMore: enabled && state !== undefined && state.hasMore,
-    isLoading: state?.isLoading ?? false,
-    rootMargin: "0px",
-  });
-
-  if (!enabled) return null;
-  return (
-    <>
-      <div ref={sentinelRef} className="h-px w-full" />
-      {state?.isLoading && <PaginationLoader />}
-    </>
-  );
-}
-
-function getSectionKey(section: ViewSection) {
-  return section.isUncategorized
-    ? "uncategorized"
-    : `${section.itemType ?? "section"}:${section.itemId ?? section.name}`;
-}
-
-function SavedAwareSectionList({
+function ContentStatusSectionList({
   fullComputedSections,
   visibleComputedSections,
-  visibilityFilter,
-  viewId,
   viewListKey,
   sentinelRef,
   showPaginationLoader,
@@ -337,111 +257,24 @@ function SavedAwareSectionList({
 }: {
   fullComputedSections: ViewSection[];
   visibleComputedSections: ViewSection[];
-  visibilityFilter: "unread" | "read" | "later";
-  viewId: number | undefined;
   viewListKey: string;
   sentinelRef: (node: HTMLDivElement | null) => void;
   showPaginationLoader: boolean;
   showPaginationEnd: boolean;
 }) {
-  const feedItemsProjection = useFeedItemsListProjection();
-  const bookmarkRevision = bookmarksStore.useRevision();
-  const [sectionsShowingArchived, setSectionsShowingArchived] = useState<
-    ReadonlySet<string>
-  >(() => new Set());
-  const { states: archiveStates, loadSection: loadArchivedSection } =
-    useSavedSectionArchives(viewId);
-  const allItemIds = useMemo(
+  const navigationItems = useMemo(
     () => fullComputedSections.flatMap((section) => section.items),
     [fullComputedSections],
   );
-  const archivedSnapshot = useMemo(() => {
-    void bookmarkRevision;
-    const feedItems = feedItemsProjection.getItems();
-    return createSavedArchiveSnapshot(allItemIds, (itemId) => {
-      const bookmark = bookmarksStore.getState().getBookmark(itemId);
-      if (bookmark) return bookmark.isRead;
-      return feedItems[itemId]?.isWatched;
-    });
-  }, [allItemIds, bookmarkRevision, feedItemsProjection]);
-
-  const filterSection = useCallback(
-    (section: ViewSection) => {
-      if (visibilityFilter !== "later") return section;
-      const sectionKey = getSectionKey(section);
-      const showArchived = sectionsShowingArchived.has(sectionKey);
-      const visibleItems = filterSavedSectionItems({
-        itemIds: section.items,
-        archivedSnapshot,
-        showArchived,
-      });
-      if (!showArchived) return { ...section, items: visibleItems };
-
-      const feedItems = feedItemsProjection.getItems();
-      return {
-        ...section,
-        items: mergeSavedSectionItems({
-          itemIds: visibleItems,
-          archivedReferences: archiveStates[sectionKey]?.references ?? [],
-          getReference: (itemId): MixedContentReference | undefined => {
-            const bookmark = bookmarksStore.getState().getBookmark(itemId);
-            if (bookmark) {
-              return {
-                entityKind: "bookmark",
-                entityId: itemId,
-                sectionPlacement: section.placement,
-                normalizedAt: bookmark.savedUpdatedAt,
-              };
-            }
-            const item = feedItems[itemId];
-            if (!item) return undefined;
-            return {
-              entityKind: "feed-item",
-              entityId: itemId,
-              sectionPlacement: section.placement,
-              normalizedAt: item.isWatchLaterUpdatedAt ?? item.postedAt,
-            };
-          },
-          isStillSaved: (itemId) => {
-            const bookmark = bookmarksStore.getState().getBookmark(itemId);
-            if (bookmark) return bookmark.isSaved;
-            return feedItems[itemId]?.isWatchLater === true;
-          },
-        }),
-      };
-    },
-    [
-      archivedSnapshot,
-      archiveStates,
-      feedItemsProjection,
-      sectionsShowingArchived,
-      visibilityFilter,
-    ],
-  );
-  const filteredFullSections = useMemo(
-    () => fullComputedSections.map(filterSection),
-    [filterSection, fullComputedSections],
-  );
-  const filteredVisibleSections = useMemo(
-    () => visibleComputedSections.map(filterSection),
-    [filterSection, visibleComputedSections],
-  );
-  const navigationItems = useMemo(
-    () => filteredFullSections.flatMap((section) => section.items),
-    [filteredFullSections],
-  );
   const navigationSectionInfo = useMemo(
     () =>
-      filteredFullSections.map((section) => ({
+      fullComputedSections.map((section) => ({
         size: section.items.length,
-        showsArchivedSavedItems: sectionsShowingArchived.has(
-          getSectionKey(section),
-        ),
         isGrid:
           section.layout === VIEW_LAYOUT.GRID ||
           section.layout === VIEW_LAYOUT.LARGE_GRID,
       })),
-    [filteredFullSections, sectionsShowingArchived],
+    [fullComputedSections],
   );
   const navigationIsGridLayout =
     navigationSectionInfo.length === 1 &&
@@ -455,22 +288,19 @@ function SavedAwareSectionList({
     (sectionIndex: number) => {
       const nextItemId = getNextAvailableItemAfterSection(
         sectionIndex,
-        filteredFullSections,
+        fullComputedSections,
       );
 
       requestAnimationFrame(() => {
         requestAnimationFrame(() => selectItem(nextItemId));
       });
     },
-    [filteredFullSections, selectItem],
+    [fullComputedSections, selectItem],
   );
 
   return (
     <div className="w-full">
-      {filteredVisibleSections.map((section, index) => {
-        const originalVisibleSection = visibleComputedSections[index];
-        const sectionKey = getSectionKey(section);
-        const showArchived = sectionsShowingArchived.has(sectionKey);
+      {visibleComputedSections.map((section, index) => {
         return (
           <LayoutSection
             key={
@@ -482,36 +312,8 @@ function SavedAwareSectionList({
             sectionIndex={index}
             handleMouseSelect={handleMouseSelect}
             onMarkAsRead={handleSectionMarkAsRead}
-            sectionItemsForAction={filteredFullSections[index]?.items ?? []}
-            showHeading={
-              visibilityFilter === "later" ||
-              (originalVisibleSection?.items.length ?? 0) > 0
-            }
-            showArchiveFilter={visibilityFilter === "later"}
-            showArchived={showArchived}
-            onShowArchivedChange={(pressed) => {
-              setSectionsShowingArchived((currentSectionKeys) => {
-                const nextSectionKeys = new Set(currentSectionKeys);
-                if (pressed) nextSectionKeys.add(sectionKey);
-                else nextSectionKeys.delete(sectionKey);
-                return nextSectionKeys;
-              });
-              if (pressed && archiveStates[sectionKey] === undefined) {
-                void loadArchivedSection(sectionKey, section.placement).catch(
-                  () => {
-                    setSectionsShowingArchived((currentSectionKeys) => {
-                      const nextSectionKeys = new Set(currentSectionKeys);
-                      nextSectionKeys.delete(sectionKey);
-                      return nextSectionKeys;
-                    });
-                  },
-                );
-              }
-            }}
-            archiveState={archiveStates[sectionKey]}
-            onLoadMoreArchived={() => {
-              void loadArchivedSection(sectionKey, section.placement);
-            }}
+            sectionItemsForAction={fullComputedSections[index]?.items ?? []}
+            showHeading={section.items.length > 0}
           />
         );
       })}
@@ -551,9 +353,10 @@ export function RenderViewItems() {
     currentView,
     visibleFilteredFeedItemsOrder,
   );
-  const visibilityFilter = useAtomValue(visibilityFilterAtom);
-  const viewListKey = `view-${currentView?.id ?? "none"}-${visibilityFilter}`;
-  const savedContextKey = `${viewListKey}-feed-${feedFilter}-tag-${categoryFilter}`;
+  const contentStatusFilter = useAtomValue(contentStatusFilterAtom);
+  const contentStatusKey = buildContentStatusKey(contentStatusFilter);
+  const viewListKey = `view-${currentView?.id ?? "none"}-${contentStatusKey}`;
+  const contentStatusContextKey = `${viewListKey}-feed-${feedFilter}-tag-${categoryFilter}`;
   const shouldShowPaginationEnd =
     hasRenderedAllItems &&
     paginationState?.hasMore === false &&
@@ -592,19 +395,16 @@ export function RenderViewItems() {
     hasFetchedFeeds &&
     feedItemsLastFetchedAt !== null &&
     hasFetchedFeedCategories &&
-    !filteredFeedItemsOrder.length &&
-    visibilityFilter !== "later"
+    !filteredFeedItemsOrder.length
   ) {
     return <EmptyState />;
   }
 
   return (
-    <SavedAwareSectionList
-      key={savedContextKey}
+    <ContentStatusSectionList
+      key={contentStatusContextKey}
       fullComputedSections={fullComputedSections}
       visibleComputedSections={visibleComputedSections}
-      visibilityFilter={visibilityFilter}
-      viewId={currentView?.id}
       viewListKey={viewListKey}
       sentinelRef={sentinelRef}
       showPaginationLoader={paginationState?.isFetching === true}

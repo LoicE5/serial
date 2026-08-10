@@ -1,17 +1,15 @@
 "use client";
 
-import { useAtomValue } from "jotai";
 import { useMemo } from "react";
 import type { ViewLayout } from "~/server/db/constants";
 import type { ApplicationView } from "~/server/db/schema";
-import { visibilityFilterAtom } from "~/lib/data/atoms";
 import { bookmarksStore } from "~/lib/data/bookmarks/store";
 import { useContentCategories } from "~/lib/data/content-categories";
 import { useFeedCategories } from "~/lib/data/feed-categories";
 import { createFeedItemFilterIndex } from "~/lib/data/feed-items";
 import { useFeeds } from "~/lib/data/feeds";
 import { useFeedItemsListProjection } from "~/lib/data/store";
-import { INBOX_VIEW_ID } from "~/lib/data/views/constants";
+import { UNCATEGORIZED_VIEW_ID } from "~/lib/data/views/constants";
 import {
   VIEW_LAYOUT,
   VIEW_LAYOUT_ITEM_TYPE,
@@ -36,7 +34,6 @@ export function useViewSections(
 ) {
   const { feeds } = useFeeds();
   const { contentCategories } = useContentCategories();
-  const visibilityFilter = useAtomValue(visibilityFilterAtom);
   const feedItemsProjection = useFeedItemsListProjection();
   const feedCategories = useFeedCategories();
   const filterIndex = useMemo(
@@ -44,7 +41,7 @@ export function useViewSections(
     [feedCategories.feedCategories],
   );
 
-  const isUncategorized = currentView?.id === INBOX_VIEW_ID;
+  const isUncategorized = currentView?.id === UNCATEGORIZED_VIEW_ID;
 
   const baseLayout = useMemo(() => {
     const parsed = viewLayoutSchema.safeParse(currentView?.layout);
@@ -59,41 +56,6 @@ export function useViewSections(
 
   const computedSections = useMemo(() => {
     const feedItemsDict = feedItemsProjection.getItems();
-    const bookmarks = bookmarksStore.getState().snapshot();
-    const orderedItems =
-      visibilityFilter === "read"
-        ? [...filteredFeedItemsOrder].sort((a, b) => {
-            const itemA = feedItemsDict[a];
-            const itemB = feedItemsDict[b];
-            const bookmarkA = bookmarks[a];
-            const bookmarkB = bookmarks[b];
-            const readUpdatedAtA =
-              bookmarkA?.readUpdatedAt?.getTime() ??
-              itemA?.isWatchedUpdatedAt?.getTime() ??
-              itemA?.postedAt.getTime() ??
-              0;
-            const readUpdatedAtB =
-              bookmarkB?.readUpdatedAt?.getTime() ??
-              itemB?.isWatchedUpdatedAt?.getTime() ??
-              itemB?.postedAt.getTime() ??
-              0;
-
-            return readUpdatedAtB - readUpdatedAtA || b.localeCompare(a);
-          })
-        : filteredFeedItemsOrder;
-
-    if (visibilityFilter === "read") {
-      return [
-        {
-          name: currentView?.name ?? "View",
-          items: orderedItems,
-          layout: baseLayout,
-          startIndex: 0,
-          isUncategorized: true,
-        },
-      ] as ViewSection[];
-    }
-
     if (!hasSubviews || !currentView) {
       return [
         {
@@ -207,7 +169,6 @@ export function useViewSections(
     return sections;
   }, [
     hasSubviews,
-    visibilityFilter,
     currentView,
     filteredFeedItemsOrder,
     feeds,

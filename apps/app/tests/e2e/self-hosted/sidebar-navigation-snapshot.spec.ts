@@ -88,7 +88,7 @@ test.describe("authoritative sidebar navigation", () => {
         uncategorizedFeedItem: false,
         uncategorizedBookmark: false,
       },
-      "unread",
+      { saveStatus: "inbox", archiveStatus: "unread" },
     );
     testEmail = fixture.email;
 
@@ -137,7 +137,7 @@ test.describe("authoritative sidebar navigation", () => {
     const scopeKeys = Object.keys(
       (await applicationStoreState(page))?.state?.scopeFeedItemIds ?? {},
     );
-    expect(scopeKeys).not.toContain(`view:${fixture.viewId}:unread`);
+    expect(scopeKeys).not.toContain(`view:${fixture.viewId}:inbox:unread`);
 
     await page.getByRole("radio", { name: fixture.viewName }).click();
     const bookmark = page.locator(
@@ -167,7 +167,7 @@ test.describe("authoritative sidebar navigation", () => {
         uncategorizedFeedItem: false,
         uncategorizedBookmark: false,
       },
-      "unread",
+      { saveStatus: "inbox", archiveStatus: "unread" },
     );
     testEmail = fixture.email;
 
@@ -201,11 +201,23 @@ test.describe("authoritative sidebar navigation", () => {
     await expect(item).toHaveCount(0);
     await expect(viewButton.locator(".bg-sidebar-accent")).toHaveCount(0);
 
-    await page.locator("#section-0").getByRole("tab", { name: "All" }).click();
+    await page
+      .getByRole("tab", {
+        name: "Switch to archived content",
+        exact: true,
+      })
+      .click();
     await expect(item).toBeVisible();
     await item.getByRole("link").hover();
     await page.keyboard.press("e");
 
+    await expect(viewButton.locator(".bg-sidebar-accent")).toHaveCount(0);
+    await page
+      .getByRole("tab", {
+        name: "Switch to unread content",
+        exact: true,
+      })
+      .click();
     await expect(viewButton.locator(".bg-sidebar-accent")).toHaveCount(1);
   });
 

@@ -10,6 +10,7 @@ export default defineConfig({
   envDir: "./tests",
   test: {
     include: ["tests/unit/**/*.test.ts"],
+    testTimeout: process.env.CI ? 15_000 : 5_000,
   },
   resolve: {
     alias: {

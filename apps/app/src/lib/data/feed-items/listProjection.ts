@@ -1,10 +1,11 @@
-import { INBOX_VIEW_ID } from "../views/constants";
+import { UNCATEGORIZED_VIEW_ID } from "../views/constants";
 import { isFeedCompatibleWithContentFilter } from "./filters";
 import type {
   ApplicationFeedItem,
   ApplicationView,
   DatabaseFeedCategory,
 } from "~/server/db/schema";
+import type { ContentStatusFilter } from "~/lib/content-status";
 import { VIEW_LAYOUT_ITEM_TYPE } from "~/server/db/constants";
 import { contentFilterAllowsDescriptor } from "~/lib/views/contentFilter";
 
@@ -86,7 +87,7 @@ export function createFeedItemFilterIndex(
     }
     feedIdsByViewId.set(view.id, feedIds);
 
-    if (view.id === INBOX_VIEW_ID) continue;
+    if (view.id === UNCATEGORIZED_VIEW_ID) continue;
 
     for (const categoryId of view.categoryIds) {
       addToArrayMap(customViewsByCategoryId, categoryId, view);
@@ -128,14 +129,14 @@ export function hasFeedItemListProjectionChanged(
 }
 
 export function createFeedItemFilterPredicate({
-  visibilityFilter,
+  contentStatusFilter,
   categoryFilter,
   feedFilter,
   viewFilter,
   filterIndex,
   now = new Date(),
 }: {
-  visibilityFilter: "unread" | "read" | "later";
+  contentStatusFilter: ContentStatusFilter;
   categoryFilter: number;
   feedFilter: number;
   viewFilter: ApplicationView | null;
@@ -154,17 +155,17 @@ export function createFeedItemFilterPredicate({
   })();
 
   return (item: FeedItemListProjection) => {
-    if (visibilityFilter === "unread" && item.isWatchLater) return false;
-    if (visibilityFilter === "unread" && item.isWatched) return false;
-    if (visibilityFilter === "read" && (!item.isWatched || item.isWatchLater)) {
+    if (item.isWatchLater !== (contentStatusFilter.saveStatus === "saved")) {
       return false;
     }
-    if (visibilityFilter === "later" && !item.isWatchLater) return false;
+    if (item.isWatched !== (contentStatusFilter.archiveStatus === "archived")) {
+      return false;
+    }
 
     if (categoryFilter >= 0 && !categoryFeedIds?.has(item.feedId)) return false;
     if (feedFilter >= 0 && item.feedId !== feedFilter) return false;
 
-    if (viewFilter?.id === INBOX_VIEW_ID) {
+    if (viewFilter?.id === UNCATEGORIZED_VIEW_ID) {
       const itemCategoryIds =
         filterIndex.categoryIdsByFeedId.get(item.feedId) ?? [];
       const wouldAppearViaCategory = Array.from(itemCategoryIds).some(
@@ -197,7 +198,7 @@ export function createFeedItemFilterPredicate({
 
     if (
       !!viewFilter &&
-      viewFilter.id !== INBOX_VIEW_ID &&
+      viewFilter.id !== UNCATEGORIZED_VIEW_ID &&
       !viewFeedIds?.has(item.feedId)
     ) {
       return false;

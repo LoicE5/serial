@@ -5,7 +5,7 @@ import type {
   MixedContentScope,
 } from "./projection";
 import type { db as defaultDatabase } from "~/server/db";
-import type { VisibilityFilter } from "~/lib/data/atoms";
+import type { ContentStatusFilter } from "~/lib/content-status";
 import type { BookmarkSyncManifestEntry } from "~/lib/data/bookmarks/manifest";
 import {
   BOOKMARK_SYNC_PAGE_SIZE,
@@ -36,7 +36,7 @@ export type BookmarkSyncChunk =
 export type MixedContentChunk = {
   type: "mixed-content-page";
   scope: MixedContentScope;
-  visibility: VisibilityFilter;
+  contentStatus: ContentStatusFilter;
   page: MixedContentPage;
   replacesScope: boolean;
 };

@@ -37,7 +37,7 @@ function applyPages(count: number) {
   for (let pageIndex = 0; pageIndex < count; pageIndex++) {
     mixedContentStore.getState().applyPage({
       scope: SCOPE,
-      visibility: "unread",
+      contentStatus: { saveStatus: "inbox", archiveStatus: "unread" },
       page: {
         references: references(pageIndex),
         bookmarks: [],
@@ -61,7 +61,12 @@ describe("mixed-content page retention", () => {
     applyPages(12);
 
     const scope =
-      mixedContentStore.getState().scopes[getMixedScopeKey(SCOPE, "unread")];
+      mixedContentStore.getState().scopes[
+        getMixedScopeKey(SCOPE, {
+          saveStatus: "inbox",
+          archiveStatus: "unread",
+        })
+      ];
 
     expect(scope?.pages).toHaveLength(8);
     expect(scope?.references).toHaveLength(240);
@@ -81,7 +86,12 @@ describe("mixed-content page retention", () => {
     applyPages(12);
 
     const scope =
-      mixedContentStore.getState().scopes[getMixedScopeKey(SCOPE, "unread")];
+      mixedContentStore.getState().scopes[
+        getMixedScopeKey(SCOPE, {
+          saveStatus: "inbox",
+          archiveStatus: "unread",
+        })
+      ];
     expect(scope?.pages).toHaveLength(8);
     expect(
       scope?.references.some(({ entityId }) => entityId === "page-0-item-0"),

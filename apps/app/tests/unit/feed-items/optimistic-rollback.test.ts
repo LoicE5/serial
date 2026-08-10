@@ -92,7 +92,7 @@ describe("optimistic feed item mutations", () => {
     const scope = { type: "view" as const, viewId: view.id };
     mixedContentStore.getState().applyPage({
       scope,
-      visibility: "unread",
+      contentStatus: { saveStatus: "inbox", archiveStatus: "unread" },
       page: {
         references: [
           {
@@ -114,8 +114,12 @@ describe("optimistic feed item mutations", () => {
     applyOptimisticWatchLaterValue(item.id, true);
 
     expect(
-      mixedContentStore.getState().scopes[getMixedScopeKey(scope, "unread")]
-        ?.references,
+      mixedContentStore.getState().scopes[
+        getMixedScopeKey(scope, {
+          saveStatus: "inbox",
+          archiveStatus: "unread",
+        })
+      ]?.references,
     ).toEqual([]);
   });
 

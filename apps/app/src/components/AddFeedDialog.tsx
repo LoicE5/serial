@@ -37,7 +37,7 @@ import { useShortcut } from "~/lib/hooks/useShortcut";
 import { useDialogStore } from "~/components/feed/dialogStore";
 import { useViews } from "~/lib/data/views";
 import { useViewFeeds } from "~/lib/data/view-feeds";
-import { INBOX_VIEW_ID } from "~/lib/data/views/constants";
+import { UNCATEGORIZED_VIEW_ID } from "~/lib/data/views/constants";
 import { useContentCategories } from "~/lib/data/content-categories";
 import { useCreateContentCategoryMutation } from "~/lib/data/content-categories/mutations";
 import { useQuickCreateViewMutation } from "~/lib/data/views/mutations";
@@ -49,7 +49,7 @@ import { BookmarkOrganizationEditor } from "~/components/bookmarks/BookmarkOrgan
 function useViewOptions() {
   const { views } = useViews();
   return views
-    .filter((v) => v.id !== INBOX_VIEW_ID)
+    .filter((v) => v.id !== UNCATEGORIZED_VIEW_ID)
     .map((v) => ({ id: v.id, label: v.name }));
 }
 

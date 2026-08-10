@@ -15,16 +15,21 @@ import {
   summarizeSamples,
 } from "./model";
 import { queryFeedViewPage, queryMixedViewPage } from "./operations";
+import type { ContentStatusFilter } from "~/lib/content-status";
 import type {
   BenchmarkProfileName,
   CacheProfile,
   OperationName,
   OperationSample,
 } from "./model";
+import {
+  buildContentStatusKey,
+  CONTENT_STATUS_FILTERS,
+} from "~/lib/content-status";
 
 const PAGE_LIMIT = 30;
 const PRE_BOOKMARK_PRODUCTION_REF = "090d075f";
-const VISIBILITIES = ["unread", "read", "later"] as const;
+const CONTENT_STATUSES: readonly ContentStatusFilter[] = CONTENT_STATUS_FILTERS;
 
 type RunnerOptions = {
   profileName: BenchmarkProfileName;
@@ -99,7 +104,7 @@ async function measureOperation(input: {
   operation: OperationName;
   userId: string;
   viewId: number;
-  visibility: (typeof VISIBILITIES)[number];
+  contentStatus: ContentStatusFilter;
   warmSession?: ReturnType<typeof openBenchmarkDatabase>;
 }): Promise<OperationSample> {
   const session =
@@ -125,7 +130,7 @@ async function measureOperation(input: {
       database: session.database,
       userId: input.userId,
       viewId: input.viewId,
-      visibility: input.visibility,
+      contentStatus: input.contentStatus,
       limit: PAGE_LIMIT,
     });
     result = feedResult;
@@ -135,7 +140,7 @@ async function measureOperation(input: {
       database: session.database,
       userId: input.userId,
       viewId: input.viewId,
-      visibility: input.visibility,
+      contentStatus: input.contentStatus,
       limit: PAGE_LIMIT,
     });
     result = mixedResult;
@@ -147,7 +152,7 @@ async function measureOperation(input: {
   const sample: OperationSample = {
     operation: input.operation,
     cache: input.cache,
-    visibility: input.visibility,
+    contentStatus: input.contentStatus,
     fullDurationMs: endedAt - startedAt,
     ...databaseSnapshot,
     resultBytes: Buffer.byteLength(JSON.stringify(result)),
@@ -190,7 +195,7 @@ async function main() {
             })
           : undefined;
       try {
-        for (const visibility of VISIBILITIES) {
+        for (const contentStatus of CONTENT_STATUSES) {
           const warmups = options.warmups ?? profile.warmups;
           const repetitions = options.repetitions ?? profile.repetitions;
           for (let index = 0; index < warmups + repetitions; index += 1) {
@@ -206,7 +211,7 @@ async function main() {
                 operation,
                 userId,
                 viewId: fixture.allContentViewId,
-                visibility,
+                contentStatus,
                 warmSession,
               });
               if (index >= warmups) samples.push(sample);
@@ -219,10 +224,12 @@ async function main() {
     }
 
     const comparisons = options.cacheProfiles.flatMap((cache) =>
-      VISIBILITIES.map((visibility) => {
+      CONTENT_STATUSES.map((contentStatus) => {
+        const contentStatusKey = buildContentStatusKey(contentStatus);
         const matching = samples.filter(
           (sample) =>
-            sample.cache === cache && sample.visibility === visibility,
+            sample.cache === cache &&
+            buildContentStatusKey(sample.contentStatus) === contentStatusKey,
         );
         const baseline = summarizeSamples(
           matching.filter((sample) => sample.operation === "feed-view-page"),
@@ -232,7 +239,7 @@ async function main() {
         );
         return {
           cache,
-          visibility,
+          contentStatus,
           baseline,
           candidate,
           gate: calculatePairGate({
@@ -249,17 +256,18 @@ async function main() {
       return rawSample;
     });
     const statementObservations = options.cacheProfiles.flatMap((cache) =>
-      VISIBILITIES.flatMap((visibility) =>
+      CONTENT_STATUSES.flatMap((contentStatus) =>
         (["feed-view-page", "mixed-view-page"] as const).map((operation) => {
           const sample = samples.find(
             (candidate) =>
               candidate.cache === cache &&
-              candidate.visibility === visibility &&
+              buildContentStatusKey(candidate.contentStatus) ===
+                buildContentStatusKey(contentStatus) &&
               candidate.operation === operation,
           );
           return {
             cache,
-            visibility,
+            contentStatus,
             operation,
             statements: sample!.statements,
           };
@@ -307,7 +315,7 @@ async function main() {
     }
     for (const comparison of comparisons) {
       process.stdout.write(
-        `${comparison.cache}/${comparison.visibility}: median ${comparison.gate.latencyMedianRatio.toFixed(2)}x, p95 ${comparison.gate.latencyP95Ratio.toFixed(2)}x, rows ${comparison.gate.structuralRowsObserved}/${comparison.gate.structuralRowBudget}, ${comparison.gate.passed ? "PASS" : "FAIL"}\n`,
+        `${comparison.cache}/${buildContentStatusKey(comparison.contentStatus)}: median ${comparison.gate.latencyMedianRatio.toFixed(2)}x, p95 ${comparison.gate.latencyP95Ratio.toFixed(2)}x, rows ${comparison.gate.structuralRowsObserved}/${comparison.gate.structuralRowBudget}, ${comparison.gate.passed ? "PASS" : "FAIL"}\n`,
       );
     }
     if (options.outputPath) {

@@ -8,10 +8,10 @@ import {
   queryFeedCandidates,
 } from "./projection/candidates";
 import { loadScopeData } from "./projection/scope";
-import type { VisibilityFilter } from "~/lib/data/atoms";
+import type { ContentStatusFilter } from "~/lib/content-status";
 import type { db as defaultDatabase } from "~/server/db";
 import type { ApplicationFeedItem, DatabaseBookmark } from "~/server/db/schema";
-import { INBOX_VIEW_ID } from "~/lib/data/views/constants";
+import { UNCATEGORIZED_VIEW_ID } from "~/lib/data/views/constants";
 
 type MixedContentDatabase = typeof defaultDatabase;
 
@@ -49,25 +49,19 @@ export type MixedContentPage = {
   hasMore: boolean;
 };
 
-export type SavedReadState = "unread" | "archived";
-
 export { loadApplicationBookmarks, loadApplicationBookmarksById };
 
 export async function queryMixedContentPage(input: {
   database: MixedContentDatabase;
   userId: string;
   scope: MixedContentScope;
-  visibility: VisibilityFilter;
-  savedState?: SavedReadState;
+  contentStatus: ContentStatusFilter;
   sectionPlacement?: number | null;
   cursor?: MixedContentCursor;
   limit: number;
 }): Promise<MixedContentPage> {
   if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 500) {
     throw new Error("Mixed-content page limit must be between 1 and 500");
-  }
-  if (input.savedState && input.visibility !== "later") {
-    throw new Error("Saved read state is only valid for Saved content");
   }
   const scopeData = await loadScopeData(input);
   if (!scopeData.valid) {
@@ -81,7 +75,7 @@ export async function queryMixedContentPage(input: {
   }
   const hasSections =
     input.scope.type === "view" &&
-    input.scope.viewId !== INBOX_VIEW_ID &&
+    input.scope.viewId !== UNCATEGORIZED_VIEW_ID &&
     scopeData.sections.length > 0;
   const [bookmarkCandidates, feedCandidates] = await Promise.all([
     queryBookmarkCandidates({ ...input, scopeData, hasSections }),

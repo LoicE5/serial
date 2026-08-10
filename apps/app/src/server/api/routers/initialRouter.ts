@@ -7,7 +7,6 @@ import {
   getTableColumns,
   gt,
   inArray,
-  isNull,
   lt,
   not,
   or,
@@ -16,7 +15,7 @@ import {
 import { z } from "zod";
 import {
   GET_BY_VIEW_CHUNK_SIZE,
-  ITEMS_BY_VISIBILITY_CHUNK_SIZE,
+  ITEMS_BY_CONTENT_STATUS_CHUNK_SIZE,
   ITEMS_PER_PAGE,
   REVALIDATE_VIEW_CHUNK_SIZE,
 } from "../constants";
@@ -24,7 +23,6 @@ import { publisher, trackChannelConnection } from "../publisher";
 import { getClientChannel, getUserChannel } from "../channels";
 import { insertFeedWithCategories } from "./feed-router/utils";
 import type { SQL } from "drizzle-orm";
-import type { VisibilityFilter } from "~/lib/data/atoms";
 import type {
   ApplicationFeed,
   ApplicationFeedItem,
@@ -44,17 +42,21 @@ import type {
   MixedContentChunk,
 } from "~/server/mixed-content/sync";
 import type { NavigationSnapshot } from "~/server/navigation/snapshot";
+import type { ContentStatusFilter } from "~/lib/content-status";
+import {
+  contentStatusFilterSchema,
+  DEFAULT_CONTENT_STATUS_FILTER,
+} from "~/lib/content-status";
 import { captureException, logDebug } from "~/server/logger";
 import {
   checkUserRefreshEligibility,
   getFeedsActivationBudget,
 } from "~/server/subscriptions/helpers";
-import { visibilityFilterSchema } from "~/lib/data/atoms";
 import {
   buildContentFilter,
+  buildContentStatusFilter,
   buildTimeWindowFilter,
   buildViewCategoryFilter,
-  buildVisibilityFilter,
   isFeedCompatibleWithContentFilter,
   VIDEO_PLATFORMS,
 } from "~/lib/data/feed-items/filters";
@@ -62,7 +64,7 @@ import {
   CONTENT_FILTER_OPTION,
   contentFilterColumnHasOption,
 } from "~/lib/views/contentFilter";
-import { INBOX_VIEW_ID } from "~/lib/data/views/constants";
+import { UNCATEGORIZED_VIEW_ID } from "~/lib/data/views/constants";
 import { sortViewsByPlacement } from "~/lib/data/views/utils";
 import { prepareArrayChunks } from "~/lib/iterators";
 import { buildUncategorizedView } from "~/server/api/utils/buildUncategorizedView";
@@ -134,7 +136,7 @@ export type ViewDataChunk =
       viewId?: number;
       feedId?: number;
       feedItems: ApplicationFeedItem[];
-      visibilityFilter?: string;
+      contentStatusFilter?: ContentStatusFilter;
       hasMore?: boolean;
       nextCursor?: PaginationCursor;
       refreshNavigationSnapshot?: boolean;
@@ -169,7 +171,7 @@ export type GetByViewChunk =
   | {
       type: "view-diff";
       viewId: number;
-      visibilityFilter: string;
+      contentStatusFilter: ContentStatusFilter;
       diff: DiffEntry[];
       cursor: PaginationCursor;
       hasMore: boolean;
@@ -178,7 +180,7 @@ export type GetByViewChunk =
   | {
       type: "view-lightweight-items";
       viewId: number;
-      visibilityFilter: string;
+      contentStatusFilter: ContentStatusFilter;
       items: LightweightFeedItem[];
       cursor: PaginationCursor;
       hasMore: boolean;
@@ -196,7 +198,7 @@ export type RevalidateViewChunk =
       type: "feed-items";
       viewId: number;
       feedItems: ApplicationFeedItem[];
-      visibilityFilter?: string;
+      contentStatusFilter?: ContentStatusFilter;
       hasMore?: boolean;
       nextCursor?: PaginationCursor;
     }
@@ -206,7 +208,7 @@ export type RevalidateViewChunk =
 type RouterPublishedChunk =
   | { source: "initial"; chunk: GetByViewChunk }
   | { source: "revalidate"; chunk: RevalidateViewChunk }
-  | { source: "visibility"; chunk: GetItemsByVisibilityChunk }
+  | { source: "content-status"; chunk: GetItemsByContentStatusChunk }
   | { source: "feed"; chunk: GetItemsByFeedChunk }
   | { source: "category"; chunk: GetItemsByCategoryIdChunk }
   | { source: "bookmark"; chunk: BookmarkSyncChunk }
@@ -250,8 +252,8 @@ function computeFeedsForView(
   const categoryMap =
     feedCategoriesMap ?? buildFeedCategoriesMap(allFeedCategories);
 
-  // For non-inbox views, start with directly assigned feeds
-  if (view.id !== INBOX_VIEW_ID) {
+  // For non-Uncategorized views, start with directly assigned feeds
+  if (view.id !== UNCATEGORIZED_VIEW_ID) {
     for (const feedId of view.feedIds) feedIds.add(feedId);
   }
   const viewCategoryIdSet = new Set(view.categoryIds);
@@ -273,7 +275,7 @@ function computeFeedsForView(
 
     // For Uncategorized view, include feeds that are NOT in any custom view category
     // or feeds that are in the Uncategorized view's category list
-    if (view.id === INBOX_VIEW_ID) {
+    if (view.id === UNCATEGORIZED_VIEW_ID) {
       // Exclude feeds directly assigned to any custom view
       if (customViewFeedIds?.has(feed.id)) {
         continue;
@@ -654,7 +656,7 @@ async function fetchScopedViewPageData(
   viewId: number,
 ): Promise<ScopedViewPageData | null> {
   const userId = context.user!.id;
-  if (viewId === INBOX_VIEW_ID) {
+  if (viewId === UNCATEGORIZED_VIEW_ID) {
     return fetchUncategorizedPageData(context, userId);
   }
 
@@ -855,11 +857,11 @@ type PaginatedFeedItemScope =
 
 function buildPaginatedFeedItemQuery({
   scope,
-  visibilityFilter,
+  contentStatusFilter,
   cursor,
 }: {
   scope: PaginatedFeedItemScope;
-  visibilityFilter: VisibilityFilter;
+  contentStatusFilter: ContentStatusFilter;
   cursor: PaginationCursor | null;
 }) {
   const hasSections =
@@ -895,33 +897,22 @@ function buildPaginatedFeedItemQuery({
 
   const filterConditions = [
     ...scopeFilterConditions,
-    buildVisibilityFilter(visibilityFilter),
-    buildCursorCondition(cursor, visibilityFilter, placementExpr),
+    buildContentStatusFilter(contentStatusFilter),
+    buildCursorCondition(cursor, contentStatusFilter, placementExpr),
   ].filter((f): f is NonNullable<typeof f> => f !== undefined);
 
   return {
     filter: filterConditions.length > 0 ? and(...filterConditions) : undefined,
     orderBy: placementExpr
-      ? visibilityFilter === "later"
-        ? [
-            asc(placementExpr),
-            desc(feedItems.isWatchLaterUpdatedAt),
-            desc(feedItems.postedAt),
-            desc(feedItems.id),
-          ]
-        : [asc(placementExpr), desc(feedItems.postedAt), desc(feedItems.id)]
-      : buildFlatItemsOrderBy(visibilityFilter),
+      ? [asc(placementExpr), ...buildFlatItemsOrderBy(contentStatusFilter)]
+      : buildFlatItemsOrderBy(contentStatusFilter),
     placementExpr,
   };
 }
 
 /**
  * Shared helper to query feed items for a view with correct ordering based on
- * visibility filter and section configuration.
- *
- * - "read" visibility: orders by isWatchedUpdatedAt (ignores sections)
- * - Non-sectioned views: orders by postedAt
- * - Sectioned views: orders by section placement, then postedAt
+ * content status and section configuration.
  *
  * Queries limit + 1 to determine hasMore, then slices.
  */
@@ -929,7 +920,7 @@ async function queryFeedItemsForView(
   context: ORPCContext,
   view: ApplicationView,
   params: {
-    visibilityFilter: VisibilityFilter;
+    contentStatusFilter: ContentStatusFilter;
     feedIds: number[];
     cursor: PaginationCursor | null;
     limit: number;
@@ -947,7 +938,7 @@ async function queryFeedItemsForView(
   nextCursor: PaginationCursor;
 }> {
   const {
-    visibilityFilter,
+    contentStatusFilter,
     feedIds,
     cursor,
     limit,
@@ -973,7 +964,7 @@ async function queryFeedItemsForView(
       customViewFeedIds,
       membershipResolved,
     },
-    visibilityFilter,
+    contentStatusFilter,
     cursor,
   });
 
@@ -1313,7 +1304,7 @@ export const requestInitialData = protectedProcedure
 
     // Center-pane content is intentionally not part of the eager load. Once
     // the first View is selected, useValidateViewItems requests exactly that
-    // scope and visibility. Other View, Tag, and Feed pages remain unloaded
+    // scope and content status. Other View, Tag, and Feed pages remain unloaded
     // until selected.
     await publisher.publish(clientChannel, {
       source: "initial",
@@ -2127,91 +2118,59 @@ function buildCursorCondition(
     isWatchedUpdatedAt?: Date | null;
     isWatchLaterUpdatedAt?: Date | null;
   } | null,
-  visibilityFilter: VisibilityFilter,
+  contentStatusFilter: ContentStatusFilter,
   placementColumn?: SQL<number>,
 ) {
   if (!cursor) return undefined;
 
-  if (visibilityFilter === "later") {
-    const savedAt = cursor.isWatchLaterUpdatedAt ?? null;
-    const postedAtCondition = or(
-      lt(feedItems.postedAt, cursor.postedAt),
-      and(eq(feedItems.postedAt, cursor.postedAt), lt(feedItems.id, cursor.id)),
-    );
-    const timeCondition = savedAt
-      ? or(
-          lt(feedItems.isWatchLaterUpdatedAt, savedAt),
-          isNull(feedItems.isWatchLaterUpdatedAt),
-          and(eq(feedItems.isWatchLaterUpdatedAt, savedAt), postedAtCondition),
-        )
-      : and(isNull(feedItems.isWatchLaterUpdatedAt), postedAtCondition);
-    if (!placementColumn || cursor.placement === undefined)
-      return timeCondition;
-    return or(
-      gt(placementColumn, cursor.placement),
-      and(eq(placementColumn, cursor.placement), timeCondition),
-    );
-  }
-
-  // isWatchedUpdatedAt-based cursor for read visibility filter
-  if (cursor.isWatchedUpdatedAt) {
-    return or(
-      lt(feedItems.isWatchedUpdatedAt, cursor.isWatchedUpdatedAt),
-      and(
-        eq(feedItems.isWatchedUpdatedAt, cursor.isWatchedUpdatedAt),
-        lt(feedItems.postedAt, cursor.postedAt),
-      ),
-      and(
-        eq(feedItems.isWatchedUpdatedAt, cursor.isWatchedUpdatedAt),
-        eq(feedItems.postedAt, cursor.postedAt),
-        lt(feedItems.id, cursor.id),
-      ),
-    );
-  }
-
-  // Date-only cursor (legacy or non-sectioned views)
-  if (!placementColumn || cursor.placement === undefined) {
-    return or(
-      lt(feedItems.postedAt, cursor.postedAt),
-      and(eq(feedItems.postedAt, cursor.postedAt), lt(feedItems.id, cursor.id)),
-    );
-  }
-
-  // Section-aware cursor: (placement > cursor.placement)
-  //   OR (placement = cursor.placement AND postedAt < cursor.postedAt)
-  //   OR (placement = cursor.placement AND postedAt = cursor.postedAt AND id < cursor.id)
-  return or(
-    gt(placementColumn, cursor.placement),
+  const orderCoordinate = contentStatusOrderExpression(contentStatusFilter);
+  const cursorCoordinate =
+    contentStatusFilter.archiveStatus === "archived"
+      ? (cursor.isWatchedUpdatedAt ?? cursor.postedAt)
+      : contentStatusFilter.saveStatus === "saved"
+        ? (cursor.isWatchLaterUpdatedAt ?? cursor.postedAt)
+        : cursor.postedAt;
+  // Drizzle's SQLite `timestamp` mode persists whole epoch seconds. The
+  // composite SQL expression has no column encoder, so bind that representation
+  // explicitly instead of passing a JavaScript Date through an untyped SQL param.
+  const cursorCoordinateSeconds = Math.floor(cursorCoordinate.getTime() / 1000);
+  const coordinateCondition = or(
+    sql`${orderCoordinate} < ${cursorCoordinateSeconds}`,
     and(
-      eq(placementColumn, cursor.placement),
+      sql`${orderCoordinate} = ${cursorCoordinateSeconds}`,
       lt(feedItems.postedAt, cursor.postedAt),
     ),
     and(
-      eq(placementColumn, cursor.placement),
+      sql`${orderCoordinate} = ${cursorCoordinateSeconds}`,
       eq(feedItems.postedAt, cursor.postedAt),
       lt(feedItems.id, cursor.id),
     ),
   );
+  if (!placementColumn || cursor.placement === undefined) {
+    return coordinateCondition;
+  }
+  return or(
+    gt(placementColumn, cursor.placement),
+    and(eq(placementColumn, cursor.placement), coordinateCondition),
+  );
 }
 
-function buildFlatItemsOrderBy(visibilityFilter: VisibilityFilter) {
-  if (visibilityFilter === "read") {
-    return [
-      desc(feedItems.isWatchedUpdatedAt),
-      desc(feedItems.postedAt),
-      desc(feedItems.id),
-    ];
+function contentStatusOrderExpression(contentStatus: ContentStatusFilter) {
+  if (contentStatus.archiveStatus === "archived") {
+    return sql<Date>`COALESCE(${feedItems.isWatchedUpdatedAt}, ${feedItems.postedAt})`;
   }
-
-  if (visibilityFilter === "later") {
-    return [
-      desc(feedItems.isWatchLaterUpdatedAt),
-      desc(feedItems.postedAt),
-      desc(feedItems.id),
-    ];
+  if (contentStatus.saveStatus === "saved") {
+    return sql<Date>`COALESCE(${feedItems.isWatchLaterUpdatedAt}, ${feedItems.postedAt})`;
   }
+  return sql<Date>`${feedItems.postedAt}`;
+}
 
-  return [desc(feedItems.postedAt), desc(feedItems.id)];
+function buildFlatItemsOrderBy(contentStatusFilter: ContentStatusFilter) {
+  return [
+    desc(contentStatusOrderExpression(contentStatusFilter)),
+    desc(feedItems.postedAt),
+    desc(feedItems.id),
+  ];
 }
 
 /**
@@ -2256,15 +2215,15 @@ function buildSectionPlacementExpression(viewId: number): SQL<number> {
 }
 
 /**
- * Request items for a specific visibility filter with cursor-based pagination.
- * Used for lazy loading "read" and "later" visibility filters,
+ * Request items for a specific content-status filter with cursor-based pagination.
+ * Used for lazy loading non-default content-status pages,
  * and for infinite scroll pagination.
  */
-export const requestItemsByVisibility = protectedProcedure
+export const requestItemsByContentStatus = protectedProcedure
   .input(
     clientScopedInputSchema.extend({
       viewId: z.number(),
-      visibilityFilter: visibilityFilterSchema,
+      contentStatusFilter: contentStatusFilterSchema,
       cursor: cursorSchema.optional(),
       limit: z.number().min(1).max(500).optional(),
       clientItems: z
@@ -2291,7 +2250,7 @@ export const requestItemsByVisibility = protectedProcedure
     } catch (error) {
       captureException(error);
       await publisher.publish(channel, {
-        source: "visibility",
+        source: "content-status",
         chunk: {
           type: "error",
           message:
@@ -2306,7 +2265,7 @@ export const requestItemsByVisibility = protectedProcedure
 
     if (!pageData) {
       await publisher.publish(channel, {
-        source: "visibility",
+        source: "content-status",
         chunk: {
           type: "error",
           message: `View with ID ${input.viewId} not found`,
@@ -2320,11 +2279,11 @@ export const requestItemsByVisibility = protectedProcedure
 
     if (feedIds.length === 0) {
       await publisher.publish(channel, {
-        source: "visibility",
+        source: "content-status",
         chunk: {
           type: "view-diff",
           viewId: input.viewId,
-          visibilityFilter: input.visibilityFilter,
+          contentStatusFilter: input.contentStatusFilter,
           diff: [],
           cursor: null,
           hasMore: false,
@@ -2339,7 +2298,7 @@ export const requestItemsByVisibility = protectedProcedure
         context,
         targetView,
         {
-          visibilityFilter: input.visibilityFilter,
+          contentStatusFilter: input.contentStatusFilter,
           feedIds,
           cursor: input.cursor ?? null,
           limit,
@@ -2356,11 +2315,11 @@ export const requestItemsByVisibility = protectedProcedure
       const diff = computeViewDiff(items, clientItems ?? []);
 
       await publisher.publish(channel, {
-        source: "visibility",
+        source: "content-status",
         chunk: {
           type: "view-diff",
           viewId: input.viewId,
-          visibilityFilter: input.visibilityFilter,
+          contentStatusFilter: input.contentStatusFilter,
           diff,
           cursor: nextCursor,
           hasMore,
@@ -2371,7 +2330,7 @@ export const requestItemsByVisibility = protectedProcedure
     } catch (error) {
       captureException(error);
       await publisher.publish(channel, {
-        source: "visibility",
+        source: "content-status",
         chunk: {
           type: "error",
           message:
@@ -2395,7 +2354,7 @@ export const requestItemsByFeed = protectedProcedure
   .input(
     clientScopedInputSchema.extend({
       feedId: z.number(),
-      visibilityFilter: visibilityFilterSchema,
+      contentStatusFilter: contentStatusFilterSchema,
       cursor: cursorSchema.optional(),
       limit: z.number().min(1).max(500).optional(),
     }),
@@ -2424,7 +2383,7 @@ export const requestItemsByFeed = protectedProcedure
     try {
       const queryParts = buildPaginatedFeedItemQuery({
         scope: { type: "feed", feedId: input.feedId },
-        visibilityFilter: input.visibilityFilter,
+        contentStatusFilter: input.contentStatusFilter,
         cursor: input.cursor ?? null,
       });
 
@@ -2461,7 +2420,7 @@ export const requestItemsByFeed = protectedProcedure
             type: "feed-items",
             feedId: input.feedId,
             feedItems: chunk,
-            visibilityFilter: input.visibilityFilter,
+            contentStatusFilter: input.contentStatusFilter,
             hasMore,
             nextCursor,
             replacesScope: input.cursor == null && chunkIndex === 0,
@@ -2477,7 +2436,7 @@ export const requestItemsByFeed = protectedProcedure
             type: "feed-items",
             feedId: input.feedId,
             feedItems: [],
-            visibilityFilter: input.visibilityFilter,
+            contentStatusFilter: input.contentStatusFilter,
             hasMore: false,
             nextCursor: null,
             replacesScope: input.cursor == null,
@@ -2511,7 +2470,7 @@ export const requestItemsByCategoryId = protectedProcedure
   .input(
     clientScopedInputSchema.extend({
       categoryId: z.number(),
-      visibilityFilter: visibilityFilterSchema,
+      contentStatusFilter: contentStatusFilterSchema,
       cursor: cursorSchema.optional(),
       limit: z.number().min(1).max(500).optional(),
     }),
@@ -2555,7 +2514,7 @@ export const requestItemsByCategoryId = protectedProcedure
           type: "feed-items",
           categoryId: input.categoryId,
           feedItems: [],
-          visibilityFilter: input.visibilityFilter,
+          contentStatusFilter: input.contentStatusFilter,
           hasMore: false,
           nextCursor: null,
           replacesScope: input.cursor == null,
@@ -2577,7 +2536,7 @@ export const requestItemsByCategoryId = protectedProcedure
     try {
       const queryParts = buildPaginatedFeedItemQuery({
         scope: { type: "category", feedIds: feedIdsInCategory },
-        visibilityFilter: input.visibilityFilter,
+        contentStatusFilter: input.contentStatusFilter,
         cursor: input.cursor ?? null,
       });
 
@@ -2614,7 +2573,7 @@ export const requestItemsByCategoryId = protectedProcedure
             type: "feed-items",
             categoryId: input.categoryId,
             feedItems: chunk,
-            visibilityFilter: input.visibilityFilter,
+            contentStatusFilter: input.contentStatusFilter,
             hasMore,
             nextCursor,
             replacesScope: input.cursor == null && chunkIndex === 0,
@@ -2630,7 +2589,7 @@ export const requestItemsByCategoryId = protectedProcedure
             type: "feed-items",
             categoryId: input.categoryId,
             feedItems: [],
-            visibilityFilter: input.visibilityFilter,
+            contentStatusFilter: input.contentStatusFilter,
             hasMore: false,
             nextCursor: null,
             replacesScope: input.cursor == null,
@@ -2698,7 +2657,7 @@ export const revalidateView = protectedProcedure
 
       try {
         const { items } = await queryFeedItemsForView(context, view, {
-          visibilityFilter: "unread",
+          contentStatusFilter: DEFAULT_CONTENT_STATUS_FILTER,
           feedIds,
           cursor: null,
           limit: REVALIDATE_VIEW_CHUNK_SIZE,
@@ -2730,7 +2689,7 @@ export const revalidateView = protectedProcedure
 
     yield* queryAndYieldScope(targetPageData);
 
-    if (targetPageData.view.id !== INBOX_VIEW_ID) {
+    if (targetPageData.view.id !== UNCATEGORIZED_VIEW_ID) {
       try {
         const uncategorizedPageData = await fetchUncategorizedPageData(
           context,
@@ -2753,12 +2712,12 @@ export const revalidateView = protectedProcedure
     return;
   });
 
-export type GetItemsByVisibilityChunk =
+export type GetItemsByContentStatusChunk =
   | {
       type: "feed-items";
       viewId: number;
       feedItems: ApplicationFeedItem[];
-      visibilityFilter: string;
+      contentStatusFilter: ContentStatusFilter;
       hasMore: boolean;
       nextCursor: PaginationCursor;
       replacesScope?: boolean;
@@ -2767,7 +2726,7 @@ export type GetItemsByVisibilityChunk =
   | {
       type: "view-diff";
       viewId: number;
-      visibilityFilter: string;
+      contentStatusFilter: ContentStatusFilter;
       diff: DiffEntry[];
       cursor: PaginationCursor;
       hasMore: boolean;
@@ -2781,7 +2740,7 @@ export type GetItemsByFeedChunk =
       type: "feed-items";
       feedId: number;
       feedItems: ApplicationFeedItem[];
-      visibilityFilter: string;
+      contentStatusFilter: ContentStatusFilter;
       hasMore: boolean;
       nextCursor: PaginationCursor;
       replacesScope?: boolean;
@@ -2793,7 +2752,7 @@ export type GetItemsByCategoryIdChunk =
       type: "feed-items";
       categoryId: number;
       feedItems: ApplicationFeedItem[];
-      visibilityFilter: string;
+      contentStatusFilter: ContentStatusFilter;
       hasMore: boolean;
       nextCursor: PaginationCursor;
       replacesScope?: boolean;
@@ -2801,15 +2760,15 @@ export type GetItemsByCategoryIdChunk =
   | { type: "error"; message: string; phase: string };
 
 /**
- * Fetch items for a specific visibility filter with cursor-based pagination.
- * Used for lazy loading "read" and "later" visibility filters,
+ * Fetch items for a specific content-status filter with cursor-based pagination.
+ * Used for lazy loading non-default content-status pages,
  * and for infinite scroll pagination.
  */
-export const getItemsByVisibility = protectedProcedure
+export const getItemsByContentStatus = protectedProcedure
   .input(
     z.object({
       viewId: z.number(),
-      visibilityFilter: visibilityFilterSchema,
+      contentStatusFilter: contentStatusFilterSchema,
       cursor: cursorSchema.optional(),
       limit: z.number().min(1).max(500).optional(),
     }),
@@ -2817,7 +2776,7 @@ export const getItemsByVisibility = protectedProcedure
   .handler(async function* ({
     context,
     input,
-  }): AsyncGenerator<GetItemsByVisibilityChunk> {
+  }): AsyncGenerator<GetItemsByContentStatusChunk> {
     const limit = input.limit ?? ITEMS_PER_PAGE;
 
     let pageData: ScopedViewPageData | null;
@@ -2852,7 +2811,7 @@ export const getItemsByVisibility = protectedProcedure
         type: "feed-items",
         viewId: input.viewId,
         feedItems: [],
-        visibilityFilter: input.visibilityFilter,
+        contentStatusFilter: input.contentStatusFilter,
         hasMore: false,
         nextCursor: null,
         replacesScope: input.cursor == null,
@@ -2873,21 +2832,21 @@ export const getItemsByVisibility = protectedProcedure
         customViews: [],
         applicationFeeds,
         membershipResolved: true,
-        visibilityFilter: input.visibilityFilter,
+        contentStatusFilter: input.contentStatusFilter,
         cursor: input.cursor ?? null,
         limit,
       });
 
       const chunks = prepareArrayChunks(
         applicationFeedItems,
-        ITEMS_BY_VISIBILITY_CHUNK_SIZE,
+        ITEMS_BY_CONTENT_STATUS_CHUNK_SIZE,
       );
       for (const [chunkIndex, chunk] of chunks.entries()) {
         yield {
           type: "feed-items",
           viewId: input.viewId,
           feedItems: chunk,
-          visibilityFilter: input.visibilityFilter,
+          contentStatusFilter: input.contentStatusFilter,
           hasMore,
           nextCursor,
           replacesScope: input.cursor == null && chunkIndex === 0,
@@ -2899,7 +2858,7 @@ export const getItemsByVisibility = protectedProcedure
           type: "feed-items",
           viewId: input.viewId,
           feedItems: [],
-          visibilityFilter: input.visibilityFilter,
+          contentStatusFilter: input.contentStatusFilter,
           hasMore: false,
           nextCursor: null,
           replacesScope: input.cursor == null,

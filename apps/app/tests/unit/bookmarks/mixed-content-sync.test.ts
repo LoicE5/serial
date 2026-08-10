@@ -13,7 +13,7 @@ import {
 } from "~/lib/data/mixed-content/store";
 import { projectLocalMixedContentOrder } from "~/lib/data/mixed-content/bookmarkProjection";
 import { viewsStore } from "~/lib/data/views/store";
-import { INBOX_VIEW_ID } from "~/lib/data/views/constants";
+import { UNCATEGORIZED_VIEW_ID } from "~/lib/data/views/constants";
 import { processPublishedChunks } from "~/lib/data/subscriptionCoordinator";
 import {
   partitionMixedReadTargets,
@@ -171,7 +171,7 @@ describe("Bookmark synchronization and local mixed reprojection", () => {
         bookmarks: { assigned, unassigned },
         scope: { type: "view", viewId: 10 },
         views: allViews,
-        visibility: "later",
+        contentStatus: { saveStatus: "saved", archiveStatus: "unread" },
       }),
     ).toEqual(["assigned"]);
     expect(
@@ -181,7 +181,7 @@ describe("Bookmark synchronization and local mixed reprojection", () => {
         bookmarks: { assigned, unassigned },
         scope: { type: "view", viewId: 11 },
         views: allViews,
-        visibility: "later",
+        contentStatus: { saveStatus: "saved", archiveStatus: "unread" },
       }),
     ).toEqual([]);
     expect(
@@ -189,14 +189,14 @@ describe("Bookmark synchronization and local mixed reprojection", () => {
         feedItemIds: [],
         feedItems: {},
         bookmarks: { assigned, unassigned },
-        scope: { type: "view", viewId: INBOX_VIEW_ID },
+        scope: { type: "view", viewId: UNCATEGORIZED_VIEW_ID },
         views: allViews,
-        visibility: "later",
+        contentStatus: { saveStatus: "saved", archiveStatus: "unread" },
       }),
     ).toEqual(["unassigned"]);
   });
 
-  it("keeps local mixed Read projections ordered by View section", () => {
+  it("keeps local mixed Archived projections ordered by View section", () => {
     const sectionedView: ApplicationView = {
       ...view(),
       categoryIds: [100],
@@ -256,7 +256,7 @@ describe("Bookmark synchronization and local mixed reprojection", () => {
         },
         scope: { type: "view", viewId: 10 },
         views: [sectionedView],
-        visibility: "read",
+        contentStatus: { saveStatus: "inbox", archiveStatus: "archived" },
         feedCategories: [{ feedId: 2, categoryId: 100 }],
       }),
     ).toEqual([
@@ -275,7 +275,7 @@ describe("Bookmark synchronization and local mixed reprojection", () => {
         chunk: {
           type: "mixed-content-page",
           scope: { type: "view", viewId: 10 },
-          visibility: "later",
+          contentStatus: { saveStatus: "saved", archiveStatus: "unread" },
           page: {
             ...page([
               reference("bookmark", savedBookmark.id),
@@ -295,7 +295,10 @@ describe("Bookmark synchronization and local mixed reprojection", () => {
     expect(feedItemsStore.getState().feedItemsDict[item.id]).toEqual(item);
     expect(
       mixedContentStore.getState().scopes[
-        getMixedScopeKey({ type: "view", viewId: 10 }, "later")
+        getMixedScopeKey(
+          { type: "view", viewId: 10 },
+          { saveStatus: "saved", archiveStatus: "unread" },
+        )
       ]?.references,
     ).toHaveLength(2);
   });
@@ -322,7 +325,7 @@ describe("Bookmark synchronization and local mixed reprojection", () => {
         chunk: {
           type: "mixed-content-page",
           scope: { type: "view", viewId: 10 },
-          visibility: "later",
+          contentStatus: { saveStatus: "saved", archiveStatus: "unread" },
           page: {
             ...page([]),
             bookmarks,
@@ -357,7 +360,7 @@ describe("Bookmark synchronization and local mixed reprojection", () => {
     for (const target of [videosView, shortsView]) {
       mixedContentStore.getState().applyPage({
         scope: { type: "view", viewId: target.id },
-        visibility: "unread",
+        contentStatus: { saveStatus: "inbox", archiveStatus: "unread" },
         page: page(
           target.id === videosView.id
             ? [reference("feed-item", horizontal.id)]
@@ -386,14 +389,14 @@ describe("Bookmark synchronization and local mixed reprojection", () => {
 
     expect(
       affected
-        .map((scope) => getMixedScopeKey(scope.scope, scope.visibility))
+        .map((scope) => getMixedScopeKey(scope.scope, scope.contentStatus))
         .sort(),
-    ).toEqual(["view:10:unread", "view:11:unread"]);
+    ).toEqual(["view:10:inbox:unread", "view:11:inbox:unread"]);
     expect(
-      mixedContentStore.getState().scopes["view:10:unread"]?.references,
+      mixedContentStore.getState().scopes["view:10:inbox:unread"]?.references,
     ).toEqual([]);
     expect(
-      mixedContentStore.getState().scopes["view:11:unread"]?.references,
+      mixedContentStore.getState().scopes["view:11:inbox:unread"]?.references,
     ).toEqual([reference("feed-item", vertical.id)]);
   });
 
@@ -411,7 +414,7 @@ describe("Bookmark synchronization and local mixed reprojection", () => {
     feedItemsStore.getState().setFeedItem(original.id, original);
     mixedContentStore.getState().applyPage({
       scope: { type: "view", viewId: 10 },
-      visibility: "unread",
+      contentStatus: { saveStatus: "inbox", archiveStatus: "unread" },
       page: page([reference("feed-item", original.id)]),
       replacesScope: true,
       feedItems: feedItemsStore.getState().feedItemsDict,
@@ -434,7 +437,7 @@ describe("Bookmark synchronization and local mixed reprojection", () => {
     ]);
 
     expect(
-      mixedContentStore.getState().scopes["view:10:unread"]?.references,
+      mixedContentStore.getState().scopes["view:10:inbox:unread"]?.references,
     ).toEqual([]);
   });
 
@@ -452,7 +455,7 @@ describe("Bookmark synchronization and local mixed reprojection", () => {
     feedItemsStore.getState().setFeedItems([horizontal, vertical]);
     mixedContentStore.getState().applyPage({
       scope: { type: "view", viewId: 10 },
-      visibility: "unread",
+      contentStatus: { saveStatus: "inbox", archiveStatus: "unread" },
       page: page([reference("feed-item", horizontal.id)]),
       replacesScope: true,
       feedItems: feedItemsStore.getState().feedItemsDict,
@@ -470,11 +473,11 @@ describe("Bookmark synchronization and local mixed reprojection", () => {
     });
 
     expect(
-      mixedContentStore.getState().scopes["view:10:unread"]?.references,
+      mixedContentStore.getState().scopes["view:10:inbox:unread"]?.references,
     ).toEqual([reference("feed-item", vertical.id)]);
   });
 
-  it("suppresses matching Feed items immediately, moves Bookmark visibility, restores on deletion, and reports scopes for refill", () => {
+  it("suppresses matching Feed items immediately, moves Bookmark content status, restores on deletion, and reports scopes for refill", () => {
     const matchingOne = feedItem(
       "feed-match-one",
       "https://example.com/article#fragment",
@@ -490,7 +493,7 @@ describe("Bookmark synchronization and local mixed reprojection", () => {
     const scope = { type: "view" as const, viewId: 10 };
     mixedContentStore.getState().applyPage({
       scope,
-      visibility: "unread",
+      contentStatus: { saveStatus: "inbox", archiveStatus: "unread" },
       page: page([
         reference("feed-item", matchingOne.id),
         reference("feed-item", matchingTwo.id),
@@ -501,14 +504,14 @@ describe("Bookmark synchronization and local mixed reprojection", () => {
     });
     mixedContentStore.getState().applyPage({
       scope,
-      visibility: "read",
+      contentStatus: { saveStatus: "inbox", archiveStatus: "archived" },
       page: page([]),
       replacesScope: true,
       feedItems: feedItemsStore.getState().feedItemsDict,
     });
     mixedContentStore.getState().applyPage({
       scope,
-      visibility: "later",
+      contentStatus: { saveStatus: "saved", archiveStatus: "unread" },
       page: page([]),
       replacesScope: true,
       feedItems: feedItemsStore.getState().feedItemsDict,
@@ -523,8 +526,12 @@ describe("Bookmark synchronization and local mixed reprojection", () => {
     ]);
     expect(affectedOnSave).toHaveLength(2);
     expect(
-      mixedContentStore.getState().scopes[getMixedScopeKey(scope, "unread")]
-        ?.references,
+      mixedContentStore.getState().scopes[
+        getMixedScopeKey(scope, {
+          saveStatus: "inbox",
+          archiveStatus: "unread",
+        })
+      ]?.references,
     ).toEqual([reference("feed-item", other.id)]);
     expect(feedItemsStore.getState().feedItemsDict[matchingOne.id]).toEqual(
       matchingOne,
@@ -538,8 +545,12 @@ describe("Bookmark synchronization and local mixed reprojection", () => {
       },
     ]);
     expect(
-      mixedContentStore.getState().scopes[getMixedScopeKey(scope, "read")]
-        ?.references,
+      mixedContentStore.getState().scopes[
+        getMixedScopeKey(scope, {
+          saveStatus: "inbox",
+          archiveStatus: "archived",
+        })
+      ]?.references,
     ).toEqual([reference("bookmark", archived.id)]);
 
     const affectedOnDelete = processPublishedChunks([
@@ -554,8 +565,12 @@ describe("Bookmark synchronization and local mixed reprojection", () => {
     ]);
     expect(affectedOnDelete).toHaveLength(2);
     expect(
-      mixedContentStore.getState().scopes[getMixedScopeKey(scope, "unread")]
-        ?.references,
+      mixedContentStore.getState().scopes[
+        getMixedScopeKey(scope, {
+          saveStatus: "inbox",
+          archiveStatus: "unread",
+        })
+      ]?.references,
     ).toEqual([
       reference("feed-item", other.id),
       reference("feed-item", matchingTwo.id),
@@ -706,7 +721,7 @@ describe("Bookmark synchronization and local mixed reprojection", () => {
     bookmarksStore.getState().upsert(cached);
     mixedContentStore.getState().applyPage({
       scope: { type: "view", viewId: 10 },
-      visibility: "later",
+      contentStatus: { saveStatus: "saved", archiveStatus: "unread" },
       page: page([reference("bookmark", cached.id)]),
       replacesScope: true,
       feedItems: {},
@@ -729,7 +744,10 @@ describe("Bookmark synchronization and local mixed reprojection", () => {
     expect(affected).toHaveLength(1);
     expect(
       mixedContentStore.getState().scopes[
-        getMixedScopeKey({ type: "view", viewId: 10 }, "later")
+        getMixedScopeKey(
+          { type: "view", viewId: 10 },
+          { saveStatus: "saved", archiveStatus: "unread" },
+        )
       ]?.references,
     ).toEqual([]);
   });
@@ -741,7 +759,7 @@ describe("Bookmark synchronization and local mixed reprojection", () => {
     feedItemsStore.getState().setFeedItem(item.id, item);
     mixedContentStore.getState().applyPage({
       scope: { type: "view", viewId: 10 },
-      visibility: "later",
+      contentStatus: { saveStatus: "saved", archiveStatus: "unread" },
       page: page([reference("feed-item", item.id)]),
       replacesScope: true,
       feedItems: feedItemsStore.getState().feedItemsDict,
@@ -763,7 +781,10 @@ describe("Bookmark synchronization and local mixed reprojection", () => {
     expect(bookmarksStore.getState().getBookmark(cached.id)).toBeUndefined();
     expect(
       mixedContentStore.getState().scopes[
-        getMixedScopeKey({ type: "view", viewId: 10 }, "later")
+        getMixedScopeKey(
+          { type: "view", viewId: 10 },
+          { saveStatus: "saved", archiveStatus: "unread" },
+        )
       ]?.references,
     ).toEqual([reference("feed-item", item.id)]);
   });
@@ -780,14 +801,14 @@ describe("Bookmark synchronization and local mixed reprojection", () => {
     ];
     mixedContentStore.getState().applyPage({
       scope,
-      visibility: "unread",
+      contentStatus: { saveStatus: "inbox", archiveStatus: "unread" },
       page: page(references),
       replacesScope: true,
       feedItems: feedItemsStore.getState().feedItemsDict,
     });
     mixedContentStore.getState().applyPage({
       scope,
-      visibility: "read",
+      contentStatus: { saveStatus: "inbox", archiveStatus: "archived" },
       page: page([]),
       replacesScope: true,
       feedItems: feedItemsStore.getState().feedItemsDict,
@@ -813,15 +834,20 @@ describe("Bookmark synchronization and local mixed reprojection", () => {
       true,
     );
     expect(
-      mixedContentStore.getState().scopes[getMixedScopeKey(scope, "unread")]
-        ?.references,
+      mixedContentStore.getState().scopes[
+        getMixedScopeKey(scope, {
+          saveStatus: "inbox",
+          archiveStatus: "unread",
+        })
+      ]?.references,
     ).toEqual([]);
     expect(
-      mixedContentStore
-        .getState()
-        .scopes[getMixedScopeKey(scope, "read")]?.references.map(
-          ({ entityId }) => entityId,
-        ),
+      mixedContentStore.getState().scopes[
+        getMixedScopeKey(scope, {
+          saveStatus: "inbox",
+          archiveStatus: "archived",
+        })
+      ]?.references.map(({ entityId }) => entityId),
     ).toEqual([archivedBookmark.id, item.id]);
 
     await setMixedReadValue({ references, isRead: false });
@@ -832,15 +858,20 @@ describe("Bookmark synchronization and local mixed reprojection", () => {
       false,
     );
     expect(
-      mixedContentStore
-        .getState()
-        .scopes[getMixedScopeKey(scope, "unread")]?.references.map(
-          ({ entityId }) => entityId,
-        ),
+      mixedContentStore.getState().scopes[
+        getMixedScopeKey(scope, {
+          saveStatus: "inbox",
+          archiveStatus: "unread",
+        })
+      ]?.references.map(({ entityId }) => entityId),
     ).toEqual([archivedBookmark.id, item.id]);
     expect(
-      mixedContentStore.getState().scopes[getMixedScopeKey(scope, "read")]
-        ?.references,
+      mixedContentStore.getState().scopes[
+        getMixedScopeKey(scope, {
+          saveStatus: "inbox",
+          archiveStatus: "archived",
+        })
+      ]?.references,
     ).toEqual([]);
     expect(orpcMocks.setBookmarkBulkReadValue).toHaveBeenNthCalledWith(2, {
       bookmarkIds: [archivedBookmark.id],
@@ -859,14 +890,14 @@ describe("Bookmark synchronization and local mixed reprojection", () => {
     const references = [reference("bookmark", unreadBookmark.id)];
     mixedContentStore.getState().applyPage({
       scope,
-      visibility: "unread",
+      contentStatus: { saveStatus: "inbox", archiveStatus: "unread" },
       page: page(references),
       replacesScope: true,
       feedItems: feedItemsStore.getState().feedItemsDict,
     });
     mixedContentStore.getState().applyPage({
       scope,
-      visibility: "read",
+      contentStatus: { saveStatus: "inbox", archiveStatus: "archived" },
       page: page([]),
       replacesScope: true,
       feedItems: feedItemsStore.getState().feedItemsDict,
@@ -883,12 +914,20 @@ describe("Bookmark synchronization and local mixed reprojection", () => {
       bookmarksStore.getState().getBookmark(unreadBookmark.id)?.isRead,
     ).toBe(false);
     expect(
-      mixedContentStore.getState().scopes[getMixedScopeKey(scope, "unread")]
-        ?.references,
+      mixedContentStore.getState().scopes[
+        getMixedScopeKey(scope, {
+          saveStatus: "inbox",
+          archiveStatus: "unread",
+        })
+      ]?.references,
     ).toEqual(references);
     expect(
-      mixedContentStore.getState().scopes[getMixedScopeKey(scope, "read")]
-        ?.references,
+      mixedContentStore.getState().scopes[
+        getMixedScopeKey(scope, {
+          saveStatus: "inbox",
+          archiveStatus: "archived",
+        })
+      ]?.references,
     ).toEqual([]);
   });
 });

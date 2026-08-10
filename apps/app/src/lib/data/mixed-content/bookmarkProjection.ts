@@ -1,5 +1,4 @@
-import { INBOX_VIEW_ID } from "../views/constants";
-import type { VisibilityFilter } from "../atoms";
+import { UNCATEGORIZED_VIEW_ID } from "../views/constants";
 import type {
   ApplicationFeedItem,
   ApplicationView,
@@ -11,11 +10,13 @@ import type {
   MixedContentReference,
   MixedContentScope,
 } from "~/server/mixed-content/projection";
+import type { ContentStatusFilter } from "~/lib/content-status";
+import { buildContentStatusKey } from "~/lib/content-status";
 import { contentFilterAllowsDescriptor } from "~/lib/views/contentFilter";
 
 export type LoadedMixedScope = {
   scope: MixedContentScope;
-  visibility: VisibilityFilter;
+  contentStatus: ContentStatusFilter;
   references: MixedContentReference[];
   cursor: MixedContentCursor;
   hasMore: boolean;
@@ -30,11 +31,12 @@ export type ProjectionIndexes = {
 
 export function getMixedScopeKey(
   scope: MixedContentScope,
-  visibility: VisibilityFilter,
+  contentStatus: ContentStatusFilter,
 ) {
+  const contentStatusKey = buildContentStatusKey(contentStatus);
   return scope.type === "view"
-    ? `view:${scope.viewId}:${visibility}`
-    : `tag:${scope.tagId}:${visibility}`;
+    ? `view:${scope.viewId}:${contentStatusKey}`
+    : `tag:${scope.tagId}:${contentStatusKey}`;
 }
 
 function compareReferences(
@@ -220,11 +222,13 @@ export function buildProjectionIndexes(
   return indexes;
 }
 
-export function bookmarkVisibility(
+export function bookmarkContentStatus(
   bookmark: ApplicationBookmark,
-): VisibilityFilter {
-  if (bookmark.isSaved) return "later";
-  return bookmark.isRead ? "read" : "unread";
+): ContentStatusFilter {
+  return {
+    saveStatus: bookmark.isSaved ? "saved" : "inbox",
+    archiveStatus: bookmark.isRead ? "archived" : "unread",
+  };
 }
 
 function sameIds(left: number[], right: number[]) {
@@ -253,17 +257,17 @@ export function isBookmarkProjectionChange(
     return true;
   }
 
-  const visibility = bookmarkVisibility(bookmark);
-  if (visibility === "later") {
-    return (
-      previousBookmark.savedUpdatedAt.getTime() !==
-      bookmark.savedUpdatedAt.getTime()
-    );
-  }
-  if (visibility === "read") {
+  const contentStatus = bookmarkContentStatus(bookmark);
+  if (contentStatus.archiveStatus === "archived") {
     return (
       previousBookmark.readUpdatedAt.getTime() !==
       bookmark.readUpdatedAt.getTime()
+    );
+  }
+  if (contentStatus.saveStatus === "saved") {
+    return (
+      previousBookmark.savedUpdatedAt.getTime() !==
+      bookmark.savedUpdatedAt.getTime()
     );
   }
   return false;
@@ -286,7 +290,9 @@ function getViewMembershipIndex(views: ApplicationView[]) {
   if (views === indexedViews && cachedViewMembershipIndex) {
     return cachedViewMembershipIndex;
   }
-  const compatibleViews = views.filter((view) => view.id !== INBOX_VIEW_ID);
+  const compatibleViews = views.filter(
+    (view) => view.id !== UNCATEGORIZED_VIEW_ID,
+  );
   const viewIdsByTagId = new Map<number, number[]>();
   for (const view of compatibleViews) {
     for (const tagId of view.categoryIds) {
@@ -339,10 +345,10 @@ export function matchingLoadedScopeKeys(
   scopes: Record<string, LoadedMixedScope>,
   views: ApplicationView[],
 ) {
-  const visibility = bookmarkVisibility(bookmark);
+  const contentStatus = bookmarkContentStatus(bookmark);
   const keys = new Set<string>();
   for (const tagId of bookmark.tagIds) {
-    const key = getMixedScopeKey({ type: "tag", tagId }, visibility);
+    const key = getMixedScopeKey({ type: "tag", tagId }, contentStatus);
     if (scopes[key]) keys.add(key);
   }
 
@@ -351,16 +357,19 @@ export function matchingLoadedScopeKeys(
     const view = index.compatibleViewsById.get(viewId);
     if (!view) continue;
     if (!isInsideTimeWindow(bookmark.createdAt, view.daysWindow)) continue;
-    const key = getMixedScopeKey({ type: "view", viewId: view.id }, visibility);
+    const key = getMixedScopeKey(
+      { type: "view", viewId: view.id },
+      contentStatus,
+    );
     if (scopes[key]) keys.add(key);
   }
 
   if (matchingIds.size === 0) {
-    const inboxKey = getMixedScopeKey(
-      { type: "view", viewId: INBOX_VIEW_ID },
-      visibility,
+    const uncategorizedKey = getMixedScopeKey(
+      { type: "view", viewId: UNCATEGORIZED_VIEW_ID },
+      contentStatus,
     );
-    if (scopes[inboxKey]) keys.add(inboxKey);
+    if (scopes[uncategorizedKey]) keys.add(uncategorizedKey);
   }
   return keys;
 }
@@ -372,7 +381,7 @@ export function matchesScope(
 ) {
   if (scope.type === "tag") return bookmark.tagIds.includes(scope.tagId);
   const { index, matchingIds } = matchingCustomViewIds(bookmark, views);
-  if (scope.viewId === INBOX_VIEW_ID) {
+  if (scope.viewId === UNCATEGORIZED_VIEW_ID) {
     return matchingIds.size === 0;
   }
   const view = index.compatibleViewsById.get(scope.viewId);
@@ -385,23 +394,25 @@ export function matchesScope(
 
 function feedItemNormalizedAt(
   item: ApplicationFeedItem,
-  visibility: VisibilityFilter,
+  contentStatus: ContentStatusFilter,
 ) {
-  if (visibility === "later") {
-    return item.isWatchLaterUpdatedAt ?? item.postedAt;
-  }
-  if (visibility === "read") {
+  if (contentStatus.archiveStatus === "archived") {
     return item.isWatchedUpdatedAt ?? item.postedAt;
+  }
+  if (contentStatus.saveStatus === "saved") {
+    return item.isWatchLaterUpdatedAt ?? item.postedAt;
   }
   return item.postedAt;
 }
 
 function bookmarkNormalizedAt(
   bookmark: ApplicationBookmark,
-  visibility: VisibilityFilter,
+  contentStatus: ContentStatusFilter,
 ) {
-  if (visibility === "later") return bookmark.savedUpdatedAt;
-  if (visibility === "read") return bookmark.readUpdatedAt;
+  if (contentStatus.archiveStatus === "archived") {
+    return bookmark.readUpdatedAt;
+  }
+  if (contentStatus.saveStatus === "saved") return bookmark.savedUpdatedAt;
   return bookmark.createdAt;
 }
 
@@ -447,7 +458,7 @@ export function projectLocalMixedContentOrder(input: {
   bookmarks: Record<string, ApplicationBookmark>;
   scope: MixedContentScope;
   views: ApplicationView[];
-  visibility: VisibilityFilter;
+  contentStatus: ContentStatusFilter;
   feedCategories?: DatabaseFeedCategory[];
 }) {
   const {
@@ -456,7 +467,7 @@ export function projectLocalMixedContentOrder(input: {
     bookmarks,
     scope,
     views,
-    visibility,
+    contentStatus,
     feedCategories = [],
   } = input;
   const bookmarkValues = Object.values(bookmarks);
@@ -491,7 +502,7 @@ export function projectLocalMixedContentOrder(input: {
     entries.push({
       id,
       entityKind: "feed-item",
-      normalizedAt: feedItemNormalizedAt(item, visibility),
+      normalizedAt: feedItemNormalizedAt(item, contentStatus),
       sectionPlacement: localSectionPlacement({
         entityKind: "feed-item",
         feedId: item.feedId,
@@ -501,12 +512,17 @@ export function projectLocalMixedContentOrder(input: {
     });
   }
   for (const bookmark of bookmarkValues) {
-    if (bookmarkVisibility(bookmark) !== visibility) continue;
+    if (
+      buildContentStatusKey(bookmarkContentStatus(bookmark)) !==
+      buildContentStatusKey(contentStatus)
+    ) {
+      continue;
+    }
     if (!matchesScope(bookmark, scope, views)) continue;
     entries.push({
       id: bookmark.id,
       entityKind: "bookmark",
-      normalizedAt: bookmarkNormalizedAt(bookmark, visibility),
+      normalizedAt: bookmarkNormalizedAt(bookmark, contentStatus),
       sectionPlacement: localSectionPlacement({
         entityKind: "bookmark",
         tagIds: bookmark.tagIds,
@@ -549,12 +565,7 @@ export function bookmarkReference(
           section.itemType === "tag" && bookmarkTagIds.has(section.itemId),
       )
       .map((section) => section.placement) ?? [];
-  const normalizedAt =
-    scopeState.visibility === "later"
-      ? bookmark.savedUpdatedAt
-      : scopeState.visibility === "read"
-        ? bookmark.readUpdatedAt
-        : bookmark.createdAt;
+  const normalizedAt = bookmarkNormalizedAt(bookmark, scopeState.contentStatus);
   return {
     entityKind: "bookmark",
     entityId: bookmark.id,

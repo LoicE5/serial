@@ -1,3 +1,5 @@
+import type { ContentStatusFilter } from "~/lib/content-status";
+
 export const PERFORMANCE_CEILING = 1.5;
 
 export const BENCHMARK_PROFILES = {
@@ -37,7 +39,7 @@ export type StatementMeasurement = {
 export type OperationSample = {
   operation: OperationName;
   cache: CacheProfile;
-  visibility: "unread" | "read" | "later";
+  contentStatus: ContentStatusFilter;
   fullDurationMs: number;
   databaseDurationMs: number;
   databaseWallMs: number;

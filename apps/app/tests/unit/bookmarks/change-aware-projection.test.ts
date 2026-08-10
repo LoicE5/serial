@@ -7,6 +7,7 @@ import type {
   MixedContentScope,
 } from "~/server/mixed-content/projection";
 import type { PublishedChunk } from "~/server/api/publisher";
+import type { ContentStatusFilter } from "~/lib/content-status";
 import { bookmarksStore } from "~/lib/data/bookmarks/store";
 import { feedItemsStore } from "~/lib/data/store";
 import {
@@ -15,6 +16,11 @@ import {
 } from "~/lib/data/mixed-content/store";
 import { viewsStore } from "~/lib/data/views/store";
 import { processPublishedChunks } from "~/lib/data/subscriptionCoordinator";
+import {
+  buildContentStatusKey,
+  CONTENT_STATUS_FILTERS,
+  SAVED_UNREAD_CONTENT_STATUS,
+} from "~/lib/content-status";
 
 const NOW = new Date("2026-07-31T12:00:00.000Z");
 
@@ -103,12 +109,12 @@ function page(references: MixedContentReference[]): MixedContentPage {
 
 function loadScope(
   scope: MixedContentScope,
-  visibility: "unread" | "read" | "later",
+  contentStatus: ContentStatusFilter,
   references: MixedContentReference[] = [],
 ) {
   mixedContentStore.getState().applyPage({
     scope,
-    visibility,
+    contentStatus,
     page: page(references),
     replacesScope: true,
     feedItems: feedItemsStore.getState().feedItemsDict,
@@ -134,11 +140,12 @@ describe("change-aware Bookmark projection", () => {
     const saved = bookmark();
     bookmarksStore.getState().upsert(saved);
     for (const targetView of [10, 11, 12]) {
-      for (const visibility of ["unread", "read", "later"] as const) {
+      for (const contentStatus of CONTENT_STATUS_FILTERS) {
         loadScope(
           { type: "view", viewId: targetView },
-          visibility,
-          targetView === 10 && visibility === "later"
+          contentStatus,
+          targetView === 10 &&
+            buildContentStatusKey(contentStatus) === "saved:unread"
             ? [reference(saved.id)]
             : [],
         );
@@ -178,22 +185,23 @@ describe("change-aware Bookmark projection", () => {
     });
   });
 
-  it("updates only old and new membership, visibility, and ordering scopes", () => {
+  it("updates only old and new membership, content-status, and ordering scopes", () => {
     const saved = bookmark();
     bookmarksStore.getState().upsert(saved);
     for (const targetView of [10, 11, 12]) {
-      for (const visibility of ["unread", "read", "later"] as const) {
+      for (const contentStatus of CONTENT_STATUS_FILTERS) {
         loadScope(
           { type: "view", viewId: targetView },
-          visibility,
-          targetView === 10 && visibility === "later"
+          contentStatus,
+          targetView === 10 &&
+            buildContentStatusKey(contentStatus) === "saved:unread"
             ? [reference(saved.id)]
             : [],
         );
       }
     }
-    for (const visibility of ["unread", "read", "later"] as const) {
-      loadScope({ type: "tag", tagId: 5 }, visibility);
+    for (const contentStatus of CONTENT_STATUS_FILTERS) {
+      loadScope({ type: "tag", tagId: 5 }, contentStatus);
     }
 
     const moved = bookmark({
@@ -204,9 +212,13 @@ describe("change-aware Bookmark projection", () => {
     const organizationScopes = processPublishedChunks([upsertPayload(moved)]);
     expect(
       organizationScopes
-        .map((scope) => getMixedScopeKey(scope.scope, scope.visibility))
+        .map((scope) => getMixedScopeKey(scope.scope, scope.contentStatus))
         .sort(),
-    ).toEqual(["tag:5:later", "view:10:later", "view:11:later"]);
+    ).toEqual([
+      "tag:5:saved:unread",
+      "view:10:saved:unread",
+      "view:11:saved:unread",
+    ]);
 
     const unread = bookmark({
       viewIds: [11],
@@ -214,16 +226,16 @@ describe("change-aware Bookmark projection", () => {
       isSaved: false,
       updatedAt: new Date(NOW.getTime() + 2),
     });
-    const visibilityScopes = processPublishedChunks([upsertPayload(unread)]);
+    const contentStatusScopes = processPublishedChunks([upsertPayload(unread)]);
     expect(
-      visibilityScopes
-        .map((scope) => getMixedScopeKey(scope.scope, scope.visibility))
+      contentStatusScopes
+        .map((scope) => getMixedScopeKey(scope.scope, scope.contentStatus))
         .sort(),
     ).toEqual([
-      "tag:5:later",
-      "tag:5:unread",
-      "view:11:later",
-      "view:11:unread",
+      "tag:5:inbox:unread",
+      "tag:5:saved:unread",
+      "view:11:inbox:unread",
+      "view:11:saved:unread",
     ]);
 
     const reorderedAt = new Date(NOW.getTime() + 3);
@@ -236,18 +248,20 @@ describe("change-aware Bookmark projection", () => {
     ]);
     expect(
       orderingScopes
-        .map((scope) => getMixedScopeKey(scope.scope, scope.visibility))
+        .map((scope) => getMixedScopeKey(scope.scope, scope.contentStatus))
         .sort(),
-    ).toEqual(["tag:5:unread", "view:11:unread"]);
+    ).toEqual(["tag:5:inbox:unread", "view:11:inbox:unread"]);
     expect(
-      mixedContentStore.getState().scopes["view:12:unread"]?.references,
+      mixedContentStore.getState().scopes["view:12:inbox:unread"]?.references,
     ).toEqual([]);
   });
 
   it("coalesces a same-frame entity-only burst without projection notifications", () => {
     const saved = bookmark();
     bookmarksStore.getState().upsert(saved);
-    loadScope({ type: "view", viewId: 10 }, "later", [reference(saved.id)]);
+    loadScope({ type: "view", viewId: 10 }, SAVED_UNREAD_CONTENT_STATUS, [
+      reference(saved.id),
+    ]);
     const burst = Array.from({ length: 100 }, (_, index) => {
       const changedAt = new Date(NOW.getTime() + index + 1);
       return upsertPayload({

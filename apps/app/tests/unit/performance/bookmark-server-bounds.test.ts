@@ -228,7 +228,7 @@ describe("Bookmark server performance bounds", () => {
       database: session.database,
       userId: "bounds-user",
       scope: { type: "view", viewId: 10 },
-      visibility: "later",
+      contentStatus: { saveStatus: "saved", archiveStatus: "unread" },
       limit: 30,
     });
     const firstEvidence = session.instrumentation.snapshot();
@@ -240,7 +240,7 @@ describe("Bookmark server performance bounds", () => {
       database: session.database,
       userId: "bounds-user",
       scope: { type: "view", viewId: 10 },
-      visibility: "later",
+      contentStatus: { saveStatus: "saved", archiveStatus: "unread" },
       cursor: firstPage.cursor,
       limit: 30,
     });
@@ -253,8 +253,7 @@ describe("Bookmark server performance bounds", () => {
       database: session.database,
       userId: "bounds-user",
       scope: { type: "view", viewId: 10 },
-      visibility: "later",
-      savedState: "archived",
+      contentStatus: { saveStatus: "saved", archiveStatus: "archived" },
       sectionPlacement: UNCATEGORIZED_SECTION_PLACEMENT,
       limit: 30,
     });
@@ -268,7 +267,7 @@ describe("Bookmark server performance bounds", () => {
       database: session.database,
       userId: "bounds-user",
       scope: { type: "tag", tagId: 20 },
-      visibility: "later",
+      contentStatus: { saveStatus: "saved", archiveStatus: "unread" },
       limit: 30,
     });
     const tagEvidence = session.instrumentation.snapshot();

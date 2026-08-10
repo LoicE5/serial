@@ -4,9 +4,9 @@ import { useAtomValue } from "jotai";
 import { useCallback, useMemo } from "react";
 import {
   categoryFilterAtom,
+  contentStatusFilterAtom,
   feedFilterAtom,
   viewFilterAtom,
-  visibilityFilterAtom,
 } from "~/lib/data/atoms";
 import {
   useCategoryPaginationState,
@@ -21,6 +21,7 @@ import {
   mixedContentStore,
 } from "~/lib/data/mixed-content/store";
 import { dataSubscriptionActions } from "~/lib/data/useDataSubscription";
+import { buildContentStatusKey } from "~/lib/content-status";
 
 function waitForMixedScope(
   scopeKey: string,
@@ -55,7 +56,7 @@ export function useLoadMoreItems() {
   const feedFilter = useAtomValue(feedFilterAtom);
   const categoryFilter = useAtomValue(categoryFilterAtom);
   const currentView = useAtomValue(viewFilterAtom);
-  const visibilityFilter = useAtomValue(visibilityFilterAtom);
+  const contentStatusFilter = useAtomValue(contentStatusFilterAtom);
 
   const viewPaginationState = useViewPaginationState();
   const feedPaginationState = useFeedPaginationState();
@@ -71,27 +72,28 @@ export function useLoadMoreItems() {
     feedFilter >= 0 ? "feed" : categoryFilter >= 0 ? "category" : "view";
 
   const viewId = currentView?.id;
+  const contentStatusKey = buildContentStatusKey(contentStatusFilter);
   let paginationKey: string;
   switch (activeFilterType) {
     case "feed":
-      paginationKey = `feed:${feedFilter}:${visibilityFilter}`;
+      paginationKey = `feed:${feedFilter}:${contentStatusKey}`;
       break;
     case "category":
-      paginationKey = `category:${categoryFilter}:${visibilityFilter}`;
+      paginationKey = `category:${categoryFilter}:${contentStatusKey}`;
       break;
     default:
-      paginationKey = `view:${viewId ?? "none"}:${visibilityFilter}`;
+      paginationKey = `view:${viewId ?? "none"}:${contentStatusKey}`;
   }
 
   const paginationState = useMemo(() => {
     switch (activeFilterType) {
       case "feed":
-        return feedPaginationState[feedFilter]?.[visibilityFilter];
+        return feedPaginationState[feedFilter]?.[contentStatusKey];
       case "category":
-        return categoryPaginationState[categoryFilter]?.[visibilityFilter];
+        return categoryPaginationState[categoryFilter]?.[contentStatusKey];
       default:
         return viewId
-          ? viewPaginationState[viewId]?.[visibilityFilter]
+          ? viewPaginationState[viewId]?.[contentStatusKey]
           : undefined;
     }
   }, [
@@ -99,7 +101,7 @@ export function useLoadMoreItems() {
     feedFilter,
     categoryFilter,
     viewId,
-    visibilityFilter,
+    contentStatusKey,
     feedPaginationState,
     categoryPaginationState,
     viewPaginationState,
@@ -115,7 +117,7 @@ export function useLoadMoreItems() {
     [activeFilterType, categoryFilter, viewId],
   );
   const mixedScopeKey = mixedScope
-    ? getMixedScopeKey(mixedScope, visibilityFilter)
+    ? getMixedScopeKey(mixedScope, contentStatusFilter)
     : null;
   const mixedPaginationState = mixedScopeKey
     ? mixedScopes[mixedScopeKey]
@@ -132,7 +134,7 @@ export function useLoadMoreItems() {
         if (!resetCursor && !existingScope) {
           await dataSubscriptionActions.requestMixedContentPage(
             mixedScope,
-            visibilityFilter,
+            contentStatusFilter,
             null,
           );
           const initializedScope = await waitForMixedScope(
@@ -142,7 +144,7 @@ export function useLoadMoreItems() {
           if (!initializedScope?.hasMore || !initializedScope.cursor) return;
           await dataSubscriptionActions.requestMixedContentPage(
             mixedScope,
-            visibilityFilter,
+            contentStatusFilter,
             initializedScope.cursor,
           );
           await waitForMixedScope(
@@ -153,7 +155,7 @@ export function useLoadMoreItems() {
         }
         await dataSubscriptionActions.requestMixedContentPage(
           mixedScope,
-          visibilityFilter,
+          contentStatusFilter,
           resetCursor ? null : existingScope?.cursor,
         );
         if (existingScope) {
@@ -166,19 +168,19 @@ export function useLoadMoreItems() {
         mixedContentStore.getState().setScopeFetching(mixedScopeKey, false);
       }
     },
-    [mixedScope, mixedScopeKey, visibilityFilter],
+    [mixedScope, mixedScopeKey, contentStatusFilter],
   );
 
   const handleLoadMore = useCallback(() => {
     if (mixedScope) return requestMixedPage(false);
     switch (activeFilterType) {
       case "feed":
-        return fetchMoreItemsForFeed(feedFilter, visibilityFilter);
+        return fetchMoreItemsForFeed(feedFilter, contentStatusFilter);
       case "category":
-        return fetchMoreItemsForCategory(categoryFilter, visibilityFilter);
+        return fetchMoreItemsForCategory(categoryFilter, contentStatusFilter);
       default:
         if (viewId) {
-          return fetchMoreItems(viewId, visibilityFilter);
+          return fetchMoreItems(viewId, contentStatusFilter);
         }
         return Promise.resolve();
     }
@@ -187,7 +189,7 @@ export function useLoadMoreItems() {
     feedFilter,
     categoryFilter,
     viewId,
-    visibilityFilter,
+    contentStatusFilter,
     fetchMoreItemsForFeed,
     fetchMoreItemsForCategory,
     fetchMoreItems,
@@ -199,16 +201,16 @@ export function useLoadMoreItems() {
     if (mixedScope) return requestMixedPage(true);
     switch (activeFilterType) {
       case "feed":
-        return fetchMoreItemsForFeed(feedFilter, visibilityFilter, {
+        return fetchMoreItemsForFeed(feedFilter, contentStatusFilter, {
           force: true,
         });
       case "category":
-        return fetchMoreItemsForCategory(categoryFilter, visibilityFilter, {
+        return fetchMoreItemsForCategory(categoryFilter, contentStatusFilter, {
           force: true,
         });
       default:
         if (viewId) {
-          return fetchMoreItems(viewId, visibilityFilter, { force: true });
+          return fetchMoreItems(viewId, contentStatusFilter, { force: true });
         }
         return Promise.resolve();
     }
@@ -217,7 +219,7 @@ export function useLoadMoreItems() {
     feedFilter,
     categoryFilter,
     viewId,
-    visibilityFilter,
+    contentStatusFilter,
     fetchMoreItemsForFeed,
     fetchMoreItemsForCategory,
     fetchMoreItems,
