@@ -5,6 +5,12 @@ import type {
   ContentAvailability,
   ContentStatusFilter,
 } from "~/lib/content-status";
+import {
+  INBOX_ARCHIVED_CONTENT_STATUS,
+  INBOX_UNREAD_CONTENT_STATUS,
+  SAVED_ARCHIVED_CONTENT_STATUS,
+  SAVED_UNREAD_CONTENT_STATUS,
+} from "~/lib/content-status";
 import { UNCATEGORIZED_VIEW_ID } from "~/lib/data/views/constants";
 import { VIDEO_PLATFORMS } from "~/lib/data/feed-items/filters";
 import {
@@ -70,31 +76,14 @@ function hasAny(condition: SQL | undefined) {
   return sql<number>`CASE WHEN ${condition ?? sql`0`} THEN 1 ELSE 0 END`;
 }
 
-const INBOX_UNREAD = {
-  saveStatus: "inbox",
-  archiveStatus: "unread",
-} as const satisfies ContentStatusFilter;
-const INBOX_ARCHIVED = {
-  saveStatus: "inbox",
-  archiveStatus: "archived",
-} as const satisfies ContentStatusFilter;
-const SAVED_UNREAD = {
-  saveStatus: "saved",
-  archiveStatus: "unread",
-} as const satisfies ContentStatusFilter;
-const SAVED_ARCHIVED = {
-  saveStatus: "saved",
-  archiveStatus: "archived",
-} as const satisfies ContentStatusFilter;
-
 function availabilitySelection(
   contentStatusExists: (contentStatus: ContentStatusFilter) => SQL | undefined,
 ) {
   return {
-    inboxUnread: hasAny(contentStatusExists(INBOX_UNREAD)),
-    inboxArchived: hasAny(contentStatusExists(INBOX_ARCHIVED)),
-    savedUnread: hasAny(contentStatusExists(SAVED_UNREAD)),
-    savedArchived: hasAny(contentStatusExists(SAVED_ARCHIVED)),
+    inboxUnread: hasAny(contentStatusExists(INBOX_UNREAD_CONTENT_STATUS)),
+    inboxArchived: hasAny(contentStatusExists(INBOX_ARCHIVED_CONTENT_STATUS)),
+    savedUnread: hasAny(contentStatusExists(SAVED_UNREAD_CONTENT_STATUS)),
+    savedArchived: hasAny(contentStatusExists(SAVED_ARCHIVED_CONTENT_STATUS)),
   };
 }
 

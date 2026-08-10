@@ -1293,7 +1293,7 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
                 );
 
                 const viewId = initialChunk.viewId;
-                const vf = initialChunk.contentStatusFilter;
+                const contentStatusFilter = initialChunk.contentStatusFilter;
 
                 const updates: Partial<ApplicationStore> = {
                   feedItemsDict,
@@ -1305,12 +1305,17 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
                   const pendingCursors = { ...get()._pendingViewCursors };
                   pendingCursors[viewId] = {
                     ...pendingCursors[viewId],
-                    [buildContentStatusKey(vf)]: initialChunk.cursor,
+                    [buildContentStatusKey(contentStatusFilter)]:
+                      initialChunk.cursor,
                   };
                   updates._pendingViewCursors = pendingCursors;
                   updates.scopeFeedItemIds = applyMergedScopeMembershipUpdate({
                     scopeFeedItemIds: get().scopeFeedItemIds,
-                    scopeKey: getFeedItemScopeKey("view", viewId, vf),
+                    scopeKey: getFeedItemScopeKey(
+                      "view",
+                      viewId,
+                      contentStatusFilter,
+                    ),
                     itemIds: getServerItemIdsFromDiff(initialChunk.diff),
                     replace: true,
                     feedItemsDict,
@@ -1320,7 +1325,7 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
                     ...get().viewPaginationState,
                     [viewId]: {
                       ...get().viewPaginationState[viewId],
-                      [buildContentStatusKey(vf)]: {
+                      [buildContentStatusKey(contentStatusFilter)]: {
                         cursor: initialChunk.cursor,
                         hasMore: initialChunk.hasMore,
                         isFetching: false,
@@ -1329,12 +1334,12 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
                   };
 
                   // Track the fetched content status.
-                  if (vf) {
+                  if (contentStatusFilter) {
                     updates.fetchedContentStatusFilters = {
                       ...get().fetchedContentStatusFilters,
                       [viewId]: new Set([
                         ...(get().fetchedContentStatusFilters[viewId] ?? []),
-                        buildContentStatusKey(vf),
+                        buildContentStatusKey(contentStatusFilter),
                       ]),
                     };
                   }
@@ -1349,7 +1354,11 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
                 set(updates);
                 if (viewId !== undefined) {
                   get().retainFeedItemPage({
-                    scopeKey: getFeedItemScopeKey("view", viewId, vf),
+                    scopeKey: getFeedItemScopeKey(
+                      "view",
+                      viewId,
+                      contentStatusFilter,
+                    ),
                     itemIds: getServerItemIdsFromDiff(initialChunk.diff),
                     requestCursor: null,
                     nextCursor: initialChunk.cursor,
@@ -1388,14 +1397,18 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
                 }
 
                 const viewId = initialChunk.viewId;
-                const vf = initialChunk.contentStatusFilter;
+                const contentStatusFilter = initialChunk.contentStatusFilter;
 
                 const updates: Partial<ApplicationStore> = {
                   feedItemsDict,
                   feedItemsOrder,
                   scopeFeedItemIds: applyMergedScopeMembershipUpdate({
                     scopeFeedItemIds: get().scopeFeedItemIds,
-                    scopeKey: getFeedItemScopeKey("view", viewId, vf),
+                    scopeKey: getFeedItemScopeKey(
+                      "view",
+                      viewId,
+                      contentStatusFilter,
+                    ),
                     itemIds: initialChunk.items.map((item) => item.id),
                     replace: true,
                     feedItemsDict,
@@ -1412,14 +1425,15 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
                   const pendingCursors = { ...get()._pendingViewCursors };
                   pendingCursors[viewId] = {
                     ...pendingCursors[viewId],
-                    [buildContentStatusKey(vf)]: initialChunk.cursor,
+                    [buildContentStatusKey(contentStatusFilter)]:
+                      initialChunk.cursor,
                   };
                   updates._pendingViewCursors = pendingCursors;
                   updates.viewPaginationState = {
                     ...get().viewPaginationState,
                     [viewId]: {
                       ...get().viewPaginationState[viewId],
-                      [buildContentStatusKey(vf)]: {
+                      [buildContentStatusKey(contentStatusFilter)]: {
                         cursor: initialChunk.cursor,
                         hasMore: initialChunk.hasMore,
                         isFetching: false,
@@ -1428,12 +1442,12 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
                   };
 
                   // Track the fetched content status.
-                  if (vf) {
+                  if (contentStatusFilter) {
                     updates.fetchedContentStatusFilters = {
                       ...get().fetchedContentStatusFilters,
                       [viewId]: new Set([
                         ...(get().fetchedContentStatusFilters[viewId] ?? []),
-                        buildContentStatusKey(vf),
+                        buildContentStatusKey(contentStatusFilter),
                       ]),
                     };
                   }
@@ -1450,7 +1464,11 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
 
                 set(updates);
                 get().retainFeedItemPage({
-                  scopeKey: getFeedItemScopeKey("view", viewId, vf),
+                  scopeKey: getFeedItemScopeKey(
+                    "view",
+                    viewId,
+                    contentStatusFilter,
+                  ),
                   itemIds: initialChunk.items.map((item) => item.id),
                   requestCursor: null,
                   nextCursor: initialChunk.cursor,
@@ -1569,7 +1587,7 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
               const feedItemsDict = { ...get().feedItemsDict };
               const feedItemsOrder = [...get().feedItemsOrder];
               const existingIds = new Set(feedItemsOrder);
-              const vf = chunk.contentStatusFilter;
+              const contentStatusFilter = chunk.contentStatusFilter;
               applyDiffEntityUpdates(
                 feedItemsDict,
                 feedItemsOrder,
@@ -1582,12 +1600,16 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
                 hasMore: chunk.hasMore,
                 isFetching: false,
               };
-              const scopeKey = getFeedItemScopeKey("view", chunk.viewId, vf);
+              const scopeKey = getFeedItemScopeKey(
+                "view",
+                chunk.viewId,
+                contentStatusFilter,
+              );
               const requestCursor =
                 chunk.replacesScope === true
                   ? null
                   : get().viewPaginationState[chunk.viewId]?.[
-                      buildContentStatusKey(vf)
+                      buildContentStatusKey(contentStatusFilter)
                     ]?.cursor;
 
               set({
@@ -1605,14 +1627,15 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
                   ...get().viewPaginationState,
                   [chunk.viewId]: {
                     ...get().viewPaginationState[chunk.viewId],
-                    [buildContentStatusKey(vf)]: paginationState,
+                    [buildContentStatusKey(contentStatusFilter)]:
+                      paginationState,
                   },
                 },
                 fetchedContentStatusFilters: {
                   ...get().fetchedContentStatusFilters,
                   [chunk.viewId]: new Set([
                     ...(get().fetchedContentStatusFilters[chunk.viewId] ?? []),
-                    buildContentStatusKey(vf),
+                    buildContentStatusKey(contentStatusFilter),
                   ]),
                 },
               });
@@ -1877,15 +1900,20 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
               );
 
               // Track cursor
-              const vf = chunk.contentStatusFilter as ContentStatusFilter;
+              const contentStatusFilter =
+                chunk.contentStatusFilter as ContentStatusFilter;
               pendingCursors[chunk.viewId] = {
                 ...pendingCursors[chunk.viewId],
-                [buildContentStatusKey(vf)]: chunk.cursor,
+                [buildContentStatusKey(contentStatusFilter)]: chunk.cursor,
               };
               updates.scopeFeedItemIds = applyMergedScopeMembershipUpdate({
                 scopeFeedItemIds:
                   updates.scopeFeedItemIds ?? get().scopeFeedItemIds,
-                scopeKey: getFeedItemScopeKey("view", chunk.viewId, vf),
+                scopeKey: getFeedItemScopeKey(
+                  "view",
+                  chunk.viewId,
+                  contentStatusFilter,
+                ),
                 itemIds: getServerItemIdsFromDiff(chunk.diff),
                 replace: true,
                 feedItemsDict,
@@ -1893,7 +1921,7 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
               });
 
               // Track fetched filters
-              if (vf) {
+              if (contentStatusFilter) {
                 if (!filtersChanged) {
                   fetchedContentStatusFilters = {
                     ...fetchedContentStatusFilters,
@@ -1902,7 +1930,7 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
                 }
                 fetchedContentStatusFilters[chunk.viewId] = new Set([
                   ...(fetchedContentStatusFilters[chunk.viewId] ?? []),
-                  buildContentStatusKey(vf),
+                  buildContentStatusKey(contentStatusFilter),
                 ]);
               }
 

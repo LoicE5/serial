@@ -110,14 +110,14 @@ export function useDeleteViewMutation() {
 }
 
 export function calculateViewsPlacement(views: ApplicationView[]) {
-  const inboxIndex = views.findIndex(
+  const uncategorizedIndex = views.findIndex(
     (view) => view.id === UNCATEGORIZED_VIEW_ID,
   );
-  if (inboxIndex === -1) return views;
+  if (uncategorizedIndex === -1) return views;
 
   return views.map((view, viewIndex) => ({
     ...view,
-    placement: inboxIndex - viewIndex + UNCATEGORIZED_VIEW_PLACEMENT,
+    placement: uncategorizedIndex - viewIndex + UNCATEGORIZED_VIEW_PLACEMENT,
   }));
 }
 
