@@ -287,7 +287,7 @@ function startRequest<TAuthoritative, TLiveEvent>(
   intent: ReconciliationRequestIntent,
 ): ReconciliationCoordinatorTransition<TAuthoritative, TLiveEvent> {
   const targets = uniqueTargets(requestTargets(intent));
-  const reconciliationId = `${state.sessionId}:${state.nextReconciliationSequence}`;
+  const reconciliationId = `${state.sessionId}-${state.nextReconciliationSequence}`;
   const capturedRevisions = Object.fromEntries(
     targets.map((target) => [
       getReconciliationTargetKey(target),

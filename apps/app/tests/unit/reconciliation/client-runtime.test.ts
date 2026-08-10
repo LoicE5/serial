@@ -12,6 +12,7 @@ import {
   createReconciliationRuntime,
   getReconciliationTargetKey,
 } from "~/lib/reconciliation";
+import { reconciliationInputSchema } from "~/server/reconciliation/input";
 
 const ACTIVE_SCOPE: ReconciliationScopeTarget = {
   type: "scope",
@@ -152,6 +153,24 @@ function hydrate(runtime: ReturnType<typeof harness>["runtime"]) {
 }
 
 describe("client reconciliation runtime", () => {
+  it("generates reconciliation IDs accepted by the RPC transport", () => {
+    const test = harness(() => []);
+    test.runtime.start();
+    const request = test.runtime.getState().inFlight;
+    expect(request).not.toBeNull();
+    expect(
+      reconciliationInputSchema.safeParse({
+        type: "full",
+        reconciliationId: request?.reconciliationId,
+        selection: {
+          type: "cold",
+          contentStatus: { saveStatus: "inbox", archiveStatus: "unread" },
+          membershipRevision: 0,
+        },
+      }).success,
+    ).toBe(true);
+  });
+
   it("starts cold, buffers complete domains through hydration, and establishes parity", async () => {
     const test = harness((request) => completeEpoch(request.reconciliationId));
     test.runtime.start();
