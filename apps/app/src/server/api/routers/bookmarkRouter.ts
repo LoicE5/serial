@@ -138,6 +138,8 @@ export const updateState = protectedProcedure
       userId: context.user.id,
       bookmarkId: input.bookmarkId,
     });
+    // The invalidation summary needs the state from immediately before the mutation.
+    // react-doctor-disable-next-line react-doctor/server-sequential-independent-await
     const bookmark = await updateBookmarkState({
       database: context.db,
       userId: context.user.id,
@@ -219,6 +221,8 @@ export const setBulkReadValue = protectedProcedure
       userId: context.user.id,
       bookmarkIds: input.bookmarkIds,
     });
+    // The invalidation summary needs the state from immediately before the mutation.
+    // react-doctor-disable-next-line react-doctor/server-sequential-independent-await
     const updated = await updateBookmarksReadState({
       database: context.db,
       userId: context.user.id,
@@ -245,6 +249,8 @@ export const remove = protectedProcedure
       userId: context.user.id,
       bookmarkId: input.bookmarkId,
     });
+    // The deletion summary needs the state from immediately before the mutation.
+    // react-doctor-disable-next-line react-doctor/server-sequential-independent-await
     const deleted = await deleteBookmark({
       database: context.db,
       userId: context.user.id,
