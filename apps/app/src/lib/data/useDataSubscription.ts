@@ -179,8 +179,12 @@ export function useDataSubscription() {
 
     const handleVisibilityChange = () => {
       updateConnectionState();
+      dataReconciliation.environmentChanged();
     };
     document.addEventListener("visibilitychange", handleVisibilityChange);
+    const handleNetworkChange = () => dataReconciliation.environmentChanged();
+    window.addEventListener("online", handleNetworkChange);
+    window.addEventListener("offline", handleNetworkChange);
 
     // Recompute connection logic when the keep-alive atom changes
     const unsubscribeAtom = getDefaultStore().sub(
@@ -194,6 +198,8 @@ export function useDataSubscription() {
 
     return () => {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("online", handleNetworkChange);
+      window.removeEventListener("offline", handleNetworkChange);
       unsubscribeAtom();
       controller.abort();
       setDataSubscriptionConnected(false);

@@ -16,6 +16,21 @@ import {
   publishBookmarkUpsertBatch,
 } from "~/server/mixed-content/sync";
 import { loadApplicationBookmarksById } from "~/server/mixed-content/projection";
+import { ALL_CONTENT_STATUS_KEYS } from "~/lib/reconciliation";
+
+async function loadBookmarkBeforeMutation(input: {
+  database: Parameters<typeof loadApplicationBookmarksById>[0]["database"];
+  userId: string;
+  bookmarkId: string;
+}) {
+  return (
+    await loadApplicationBookmarksById({
+      database: input.database,
+      userId: input.userId,
+      bookmarkIds: [input.bookmarkId],
+    })
+  )[0];
+}
 
 const bookmarkIdSchema = z.string().min(1);
 const bookmarkUrlSchema = z.string().superRefine((value, context) => {
@@ -37,6 +52,13 @@ export const save = protectedProcedure
     }),
   )
   .handler(async ({ context, input }) => {
+    const previousBookmark = input.bookmarkId
+      ? await loadBookmarkBeforeMutation({
+          database: context.db,
+          userId: context.user.id,
+          bookmarkId: input.bookmarkId,
+        })
+      : undefined;
     const result = await saveBookmarkFromApp({
       database: context.db,
       userId: context.user.id,
@@ -51,6 +73,7 @@ export const save = protectedProcedure
           userId: context.user.id,
           id: removedBookmarkId,
           canonicalUrl: result.bookmark.canonicalUrl,
+          invalidation: null,
         }),
       ),
     );
@@ -58,6 +81,8 @@ export const save = protectedProcedure
       database: context.db,
       userId: context.user.id,
       bookmarkId: result.bookmark.id,
+      previousBookmark,
+      contentStatusKeys: ALL_CONTENT_STATUS_KEYS,
     });
     return {
       ...result,
@@ -108,6 +133,11 @@ export const updateState = protectedProcedure
       ),
   )
   .handler(async ({ context, input }) => {
+    const previousBookmark = await loadBookmarkBeforeMutation({
+      database: context.db,
+      userId: context.user.id,
+      bookmarkId: input.bookmarkId,
+    });
     const bookmark = await updateBookmarkState({
       database: context.db,
       userId: context.user.id,
@@ -117,6 +147,7 @@ export const updateState = protectedProcedure
       database: context.db,
       userId: context.user.id,
       bookmarkId: bookmark.id,
+      previousBookmark,
     });
     return applicationBookmark ?? bookmark;
   });
@@ -130,6 +161,11 @@ export const setView = protectedProcedure
     }),
   )
   .handler(async ({ context, input }) => {
+    const previousBookmark = await loadBookmarkBeforeMutation({
+      database: context.db,
+      userId: context.user.id,
+      bookmarkId: input.bookmarkId,
+    });
     await setBookmarkView({
       database: context.db,
       userId: context.user.id,
@@ -139,6 +175,7 @@ export const setView = protectedProcedure
       database: context.db,
       userId: context.user.id,
       bookmarkId: input.bookmarkId,
+      previousBookmark,
     });
   });
 
@@ -151,6 +188,11 @@ export const setTag = protectedProcedure
     }),
   )
   .handler(async ({ context, input }) => {
+    const previousBookmark = await loadBookmarkBeforeMutation({
+      database: context.db,
+      userId: context.user.id,
+      bookmarkId: input.bookmarkId,
+    });
     await setBookmarkTag({
       database: context.db,
       userId: context.user.id,
@@ -160,6 +202,7 @@ export const setTag = protectedProcedure
       database: context.db,
       userId: context.user.id,
       bookmarkId: input.bookmarkId,
+      previousBookmark,
     });
   });
 
@@ -171,6 +214,11 @@ export const setBulkReadValue = protectedProcedure
     }),
   )
   .handler(async ({ context, input }) => {
+    const previousBookmarks = await loadApplicationBookmarksById({
+      database: context.db,
+      userId: context.user.id,
+      bookmarkIds: input.bookmarkIds,
+    });
     const updated = await updateBookmarksReadState({
       database: context.db,
       userId: context.user.id,
@@ -184,6 +232,7 @@ export const setBulkReadValue = protectedProcedure
     await publishBookmarkUpsertBatch({
       userId: context.user.id,
       bookmarks: applicationBookmarks,
+      previousBookmarks,
     });
     return updated;
   });
@@ -191,6 +240,11 @@ export const setBulkReadValue = protectedProcedure
 export const remove = protectedProcedure
   .input(z.object({ bookmarkId: bookmarkIdSchema }))
   .handler(async ({ context, input }) => {
+    const bookmark = await loadBookmarkBeforeMutation({
+      database: context.db,
+      userId: context.user.id,
+      bookmarkId: input.bookmarkId,
+    });
     const deleted = await deleteBookmark({
       database: context.db,
       userId: context.user.id,
@@ -200,6 +254,7 @@ export const remove = protectedProcedure
       userId: context.user.id,
       id: deleted.id,
       canonicalUrl: deleted.canonicalUrl,
+      ...(bookmark ? { bookmark } : {}),
     });
     return deleted;
   });

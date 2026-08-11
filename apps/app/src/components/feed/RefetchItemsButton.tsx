@@ -16,6 +16,7 @@ import {
   useNextRefreshAt,
 } from "~/lib/data/loading-machine";
 import { useFetchNewData } from "~/lib/data/store";
+import { useReconciliationDisplayStatus } from "~/lib/data/reconciliation";
 import { useShortcut } from "~/lib/hooks/useShortcut";
 
 function formatRelativeTime(targetMs: number, now: number): string {
@@ -34,6 +35,7 @@ export function RefetchItemsButton() {
   const fetchNewData = useFetchNewData();
   const loading = useLoadingMode();
   const nextRefreshAt = useNextRefreshAt();
+  const reconciliationStatus = useReconciliationDisplayStatus();
 
   // Track current time in state so the cooldown check is pure during render.
   // Only updated via the timeout callback (async) to satisfy the lint rule.
@@ -42,16 +44,24 @@ export function RefetchItemsButton() {
   const isMachineActive = useIsLoadingActive();
   const isRateLimited = nextRefreshAt !== null && nextRefreshAt > now;
 
-  const isRefreshing = isMachineActive;
+  const isReconciling = reconciliationStatus !== "idle";
+  const isRefreshing = isMachineActive || reconciliationStatus === "syncing";
   const isDisabled =
     isRefreshing ||
+    reconciliationStatus === "retrying" ||
     isRateLimited ||
     loading.mode === "initialLoad" ||
     loading.mode === "backgroundRefresh";
 
   // Show check icon when the user is up to date (cooldown active),
   // refresh icon when they can refresh again (cooldown expired/absent).
-  const showCheck = isRateLimited && !isMachineActive;
+  const showCheck = isRateLimited && !isMachineActive && !isReconciling;
+  const statusLabel =
+    reconciliationStatus === "syncing"
+      ? "Syncing"
+      : reconciliationStatus === "retrying"
+        ? "Retrying"
+        : "Refresh";
 
   // Tick `now` so the tooltip text updates live and the button re-enables
   // when the cooldown expires. Chained timeouts stop at expiry and use fewer
@@ -99,6 +109,7 @@ export function RefetchItemsButton() {
       onClick={onClick}
       disabled={isDisabled}
       shortcut="r"
+      aria-label={statusLabel}
     >
       {showCheck ? (
         <CheckIcon size={16} />
@@ -110,11 +121,11 @@ export function RefetchItemsButton() {
           })}
         />
       )}
-      <span className="hidden pl-1.5 md:block">Refresh</span>
+      <span className="hidden pl-1.5 md:block">{statusLabel}</span>
     </ButtonWithShortcut>
   );
 
-  if (isRateLimited) {
+  if (isReconciling || isRateLimited) {
     return (
       <Tooltip>
         <TooltipTrigger asChild>
@@ -122,10 +133,18 @@ export function RefetchItemsButton() {
           <span tabIndex={0}>{button}</span>
         </TooltipTrigger>
         <TooltipContent>
-          Refresh available in{" "}
-          <span className="font-mono">
-            {formatRelativeTime(nextRefreshAt, now)}
-          </span>
+          {reconciliationStatus === "syncing" ? (
+            "Checking for newer data"
+          ) : reconciliationStatus === "retrying" ? (
+            "Data may be stale. Retrying automatically"
+          ) : (
+            <>
+              Refresh available in{" "}
+              <span className="font-mono">
+                {formatRelativeTime(nextRefreshAt!, now)}
+              </span>
+            </>
+          )}
         </TooltipContent>
       </Tooltip>
     );

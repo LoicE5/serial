@@ -87,9 +87,12 @@ export type ReconciliationCoordinatorState<
   hydratedDomains: Record<ReconciliationHydrationDomain, boolean>;
   bufferedApplications: Array<BufferedApplication<TAuthoritative, TLiveEvent>>;
   latestFullEpoch: FullEpoch | null;
+  activeScope: ReconciliationScopeTarget | null;
   cacheUsableAt: number | null;
   serverParityAppliedAt: number | null;
   sseConnected: boolean;
+  retryPending: boolean;
+  retryAt: number | null;
   automaticRssOwner: AutomaticRssOwner | null;
   trustedUpToDate: boolean;
 };
@@ -117,6 +120,12 @@ export type ReconciliationCoordinatorEvent<TAuthoritative, TLiveEvent> =
       type: "sse-connection-changed";
       connected: boolean;
     }
+  | {
+      type: "active-scope-changed";
+      target: ReconciliationScopeTarget;
+    }
+  | { type: "retry-scheduled"; at: number | null }
+  | { type: "retry-cleared" }
   | {
       type: "hydration-complete";
       domain: ReconciliationHydrationDomain;
@@ -208,9 +217,12 @@ export function createReconciliationCoordinatorState<
     hydratedDomains: initialHydrationState(),
     bufferedApplications: [],
     latestFullEpoch: null,
+    activeScope: null,
     cacheUsableAt: null,
     serverParityAppliedAt: null,
     sseConnected: false,
+    retryPending: false,
+    retryAt: null,
     automaticRssOwner: null,
     trustedUpToDate: false,
   };
@@ -266,6 +278,10 @@ function withTargetState<TAuthoritative, TLiveEvent>(
 ) {
   const targetKey = getReconciliationTargetKey(nextTarget.target);
   const domain = getTargetDomain(nextTarget.target);
+  const updatesActiveDomain =
+    nextTarget.target.type !== "scope" ||
+    (state.activeScope !== null &&
+      getReconciliationTargetKey(state.activeScope) === targetKey);
   return {
     ...state,
     targets: { ...state.targets, [targetKey]: nextTarget },
@@ -276,13 +292,15 @@ function withTargetState<TAuthoritative, TLiveEvent>(
             [getReconciliationScopeKey(nextTarget.target)]: nextTarget,
           }
         : state.scopes,
-    domains: {
-      ...state.domains,
-      [domain]: {
-        status: nextTarget.status,
-        appliedAt: nextTarget.appliedAt,
-      },
-    },
+    domains: updatesActiveDomain
+      ? {
+          ...state.domains,
+          [domain]: {
+            status: nextTarget.status,
+            appliedAt: nextTarget.appliedAt,
+          },
+        }
+      : state.domains,
   };
 }
 
@@ -301,6 +319,10 @@ function startRequest<TAuthoritative, TLiveEvent>(
   const descriptor = { reconciliationId, intent, capturedRevisions };
   let nextState: ReconciliationCoordinatorState<TAuthoritative, TLiveEvent> = {
     ...state,
+    activeScope:
+      intent.type === "full" && "selectedScope" in intent
+        ? intent.selectedScope
+        : state.activeScope,
     nextReconciliationSequence: state.nextReconciliationSequence + 1,
     inFlight: descriptor,
     requests: {
@@ -350,13 +372,10 @@ function enqueueRequest<TAuthoritative, TLiveEvent>(
 }
 
 function repairIntentFor<TAuthoritative, TLiveEvent>(
-  state: ReconciliationCoordinatorState<TAuthoritative, TLiveEvent>,
+  _state: ReconciliationCoordinatorState<TAuthoritative, TLiveEvent>,
   targets: ReconciliationTarget[],
 ): ReconciliationRequestIntent {
-  const fullEpoch = state.latestFullEpoch;
-  return fullEpoch && !fullEpoch.established
-    ? fullEpoch.intent
-    : { type: "targeted", targets: uniqueTargets(targets) };
+  return { type: "targeted", targets: uniqueTargets(targets) };
 }
 
 function bindColdFullScope<TAuthoritative, TLiveEvent>(
@@ -388,7 +407,11 @@ function bindColdFullScope<TAuthoritative, TLiveEvent>(
       [targetKey]: currentTarget.revision,
     },
   };
-  let nextState = withTargetState(state, {
+  let nextState: ReconciliationCoordinatorState<TAuthoritative, TLiveEvent> = {
+    ...state,
+    activeScope: target,
+  };
+  nextState = withTargetState(nextState, {
     ...currentTarget,
     status: "syncing",
     requestedReconciliationId: reconciliationId,
@@ -534,10 +557,7 @@ function fullEpochIsApplied<TAuthoritative, TLiveEvent>(
     ) &&
     fullEpoch.requiredTargetKeys.every((targetKey) => {
       const target = state.targets[targetKey];
-      return (
-        target?.status === "verified" &&
-        target.appliedReconciliationId === fullEpoch.reconciliationId
-      );
+      return target?.status === "verified";
     })
   );
 }
@@ -557,15 +577,28 @@ function withEstablishedFullParity<TAuthoritative, TLiveEvent>(
 function deriveTrustedUpToDate<TAuthoritative, TLiveEvent>(
   state: ReconciliationCoordinatorState<TAuthoritative, TLiveEvent>,
 ) {
+  const requiredTargetKeys = new Set([
+    getReconciliationTargetKey({ type: "organization" }),
+    getReconciliationTargetKey({ type: "navigation" }),
+    ...(state.activeScope
+      ? [getReconciliationTargetKey(state.activeScope)]
+      : []),
+  ]);
   const hasBufferedAuthoritative = state.bufferedApplications.some(
-    (application) => application.type === "authoritative",
+    (application) =>
+      application.type === "authoritative" &&
+      application.targetKeys.some((targetKey) =>
+        requiredTargetKeys.has(targetKey),
+      ),
   );
   return Boolean(
     state.cacheUsableAt !== null &&
     state.latestFullEpoch?.established &&
     state.serverParityAppliedAt !== null &&
     state.sseConnected &&
-    Object.keys(state.dirtyTargets).length === 0 &&
+    [...requiredTargetKeys].every(
+      (targetKey) => state.dirtyTargets[targetKey] === undefined,
+    ) &&
     !hasBufferedAuthoritative,
   );
 }
@@ -594,6 +627,33 @@ export function transitionReconciliation<TAuthoritative, TLiveEvent>(
         state: withDerivedTrust({
           ...state,
           sseConnected: event.connected,
+        }),
+        commands: [],
+      };
+    case "active-scope-changed": {
+      const target = targetState(state, event.target);
+      return {
+        state: withDerivedTrust(
+          withTargetState({ ...state, activeScope: event.target }, target),
+        ),
+        commands: [],
+      };
+    }
+    case "retry-scheduled":
+      return {
+        state: withDerivedTrust({
+          ...state,
+          retryPending: true,
+          retryAt: event.at,
+        }),
+        commands: [],
+      };
+    case "retry-cleared":
+      return {
+        state: withDerivedTrust({
+          ...state,
+          retryPending: false,
+          retryAt: null,
         }),
         commands: [],
       };
@@ -743,6 +803,13 @@ export function transitionReconciliation<TAuthoritative, TLiveEvent>(
     case "request-settled": {
       let nextState = state;
       if (event.failedTargets && event.failedTargets.length > 0) {
+        for (const target of event.failedTargets) {
+          nextState = bindColdFullScope(
+            nextState,
+            event.reconciliationId,
+            target,
+          );
+        }
         nextState = markTargetsDirty(nextState, event.failedTargets, false);
       }
       if (

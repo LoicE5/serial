@@ -8,6 +8,10 @@ import {
 import { protectedProcedure } from "~/server/orpc/base";
 import { viewFeeds, views } from "~/server/db/schema";
 import { boundedNumberIdsSchema } from "~/lib/schemas/bulk";
+import {
+  organizationInvalidationSummary,
+  publishReconciliationInvalidation,
+} from "~/server/reconciliation/invalidation";
 
 export const getAll = protectedProcedure.handler(async ({ context }) => {
   const userViews = await context.db
@@ -56,6 +60,10 @@ export const assignToView = protectedProcedure
         })
         .onConflictDoNothing();
     });
+    await publishReconciliationInvalidation(
+      context.user.id,
+      organizationInvalidationSummary(),
+    );
   });
 
 export const removeFromView = protectedProcedure
@@ -91,6 +99,10 @@ export const removeFromView = protectedProcedure
           ),
         );
     });
+    await publishReconciliationInvalidation(
+      context.user.id,
+      organizationInvalidationSummary(),
+    );
   });
 
 export const bulkAssignToView = protectedProcedure
@@ -131,6 +143,10 @@ export const bulkAssignToView = protectedProcedure
         )
         .onConflictDoNothing();
     });
+    await publishReconciliationInvalidation(
+      context.user.id,
+      organizationInvalidationSummary(),
+    );
   });
 
 export const bulkRemoveFromView = protectedProcedure
@@ -170,4 +186,8 @@ export const bulkRemoveFromView = protectedProcedure
           ),
         );
     });
+    await publishReconciliationInvalidation(
+      context.user.id,
+      organizationInvalidationSummary(),
+    );
   });

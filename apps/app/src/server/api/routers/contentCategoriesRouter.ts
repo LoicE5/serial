@@ -8,6 +8,10 @@ import {
   deduplicateByLastValue,
   MAX_BULK_MUTATION_ITEMS,
 } from "~/lib/schemas/bulk";
+import {
+  organizationInvalidationSummary,
+  publishReconciliationInvalidation,
+} from "~/server/reconciliation/invalidation";
 
 const categoryNameSchema = z.string().min(2);
 const feedCategorizationSchema = z.object({
@@ -34,7 +38,7 @@ export const create = protectedProcedure
     }),
   )
   .handler(async ({ context, input }) => {
-    return await context.db.transaction(async (tx) => {
+    const result = await context.db.transaction(async (tx) => {
       const feedIdsToCategorize =
         input.feedCategorizations
           ?.filter((categorization) => categorization.selected)
@@ -76,6 +80,13 @@ export const create = protectedProcedure
 
       return category;
     });
+    if (result) {
+      await publishReconciliationInvalidation(
+        context.user.id,
+        organizationInvalidationSummary(),
+      );
+    }
+    return result;
   });
 
 export const getAll = protectedProcedure.handler(async ({ context }) => {
@@ -161,6 +172,10 @@ export const update = protectedProcedure
           );
       }
     });
+    await publishReconciliationInvalidation(
+      context.user.id,
+      organizationInvalidationSummary(),
+    );
   });
 
 export const deleteCategory = protectedProcedure
@@ -175,4 +190,8 @@ export const deleteCategory = protectedProcedure
           eq(contentCategories.userId, context.user.id),
         ),
       );
+    await publishReconciliationInvalidation(
+      context.user.id,
+      organizationInvalidationSummary(),
+    );
   });

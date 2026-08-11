@@ -38,6 +38,10 @@ import {
   boundedStringsSchema,
   MAX_BULK_MUTATION_ITEMS,
 } from "~/lib/schemas/bulk";
+import {
+  organizationInvalidationSummary,
+  publishReconciliationInvalidation,
+} from "~/server/reconciliation/invalidation";
 
 type BulkImportFromFileSuccess = {
   feedUrl: string;
@@ -60,13 +64,18 @@ const createFeedInputSchema = z.object({
 
 export const create = protectedProcedure
   .input(createFeedInputSchema)
-  .handler(({ context, input }) =>
-    createFeedsForUser({
+  .handler(async ({ context, input }) => {
+    const result = await createFeedsForUser({
       database: context.db,
       userId: context.user.id,
       ...input,
-    }),
-  );
+    });
+    await publishReconciliationInvalidation(
+      context.user.id,
+      organizationInvalidationSummary(),
+    );
+    return result;
+  });
 
 export const createFromSubscriptionImport = protectedProcedure
   .input(
@@ -241,6 +250,12 @@ export const createFromSubscriptionImport = protectedProcedure
       allResults.push(...chunkResults);
     }
 
+    if (allResults.some((result) => result.success)) {
+      await publishReconciliationInvalidation(
+        context.user.id,
+        organizationInvalidationSummary(),
+      );
+    }
     return allResults;
   });
 
@@ -273,6 +288,10 @@ const deleteFeed = protectedProcedure
         );
       }
     });
+    await publishReconciliationInvalidation(
+      context.user.id,
+      organizationInvalidationSummary(),
+    );
   });
 export { deleteFeed as delete };
 
@@ -301,7 +320,7 @@ export const update = protectedProcedure
     }),
   )
   .handler(async ({ context, input }) => {
-    return await context.db.transaction(async (tx) => {
+    const result = await context.db.transaction(async (tx) => {
       const [categoriesOwned, viewsOwned] = await Promise.all([
         verifyContentCategoriesOwnedByUser({
           categoryIds: input.categoryIds,
@@ -390,6 +409,13 @@ export const update = protectedProcedure
 
       return feedsSchema.parse(updatedFeed);
     });
+    if (result) {
+      await publishReconciliationInvalidation(
+        context.user.id,
+        organizationInvalidationSummary(),
+      );
+    }
+    return result;
   });
 
 export const bulkDelete = protectedProcedure
@@ -431,6 +457,10 @@ export const bulkDelete = protectedProcedure
         );
       }
     });
+    await publishReconciliationInvalidation(
+      context.user.id,
+      organizationInvalidationSummary(),
+    );
   });
 
 export const setActive = protectedProcedure
@@ -464,7 +494,12 @@ export const setActive = protectedProcedure
     const updatedFeed = updatedFeeds[0];
     if (!updatedFeed) return null;
 
-    return feedsSchema.parse(updatedFeed);
+    const parsed = feedsSchema.parse(updatedFeed);
+    await publishReconciliationInvalidation(
+      context.user.id,
+      organizationInvalidationSummary(),
+    );
+    return parsed;
   });
 
 export const bulkSetActive = protectedProcedure
@@ -523,6 +558,10 @@ export const bulkSetActive = protectedProcedure
           ),
         );
     });
+    await publishReconciliationInvalidation(
+      context.user.id,
+      organizationInvalidationSummary(),
+    );
   });
 
 export const discoverFeeds = protectedProcedure

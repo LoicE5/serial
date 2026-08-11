@@ -8,7 +8,6 @@ import {
 import { useMutation } from "@tanstack/react-query";
 import { mixedContentStore } from "../mixed-content/store";
 import { viewsStore } from "../views/store";
-import { refreshNavigationSnapshotSafely } from "../navigation/store";
 import { bookmarksStore } from "./store";
 import type { ApplicationBookmark } from "~/server/mixed-content/projection";
 import { orpc } from "~/lib/orpc";
@@ -38,7 +37,7 @@ function removeProjectedBookmark(bookmark: ApplicationBookmark) {
 export function useSaveBookmarkMutation() {
   return useMutation(
     orpc.bookmark.save.mutationOptions({
-      onSuccess: async (result) => {
+      onSuccess: (result) => {
         const bookmark = result.bookmark as ApplicationBookmark;
         const previousBookmark = bookmarksStore
           .getState()
@@ -51,7 +50,6 @@ export function useSaveBookmarkMutation() {
           if (removedBookmark) removeProjectedBookmark(removedBookmark);
         }
         projectBookmark(bookmark, previousBookmark);
-        await refreshNavigationSnapshotSafely();
       },
     }),
   );
@@ -115,7 +113,7 @@ export function useUpdateBookmarkStateMutation(bookmarkId: string) {
         );
         return { previousBookmark, token };
       },
-      onSuccess: async (bookmark, input, context) => {
+      onSuccess: (bookmark, _input, context) => {
         const serverBookmark = bookmark as ApplicationBookmark;
         const currentBookmark = bookmarksStore
           .getState()
@@ -129,9 +127,6 @@ export function useUpdateBookmarkStateMutation(bookmarkId: string) {
               )
             : serverBookmark;
         projectBookmark(reconciled, currentBookmark);
-        if (input.isSaved !== undefined || input.isRead !== undefined) {
-          await refreshNavigationSnapshotSafely();
-        }
       },
       onError: (_error, _input, context) => {
         const optimisticBookmark = bookmarksStore
@@ -169,7 +164,7 @@ export function useSetBookmarkViewMutation() {
         );
         return { previousBookmark, token };
       },
-      onSuccess: async (bookmark, _input, context) => {
+      onSuccess: (bookmark, _input, context) => {
         const currentBookmark = context?.previousBookmark
           ? bookmarksStore.getState().getBookmark(context.previousBookmark.id)
           : undefined;
@@ -181,7 +176,6 @@ export function useSetBookmarkViewMutation() {
           );
           projectBookmark(applicationBookmark, currentBookmark);
         }
-        await refreshNavigationSnapshotSafely();
       },
       onError: (_error, _input, context) => {
         if (!context?.previousBookmark || !context.token) return;
@@ -219,7 +213,7 @@ export function useSetBookmarkTagMutation() {
         );
         return { previousBookmark, token };
       },
-      onSuccess: async (bookmark, _input, context) => {
+      onSuccess: (bookmark, _input, context) => {
         const currentBookmark = context?.previousBookmark
           ? bookmarksStore.getState().getBookmark(context.previousBookmark.id)
           : undefined;
@@ -231,7 +225,6 @@ export function useSetBookmarkTagMutation() {
           );
           projectBookmark(applicationBookmark, currentBookmark);
         }
-        await refreshNavigationSnapshotSafely();
       },
       onError: (_error, _input, context) => {
         if (!context?.previousBookmark || !context.token) return;
@@ -266,9 +259,6 @@ export function useDeleteBookmarkMutation() {
         if (context?.previousBookmark) {
           projectBookmark(context.previousBookmark, undefined);
         }
-      },
-      onSuccess: async () => {
-        await refreshNavigationSnapshotSafely();
       },
     }),
   );
