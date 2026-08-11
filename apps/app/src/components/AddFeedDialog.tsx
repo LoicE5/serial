@@ -306,6 +306,7 @@ export function EditFeedDialog({
   const [selectedViewIds, setSelectedViewIds] = useState<number[]>([]);
   const [selectedOpenLocation, setSelectedOpenLocation] =
     useState<FeedOpenLocation>("serial");
+  const initializedFeedIdRef = useRef<number | null>(null);
 
   const isFormDisabled = !name;
 
@@ -332,7 +333,11 @@ export function EditFeedDialog({
   }
 
   useEffect(() => {
-    if (selectedFeedId == null) return;
+    if (selectedFeedId == null) {
+      initializedFeedIdRef.current = null;
+      return;
+    }
+    if (initializedFeedIdRef.current === selectedFeedId) return;
 
     const feed = feeds.find((v) => v.id === selectedFeedId);
     if (!feed) return;
@@ -350,6 +355,7 @@ export function EditFeedDialog({
     setSelectedCategories(_feedCategories);
     setSelectedViewIds(_feedViewIds);
     setSelectedOpenLocation(feed.openLocation);
+    initializedFeedIdRef.current = selectedFeedId;
   }, [feedCategories, viewFeeds, selectedFeedId, feeds]);
 
   const feed = feeds.find((v) => v.id === selectedFeedId);

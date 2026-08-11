@@ -31,6 +31,8 @@ import {
   extensionJsonResponse as jsonResponse,
   prepareExtensionJsonRequest,
 } from "~/server/http/extensionApi";
+import { ALL_CONTENT_STATUS_KEYS } from "~/lib/reconciliation";
+import { organizationInvalidationSummary } from "~/server/reconciliation/invalidation";
 
 export function preflightResponse() {
   return extensionPreflightResponse(["POST", "PATCH", "DELETE"]);
@@ -59,6 +61,7 @@ const DEFAULT_ROUTE_DEPENDENCIES: ExtensionBookmarkRouteDependencies = {
           userId,
           id: removedBookmarkId,
           canonicalUrl: result.bookmark.canonicalUrl,
+          invalidation: null,
         }),
       ),
     );
@@ -66,6 +69,7 @@ const DEFAULT_ROUTE_DEPENDENCIES: ExtensionBookmarkRouteDependencies = {
       database: db,
       userId,
       bookmarkId: result.bookmark.id,
+      contentStatusKeys: ALL_CONTENT_STATUS_KEYS,
     });
   },
   workspace: loadExtensionBookmarkWorkspace,
@@ -251,6 +255,7 @@ export async function mutateExtensionBookmark(
       database: db,
       userId: authenticatedUser.id,
       bookmarkId: mutation.bookmarkId,
+      invalidation: organizationInvalidationSummary(),
     });
     if (!bookmark) throw new BookmarkNotFoundError("Bookmark not found");
     return jsonResponse({
@@ -307,6 +312,7 @@ export async function removeExtensionBookmark(
       userId: authenticatedUser.id,
       id: deleted.id,
       canonicalUrl: deleted.canonicalUrl,
+      invalidation: organizationInvalidationSummary(),
     });
     return jsonResponse({ bookmarkId: deleted.id });
   } catch (error) {

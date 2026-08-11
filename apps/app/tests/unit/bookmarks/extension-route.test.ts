@@ -390,11 +390,17 @@ describe("extension Bookmark HTTP contract", () => {
         bookmarkId: "bookmark-one",
       }),
     );
-    expect(deps.publish).toHaveBeenCalledWith({
-      userId: "user-one",
-      id: "bookmark-one",
-      canonicalUrl: "https://example.com/article",
-    });
+    expect(deps.publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: "user-one",
+        id: "bookmark-one",
+        canonicalUrl: "https://example.com/article",
+        invalidation: expect.objectContaining({
+          type: "reconciliation-invalidation",
+          domains: ["organization", "navigation"],
+        }),
+      }),
+    );
   });
 
   it("applies the request ceiling to organization and removal", async () => {

@@ -3,7 +3,6 @@ import { feedItemsStore, useFeedItemState } from "../store";
 import { feedCategoriesStore } from "../feed-categories/store";
 import { mixedContentStore } from "../mixed-content/store";
 import { viewsStore } from "../views/store";
-import { refreshNavigationSnapshotSafely } from "../navigation/store";
 import {
   clearPendingFeedItemOverride,
   setPendingWatchedOverride,
@@ -229,7 +228,6 @@ export async function setBulkWatchedValue({
       isWatched,
     });
     settleOptimisticWatchedValues(contexts, serverItems ?? []);
-    await refreshNavigationSnapshotSafely();
   } catch (error) {
     rollbackOptimisticWatchedValues(contexts);
     throw error;
@@ -242,9 +240,8 @@ export function useFeedItemsSetWatchedValueMutation(contentId: string) {
       onMutate: ({ isWatched }) => {
         return applyOptimisticWatchedValue(contentId, isWatched);
       },
-      onSuccess: async (serverValue, _variables, context) => {
+      onSuccess: (serverValue, _variables, context) => {
         resolveOptimisticWatchedValue(context, serverValue);
-        await refreshNavigationSnapshotSafely();
       },
       onError: (_error, _variables, context) => {
         rollbackOptimisticWatchedValue(context);
@@ -259,9 +256,8 @@ export function useFeedItemsSetWatchLaterValueMutation(contentId: string) {
       onMutate: ({ isWatchLater }) => {
         return applyOptimisticWatchLaterValue(contentId, isWatchLater);
       },
-      onSuccess: async (serverValue, _variables, context) => {
+      onSuccess: (serverValue, _variables, context) => {
         resolveOptimisticWatchLaterValue(context, serverValue);
-        await refreshNavigationSnapshotSafely();
       },
       onError: (_error, _variables, context) => {
         rollbackOptimisticWatchLaterValue(context);
@@ -289,9 +285,8 @@ export function useBulkSetWatchedValueMutation() {
       onMutate: ({ items, isWatched }) => {
         return applyOptimisticWatchedValues(items, isWatched);
       },
-      onSuccess: async (serverItems, _variables, contexts) => {
+      onSuccess: (serverItems, _variables, contexts) => {
         settleOptimisticWatchedValues(contexts ?? [], serverItems ?? []);
-        await refreshNavigationSnapshotSafely();
       },
       onError: (_error, _variables, contexts) => {
         rollbackOptimisticWatchedValues(contexts ?? []);

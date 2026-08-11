@@ -6,7 +6,6 @@ import {
   clearRetainedEntityPins,
   setRetainedEntityPins,
 } from "../page-retention";
-import { refreshNavigationSnapshotSafely } from "../navigation/store";
 import { mixedContentStore } from "./store";
 import type { MixedContentReference } from "~/server/mixed-content/projection";
 import { orpcRouterClient } from "~/lib/orpc";
@@ -75,7 +74,6 @@ export async function setMixedReadValue(input: {
           })
         : Promise.resolve(),
     ]);
-    await refreshNavigationSnapshotSafely();
   } catch (error) {
     for (const bookmark of previousBookmarks) {
       const optimisticBookmark = bookmarksStore

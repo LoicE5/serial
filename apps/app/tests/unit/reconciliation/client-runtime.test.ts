@@ -6,6 +6,7 @@ import type {
   ReconciliationRequestDescriptor,
   ReconciliationScopeTarget,
   ReconciliationStreamEvent,
+  ReconciliationTarget,
 } from "~/lib/reconciliation";
 import type { NavigationSnapshot } from "~/server/navigation/snapshot";
 import {
@@ -86,18 +87,67 @@ function completeEpoch(reconciliationId: string): ReconciliationStreamEvent[] {
   ];
 }
 
+function completeTargetedScope(
+  reconciliationId: string,
+): ReconciliationStreamEvent[] {
+  return [
+    {
+      reconciliationId,
+      chunk: { type: "active-first-page", page: PAGE },
+    },
+    {
+      reconciliationId,
+      chunk: {
+        type: "domain-complete",
+        domain: "active-scope",
+        target: ACTIVE_SCOPE,
+      },
+    },
+    {
+      reconciliationId,
+      chunk: {
+        type: "epoch-complete",
+        requiredDomains: ["active-scope"],
+      },
+    },
+  ];
+}
+
+function completeTargetedOrganization(
+  reconciliationId: string,
+): ReconciliationStreamEvent[] {
+  return [
+    {
+      reconciliationId,
+      chunk: { type: "organization-snapshot", snapshot: ORGANIZATION },
+    },
+    {
+      reconciliationId,
+      chunk: { type: "domain-complete", domain: "organization" },
+    },
+    {
+      reconciliationId,
+      chunk: {
+        type: "epoch-complete",
+        requiredDomains: ["organization"],
+      },
+    },
+  ];
+}
+
 function harness(
   events: (
     request: ReconciliationRequestDescriptor,
   ) => ReconciliationStreamEvent[],
   applyLiveEvent?: (payload: string[]) =>
-    | ReconciliationScopeTarget[]
+    | ReconciliationTarget[]
     | {
-        repairTargets?: ReconciliationScopeTarget[];
-        dirtyTargets?: ReconciliationScopeTarget[];
+        repairTargets?: ReconciliationTarget[];
+        dirtyTargets?: ReconciliationTarget[];
         repairIntent?: ReconciliationRequestDescriptor["intent"];
       }
     | void,
+  options: { isVisible?: () => boolean; isOnline?: () => boolean } = {},
 ) {
   const requests: ReconciliationRequestDescriptor[] = [];
   const applications: string[] = [];
@@ -138,6 +188,8 @@ function harness(
       return applyLiveEvent?.(payload);
     },
     getCurrentSelection: () => currentSelection,
+    isVisible: options.isVisible,
+    isOnline: options.isOnline,
   });
   return {
     runtime,
@@ -360,5 +412,174 @@ describe("client reconciliation runtime", () => {
       type: "targeted",
       targets: [ACTIVE_SCOPE],
     });
+  });
+
+  it("retains usable data and retries only the failed target with capped scheduling", async () => {
+    vi.useFakeTimers();
+    let targetedAttempt = 0;
+    const test = harness(
+      (request) => {
+        if (request.intent.type === "full") {
+          return completeEpoch(request.reconciliationId);
+        }
+        targetedAttempt++;
+        return targetedAttempt === 1
+          ? [
+              {
+                reconciliationId: request.reconciliationId,
+                chunk: {
+                  type: "domain-error",
+                  failure: {
+                    phase: "load-active-scope",
+                    domain: "active-scope",
+                    target: ACTIVE_SCOPE,
+                    message: "temporary failure",
+                  },
+                },
+              },
+            ]
+          : completeTargetedScope(request.reconciliationId);
+      },
+      () => ({
+        repairTargets: [ACTIVE_SCOPE],
+        repairIntent: { type: "targeted", targets: [ACTIVE_SCOPE] },
+      }),
+    );
+    test.setSelection(ACTIVE_SCOPE);
+    hydrate(test.runtime);
+    test.runtime.cacheUsable();
+    test.runtime.sseConnectionChanged(true);
+    test.runtime.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(test.runtime.getState().trustedUpToDate).toBe(true);
+
+    test.runtime.receiveLiveEvent(["mutation"]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(test.requests).toHaveLength(2);
+    expect(test.runtime.getState().cacheUsableAt).not.toBeNull();
+    expect(test.runtime.getState().trustedUpToDate).toBe(false);
+    expect(test.runtime.getState().retryPending).toBe(true);
+
+    await vi.runOnlyPendingTimersAsync();
+    expect(test.requests).toHaveLength(3);
+    expect(test.requests[2]?.intent).toEqual({
+      type: "targeted",
+      targets: [ACTIVE_SCOPE],
+    });
+    expect(test.runtime.getState().trustedUpToDate).toBe(true);
+    expect(test.runtime.getState().retryPending).toBe(false);
+    test.runtime.stop();
+    vi.useRealTimers();
+  });
+
+  it("pauses recovery while hidden and coalesces refocus into one retry", async () => {
+    vi.useFakeTimers();
+    let visible = false;
+    const test = harness(
+      (request) =>
+        request.intent.type === "full"
+          ? [
+              {
+                reconciliationId: request.reconciliationId,
+                chunk: {
+                  type: "domain-error",
+                  failure: {
+                    phase: "load-navigation",
+                    domain: "navigation",
+                    message: "offline",
+                  },
+                },
+              },
+            ]
+          : [],
+      undefined,
+      { isVisible: () => visible, isOnline: () => true },
+    );
+    hydrate(test.runtime);
+    test.runtime.cacheUsable();
+    test.runtime.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(test.requests).toHaveLength(1);
+    expect(test.runtime.getState().retryPending).toBe(true);
+    expect(test.runtime.getState().retryAt).toBeNull();
+
+    visible = true;
+    test.runtime.environmentChanged();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(test.requests).toHaveLength(2);
+    test.runtime.environmentChanged();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(test.requests).toHaveLength(2);
+    test.runtime.stop();
+    vi.useRealTimers();
+  });
+
+  it("does not let an unrelated successful repair cancel a failed target retry", async () => {
+    vi.useFakeTimers();
+    let scopeAttempts = 0;
+    const test = harness(
+      (request) => {
+        if (request.intent.type === "full") {
+          return completeEpoch(request.reconciliationId);
+        }
+        const target = request.intent.targets[0];
+        if (target?.type === "organization") {
+          return completeTargetedOrganization(request.reconciliationId);
+        }
+        scopeAttempts++;
+        return scopeAttempts === 1
+          ? [
+              {
+                reconciliationId: request.reconciliationId,
+                chunk: {
+                  type: "domain-error",
+                  failure: {
+                    phase: "load-active-scope",
+                    domain: "active-scope",
+                    target: ACTIVE_SCOPE,
+                    message: "temporary failure",
+                  },
+                },
+              },
+            ]
+          : completeTargetedScope(request.reconciliationId);
+      },
+      (payload) => {
+        const repairTargets: ReconciliationTarget[] = payload.includes(
+          "scope-mutation",
+        )
+          ? [ACTIVE_SCOPE]
+          : [{ type: "organization" }];
+        return {
+          repairTargets,
+          repairIntent: { type: "targeted", targets: repairTargets },
+        };
+      },
+    );
+    test.setSelection(ACTIVE_SCOPE);
+    hydrate(test.runtime);
+    test.runtime.cacheUsable();
+    test.runtime.sseConnectionChanged(true);
+    test.runtime.start();
+    await vi.advanceTimersByTimeAsync(0);
+
+    test.runtime.receiveLiveEvent(["scope-mutation"]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(test.runtime.getState().retryPending).toBe(true);
+
+    test.runtime.receiveLiveEvent(["organization-mutation"]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(test.requests).toHaveLength(3);
+    expect(test.runtime.getState().retryPending).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(test.requests).toHaveLength(4);
+    expect(test.requests[3]?.intent).toEqual({
+      type: "targeted",
+      targets: [ACTIVE_SCOPE],
+    });
+    expect(test.runtime.getState().retryPending).toBe(false);
+    test.runtime.stop();
+    vi.useRealTimers();
   });
 });

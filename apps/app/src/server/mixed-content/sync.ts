@@ -5,8 +5,15 @@ import type {
   MixedContentScope,
 } from "./projection";
 import type { db as defaultDatabase } from "~/server/db";
-import type { ContentStatusFilter } from "~/lib/content-status";
+import type {
+  ContentStatusFilter,
+  ContentStatusKey,
+} from "~/lib/content-status";
 import type { BookmarkSyncManifestEntry } from "~/lib/data/bookmarks/manifest";
+import type {
+  BookmarkInvalidationState,
+  ReconciliationInvalidationSummary,
+} from "~/lib/reconciliation";
 import {
   BOOKMARK_SYNC_PAGE_SIZE,
   BOOKMARK_SYNC_RESPONSE_BUDGET_BYTES,
@@ -15,6 +22,7 @@ import {
 } from "~/lib/data/bookmarks/manifest";
 import { getUserChannel } from "~/server/api/channels";
 import { publisher } from "~/server/api/publisher";
+import { buildBookmarkInvalidationSummary } from "~/lib/reconciliation";
 
 type MixedContentDatabase = typeof defaultDatabase;
 
@@ -125,12 +133,22 @@ export async function publishBookmarkUpsert(input: {
   database: MixedContentDatabase;
   userId: string;
   bookmarkId: string;
+  previousBookmark?: BookmarkInvalidationState | null;
+  contentStatusKeys?: ContentStatusKey[];
+  invalidation?: ReconciliationInvalidationSummary;
 }) {
   const bookmark = await loadApplicationBookmark(input);
   if (!bookmark) return null;
   await publisher.publish(getUserChannel(input.userId), {
     source: "bookmark",
     chunk: { type: "bookmark-upsert", bookmark },
+    invalidation:
+      input.invalidation ??
+      buildBookmarkInvalidationSummary({
+        before: input.previousBookmark,
+        after: bookmark,
+        contentStatusKeys: input.contentStatusKeys,
+      }),
   });
   return bookmark;
 }
@@ -138,7 +156,13 @@ export async function publishBookmarkUpsert(input: {
 export async function publishBookmarkUpsertBatch(input: {
   userId: string;
   bookmarks: ApplicationBookmark[];
+  previousBookmarks?: BookmarkInvalidationState[];
+  contentStatusKeys?: ContentStatusKey[];
 }) {
+  const invalidation = buildBookmarkInvalidationSummary({
+    states: [...(input.previousBookmarks ?? []), ...input.bookmarks],
+    contentStatusKeys: input.contentStatusKeys,
+  });
   for (let index = 0; index < input.bookmarks.length; index += 50) {
     // Each event is bounded so publisher and SSE buffers cannot accumulate a
     // single library-sized payload.
@@ -149,6 +173,7 @@ export async function publishBookmarkUpsertBatch(input: {
         type: "bookmark-upsert-batch",
         bookmarks: input.bookmarks.slice(index, index + 50),
       },
+      invalidation: index === 0 ? invalidation : undefined,
     });
   }
 }
@@ -157,6 +182,8 @@ export async function publishBookmarkDeletion(input: {
   userId: string;
   id: string;
   canonicalUrl: string;
+  bookmark?: BookmarkInvalidationState;
+  invalidation?: ReconciliationInvalidationSummary | null;
 }) {
   await publisher.publish(getUserChannel(input.userId), {
     source: "bookmark",
@@ -165,5 +192,18 @@ export async function publishBookmarkDeletion(input: {
       id: input.id,
       canonicalUrl: input.canonicalUrl,
     },
+    ...(input.invalidation === null
+      ? {}
+      : {
+          invalidation:
+            input.invalidation ??
+            (input.bookmark
+              ? buildBookmarkInvalidationSummary({ before: input.bookmark })
+              : {
+                  type: "reconciliation-invalidation" as const,
+                  domains: ["navigation" as const],
+                  scopeImpact: { type: "unknown" as const },
+                }),
+        }),
   });
 }

@@ -1,5 +1,6 @@
 import { getDefaultStore } from "jotai";
 import { unstable_batchedUpdates } from "react-dom";
+import { useSyncExternalStore } from "react";
 import { bookmarksStore } from "./bookmarks/store";
 import { contentCategoriesStore } from "./content-categories/store";
 import { feedCategoriesStore } from "./feed-categories/store";
@@ -37,6 +38,7 @@ import type { RssAttemptSummary, RssTrigger } from "~/lib/rss";
 import { orpcRouterClient } from "~/lib/orpc";
 import {
   createReconciliationRuntime,
+  expandInvalidationSummary,
   getBookmarkReconciliationVersion,
   getFeedItemReconciliationVersion,
   getReconciliationTargetKey,
@@ -306,6 +308,81 @@ function retainedRssTargets(
     );
 }
 
+function retainedScopeTargets(activeTarget: ReconciliationScopeTarget | null) {
+  const targets = Object.values(mixedContentStore.getState().scopes).map(
+    ({ scope, contentStatus }) =>
+      ({
+        type: "scope",
+        scope,
+        contentStatus,
+      }) satisfies ReconciliationScopeTarget,
+  );
+  if (activeTarget) targets.push(activeTarget);
+  return [
+    ...new Map(
+      targets.map((target) => [getReconciliationTargetKey(target), target]),
+    ).values(),
+  ];
+}
+
+function mutationInvalidationEffects(
+  payloads: PublishedChunk[],
+  activeTarget: ReconciliationScopeTarget | null,
+) {
+  const summaries = payloads.flatMap((payload) => {
+    if (payload.source === "invalidation") return [payload.chunk];
+    return payload.invalidation ? [payload.invalidation] : [];
+  });
+  if (summaries.length === 0) return null;
+
+  const retainedScopes = retainedScopeTargets(activeTarget);
+  const memberships = {
+    views: viewsStore.getState().views,
+    viewFeedIds: feedItemsStore.getState().viewFeedIds,
+    feedCategories: feedCategoriesStore.getState().feedCategories,
+  };
+  const repairTargets = new Map<string, ReconciliationTarget>();
+  const dirtyTargets = new Map<string, ReconciliationTarget>();
+  let unknown = false;
+
+  for (const summary of summaries) {
+    for (const domain of summary.domains) {
+      const target = { type: domain } satisfies ReconciliationTarget;
+      repairTargets.set(getReconciliationTargetKey(target), target);
+    }
+    const expanded = expandInvalidationSummary({
+      summary,
+      retainedScopes,
+      memberships,
+    });
+    unknown ||= expanded.scopeImpactUnknown;
+    for (const target of expanded.scopes) {
+      const key = getReconciliationTargetKey(target);
+      if (activeTarget && key === getReconciliationTargetKey(activeTarget)) {
+        repairTargets.set(key, target);
+      } else {
+        dirtyTargets.set(key, target);
+      }
+    }
+  }
+
+  const eagerTargets = [...repairTargets.values()];
+  return {
+    repairTargets: eagerTargets,
+    dirtyTargets: [...dirtyTargets.values()],
+    repairIntent: unknown
+      ? activeTarget
+        ? ({ type: "full", selectedScope: activeTarget } as const)
+        : ({
+            type: "full",
+            coldContentStatus: DEFAULT_CONTENT_STATUS_FILTER,
+          } as const)
+      : eagerTargets.length > 0
+        ? ({ type: "targeted", targets: eagerTargets } as const)
+        : undefined,
+  };
+}
+
 let manualFullPromise: Promise<void> | null = null;
 let resolveManualFull: (() => void) | null = null;
 let rejectManualFull: ((error: Error) => void) | null = null;
@@ -366,10 +443,14 @@ const runtime = createReconciliationRuntime<PublishedChunk[]>({
     }
   },
   applyLiveEvent: (payloads) => {
-    const result = applyPublishedChunks(payloads, {
+    applyPublishedChunks(payloads, {
       refreshNavigation: false,
     });
     const activeTarget = currentSelection();
+    const invalidationEffects = mutationInvalidationEffects(
+      payloads,
+      activeTarget,
+    );
     const summary = rssSummaryFrom(payloads);
     const onlyRssPayloads = payloads.every(({ source }) => source === "rss");
     if (onlyRssPayloads && !summary) return;
@@ -390,23 +471,10 @@ const runtime = createReconciliationRuntime<PublishedChunk[]>({
         repairIntent: { type: "targeted", targets: repairTargets } as const,
       };
     }
-    const activeScopeKey = activeTarget
-      ? getMixedScopeKey(activeTarget.scope, activeTarget.contentStatus)
-      : null;
-    const activeScopeChanged = result.affectedScopes.some(
-      (scope) =>
-        activeScopeKey === getMixedScopeKey(scope.scope, scope.contentStatus),
-    );
-    return [
-      ...(activeTarget && activeScopeChanged ? [activeTarget] : []),
-      ...(result.navigationSnapshotChanged
-        ? ([{ type: "navigation" }] as const)
-        : []),
-    ];
+    if (invalidationEffects) return invalidationEffects;
+    return;
   },
   getCurrentSelection: currentSelection,
-  deferLiveEventInvalidation: (payloads) =>
-    payloads.every(({ source }) => source === "rss"),
   mark: performanceMark,
   onParityApplied: ({ automaticRssOwner, reconciliationId }) => {
     loadingActor.send({ type: "INITIAL_DATA_COMPLETE" });
@@ -525,6 +593,7 @@ export const dataReconciliation = {
       start = end;
     }
   },
+  environmentChanged: runtime.environmentChanged,
   sseConnectionChanged: runtime.sseConnectionChanged,
   getState: runtime.getState,
   subscribe: runtime.subscribe,
@@ -538,4 +607,21 @@ export function getReconciliationTargetStatus(
   target: ReconciliationScopeTarget,
 ) {
   return runtime.getState().targets[getReconciliationTargetKey(target)]?.status;
+}
+
+export type ReconciliationDisplayStatus = "idle" | "syncing" | "retrying";
+
+function reconciliationDisplayStatus(): ReconciliationDisplayStatus {
+  const state = runtime.getState();
+  if (state.cacheUsableAt === null) return "idle";
+  if (state.inFlight) return "syncing";
+  return state.retryPending ? "retrying" : "idle";
+}
+
+export function useReconciliationDisplayStatus() {
+  return useSyncExternalStore(
+    dataReconciliation.subscribe,
+    reconciliationDisplayStatus,
+    () => "idle" as const,
+  );
 }

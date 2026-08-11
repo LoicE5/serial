@@ -45,7 +45,8 @@ export type ReconciliationRuntimeDependencies<TLiveEvent> = {
       }
     | void;
   getCurrentSelection: () => ReconciliationScopeTarget | null;
-  deferLiveEventInvalidation?: (payload: TLiveEvent) => boolean;
+  isVisible?: () => boolean;
+  isOnline?: () => boolean;
   mark?: (name: string, reconciliationId?: string) => void;
   onParityApplied?: (input: {
     reconciliationId: string | undefined;
@@ -106,11 +107,112 @@ export function createReconciliationRuntime<TLiveEvent>(
   let reconnectRequired = false;
   let completedBeforeFirstConnection = false;
   let liveSequence = 0;
+  let retryDelayMs = 1_000;
+  let retryIntent: ReconciliationRequestIntent | null = null;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
   const listeners = new Set<() => void>();
   const requestControllers = new Map<string, AbortController>();
 
+  const canRetry = () =>
+    (dependencies.isVisible?.() ??
+      (typeof document === "undefined" ||
+        document.visibilityState !== "hidden")) &&
+    (dependencies.isOnline?.() ??
+      (typeof navigator === "undefined" || navigator.onLine !== false));
+
+  const clearRetryTimer = () => {
+    if (retryTimer !== null) clearTimeout(retryTimer);
+    retryTimer = null;
+  };
+
   const notify = () => {
     for (const listener of listeners) listener();
+  };
+
+  const mergeRetryIntent = (
+    current: ReconciliationRequestIntent | null,
+    incoming: ReconciliationRequestIntent,
+  ): ReconciliationRequestIntent => {
+    if (!current || incoming.type === "full") return incoming;
+    if (current.type === "full") return current;
+    return {
+      type: "targeted",
+      targets: [
+        ...new Map(
+          [...current.targets, ...incoming.targets].map((target) => [
+            getReconciliationTargetKey(target),
+            target,
+          ]),
+        ).values(),
+      ],
+    };
+  };
+
+  const scheduleRetry = (intent: ReconciliationRequestIntent) => {
+    retryIntent = mergeRetryIntent(retryIntent, intent);
+    clearRetryTimer();
+    if (!canRetry()) {
+      send({ type: "retry-scheduled", at: null });
+      return;
+    }
+    const delay = retryDelayMs;
+    send({ type: "retry-scheduled", at: dependencies.now() + delay });
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      if (!canRetry()) {
+        send({ type: "retry-scheduled", at: null });
+        return;
+      }
+      const pending = retryIntent;
+      retryIntent = null;
+      send({ type: "retry-cleared" });
+      if (pending) {
+        send({ type: "request-reconciliation", intent: pending });
+      }
+    }, delay);
+    retryDelayMs = Math.min(retryDelayMs * 2, 30_000);
+  };
+
+  const clearRetry = () => {
+    clearRetryTimer();
+    retryIntent = null;
+    retryDelayMs = 1_000;
+    send({ type: "retry-cleared" });
+  };
+
+  const successfulRequestCoversRetry = (
+    request: ReconciliationRequestDescriptor,
+  ) => {
+    if (!retryIntent) return true;
+    if (retryIntent.type === "full") return request.intent.type === "full";
+    const successfulTargetKeys = new Set(
+      (state.requests[request.reconciliationId]?.targets ?? []).map(
+        getReconciliationTargetKey,
+      ),
+    );
+    return retryIntent.targets.every((target) =>
+      successfulTargetKeys.has(getReconciliationTargetKey(target)),
+    );
+  };
+
+  const clearCoveredRetry = (request: ReconciliationRequestDescriptor) => {
+    if (successfulRequestCoversRetry(request)) clearRetry();
+  };
+
+  const retryIntentForFailure = (
+    failedTargets: ReconciliationTarget[] | undefined,
+    forceFull = false,
+  ): ReconciliationRequestIntent => {
+    if (forceFull || !failedTargets || failedTargets.length === 0) {
+      const selectedScope = dependencies.getCurrentSelection();
+      return selectedScope
+        ? { type: "full", selectedScope }
+        : {
+            type: "full",
+            coldContentStatus: { saveStatus: "inbox", archiveStatus: "unread" },
+          };
+    }
+    return { type: "targeted", targets: failedTargets };
   };
 
   const execute = (commands: Command[]) => {
@@ -139,11 +241,11 @@ export function createReconciliationRuntime<TLiveEvent>(
         if (dirtyTargets && dirtyTargets.length > 0) {
           send({ type: "targets-dirtied", targets: dirtyTargets });
         }
-        if (repairTargets && repairTargets.length > 0) {
+        if ((repairTargets && repairTargets.length > 0) || repairIntent) {
           send({
             type: "live-event-received",
             eventId: `applied:${command.eventId}`,
-            targets: repairTargets,
+            targets: repairTargets ?? [],
             invalidates: repairTargets,
             repairIntent,
             requiresHydration: [],
@@ -278,6 +380,12 @@ export function createReconciliationRuntime<TLiveEvent>(
               failed: true,
               failedTargets: target ? [target] : undefined,
             });
+            scheduleRetry(
+              retryIntentForFailure(
+                target ? [target] : undefined,
+                chunk.failure.phase === "resolve-selection",
+              ),
+            );
             if (request.intent.type === "full") {
               dependencies.onFullReconciliationFailed?.({
                 reconciliationId: request.reconciliationId,
@@ -295,6 +403,7 @@ export function createReconciliationRuntime<TLiveEvent>(
               reconciliationId: request.reconciliationId,
               at: dependencies.now(),
             });
+            clearCoveredRetry(request);
             settled = true;
             return;
         }
@@ -317,6 +426,7 @@ export function createReconciliationRuntime<TLiveEvent>(
           failed: true,
           failedTargets,
         });
+        scheduleRetry(retryIntentForFailure(failedTargets));
         if (request.intent.type === "full") {
           dependencies.onFullReconciliationFailed?.({
             reconciliationId: request.reconciliationId,
@@ -327,6 +437,7 @@ export function createReconciliationRuntime<TLiveEvent>(
   }
 
   const requestCurrentFull = () => {
+    if (retryIntent) clearRetry();
     const selectedScope = dependencies.getCurrentSelection();
     send({
       type: "request-reconciliation",
@@ -348,6 +459,9 @@ export function createReconciliationRuntime<TLiveEvent>(
     stop() {
       for (const controller of requestControllers.values()) controller.abort();
       requestControllers.clear();
+      clearRetryTimer();
+      retryIntent = null;
+      retryDelayMs = 1_000;
       started = false;
       everConnected = false;
       reconnectRequired = false;
@@ -374,6 +488,7 @@ export function createReconciliationRuntime<TLiveEvent>(
         reconnectRequired ||
         (!everConnected && completedBeforeFirstConnection)
       ) {
+        clearRetry();
         reconnectRequired = false;
         completedBeforeFirstConnection = false;
         requestCurrentFull();
@@ -381,6 +496,7 @@ export function createReconciliationRuntime<TLiveEvent>(
       everConnected = true;
     },
     activateScope(target: ReconciliationScopeTarget) {
+      send({ type: "active-scope-changed", target });
       const targetState = state.targets[getReconciliationTargetKey(target)];
       if (
         targetState?.status === "verified" ||
@@ -394,24 +510,27 @@ export function createReconciliationRuntime<TLiveEvent>(
       });
     },
     requestFull: requestCurrentFull,
+    environmentChanged() {
+      if (!retryIntent) return;
+      if (!canRetry()) {
+        clearRetryTimer();
+        send({ type: "retry-scheduled", at: null });
+        return;
+      }
+      if (retryTimer !== null) return;
+      const pending = retryIntent;
+      retryIntent = null;
+      send({ type: "retry-cleared" });
+      send({ type: "request-reconciliation", intent: pending });
+    },
     receiveLiveEvent(payload: TLiveEvent) {
-      const inFlightFull = state.inFlight?.intent.type === "full";
       const selectedScope = dependencies.getCurrentSelection();
-      const invalidates =
-        !dependencies.deferLiveEventInvalidation?.(payload) && inFlightFull
-          ? ([
-              { type: "organization" },
-              ...(selectedScope ? [selectedScope] : []),
-              { type: "navigation" },
-            ] as ReconciliationTarget[])
-          : undefined;
       send({
         type: "live-event-received",
         eventId: `live:${++liveSequence}`,
         targets: selectedScope ? [selectedScope] : [],
         requiresHydration: ["organization", "active-scope", "bookmarks"],
         payload,
-        invalidates,
       });
     },
     getState: () => state,

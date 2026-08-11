@@ -263,6 +263,12 @@ describe("reconciliation coordinator", () => {
     expect(harness.state.domains.organization.appliedAt).toBe(2);
     expect(harness.state.domains["active-scope"].appliedAt).toBe(3);
     expect(harness.state.domains.navigation.appliedAt).toBe(4);
+
+    harness.send({ type: "targets-dirtied", targets: [OTHER_SCOPE] });
+    expect(harness.state.trustedUpToDate).toBe(true);
+    expect(
+      harness.state.targets[getReconciliationTargetKey(OTHER_SCOPE)]?.status,
+    ).toBe("dirty");
   });
 
   it("preserves applied domains and withholds parity after partial failure", () => {
@@ -307,7 +313,7 @@ describe("reconciliation coordinator", () => {
     expect(harness.state.trustedUpToDate).toBe(false);
   });
 
-  it("rejects a stale target atomically and schedules one trailing full repair", () => {
+  it("rejects stale authority and schedules one trailing targeted repair", () => {
     const harness = coordinatorHarness();
     hydrateAll(harness.send);
     const request = startedRequest(
@@ -339,7 +345,10 @@ describe("reconciliation coordinator", () => {
     expect(
       harness.state.dirtyTargets[getReconciliationTargetKey(ACTIVE_SCOPE)],
     ).toBeDefined();
-    expect(harness.state.trailingIntent?.type).toBe("full");
+    expect(harness.state.trailingIntent).toEqual({
+      type: "targeted",
+      targets: [ACTIVE_SCOPE],
+    });
 
     const trailing = harness.send({
       type: "request-settled",
@@ -347,8 +356,8 @@ describe("reconciliation coordinator", () => {
       at: 2,
     });
     expect(startedRequest(trailing).intent).toEqual({
-      type: "full",
-      selectedScope: ACTIVE_SCOPE,
+      type: "targeted",
+      targets: [ACTIVE_SCOPE],
     });
   });
 
@@ -473,6 +482,7 @@ describe("reconciliation coordinator", () => {
 
   it("marks an inactive target dirty without eagerly scheduling repair", () => {
     const harness = coordinatorHarness();
+    harness.send({ type: "active-scope-changed", target: ACTIVE_SCOPE });
 
     expect(
       harness.send({ type: "targets-dirtied", targets: [OTHER_SCOPE] }),
@@ -481,6 +491,7 @@ describe("reconciliation coordinator", () => {
     expect(
       harness.state.targets[getReconciliationTargetKey(OTHER_SCOPE)]?.status,
     ).toBe("dirty");
+    expect(harness.state.domains["active-scope"].status).toBe("unverified");
 
     const request = startedRequest(
       harness.send({

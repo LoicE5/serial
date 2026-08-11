@@ -18,7 +18,13 @@ const pendingBookmarkSyncBuckets = new Map<
 function incomingFeedItemIds(payloads: PublishedChunk[]) {
   const ids = new Set<string>();
   for (const payload of payloads) {
-    if (payload.source === "bookmark" || payload.source === "mixed") continue;
+    if (
+      payload.source === "bookmark" ||
+      payload.source === "mixed" ||
+      payload.source === "invalidation"
+    ) {
+      continue;
+    }
     const chunk = payload.chunk;
     if ("feedItems" in chunk) {
       for (const item of chunk.feedItems) ids.add(item.id);
@@ -80,7 +86,10 @@ export function applyPublishedChunks(
       chunk.refreshNavigationSnapshot === true,
   );
   const feedPayloads = payloads.filter(
-    (payload) => payload.source !== "bookmark" && payload.source !== "mixed",
+    (payload) =>
+      payload.source !== "bookmark" &&
+      payload.source !== "mixed" &&
+      payload.source !== "invalidation",
   );
   if (feedPayloads.length > 0) {
     const incomingItemIds = incomingFeedItemIds(feedPayloads);
@@ -150,6 +159,7 @@ export function applyPublishedChunks(
   }
 
   for (const payload of payloads) {
+    if (payload.source === "invalidation") continue;
     if (payload.source === "mixed") {
       const { chunk } = payload;
       const scopeKey = getMixedScopeKey(chunk.scope, chunk.contentStatus);

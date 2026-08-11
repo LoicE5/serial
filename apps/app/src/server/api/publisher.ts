@@ -11,10 +11,11 @@ import type {
   MixedContentChunk,
 } from "~/server/mixed-content/sync";
 import type { RssPublishedChunk } from "~/lib/rss";
+import type { ReconciliationInvalidationSummary } from "~/lib/reconciliation";
 import { env } from "~/env";
 import { logError, logMessage } from "~/server/logger";
 
-export type PublishedChunk =
+type DataPublishedChunk =
   | { source: "initial"; chunk: GetByViewChunk }
   | { source: "revalidate"; chunk: RevalidateViewChunk }
   | { source: "content-status"; chunk: GetItemsByContentStatusChunk }
@@ -23,6 +24,15 @@ export type PublishedChunk =
   | { source: "bookmark"; chunk: BookmarkSyncChunk }
   | { source: "mixed"; chunk: MixedContentChunk }
   | { source: "rss"; chunk: RssPublishedChunk };
+
+export type PublishedChunk =
+  | (DataPublishedChunk & {
+      invalidation?: ReconciliationInvalidationSummary;
+    })
+  | {
+      source: "invalidation";
+      chunk: ReconciliationInvalidationSummary;
+    };
 
 const RESUME_RETENTION_SECONDS = 60 * 2;
 const REDIS_KEY_PREFIX = "serial:pub:";

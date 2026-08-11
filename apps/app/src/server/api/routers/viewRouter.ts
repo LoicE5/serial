@@ -25,11 +25,15 @@ import {
   deduplicateByLastValue,
   MAX_BULK_MUTATION_ITEMS,
 } from "~/lib/schemas/bulk";
+import {
+  organizationInvalidationSummary,
+  publishReconciliationInvalidation,
+} from "~/server/reconciliation/invalidation";
 
 export const create = protectedProcedure
   .input(createViewSchema)
   .handler(async ({ context, input }) => {
-    return await context.db.transaction(async (tx) => {
+    const result = await context.db.transaction(async (tx) => {
       const [categoriesOwned, feedsOwned] = await Promise.all([
         verifyContentCategoriesOwnedByUser({
           categoryIds: input.categoryIds ?? [],
@@ -103,12 +107,19 @@ export const create = protectedProcedure
 
       return view;
     });
+    if (result) {
+      await publishReconciliationInvalidation(
+        context.user.id,
+        organizationInvalidationSummary(),
+      );
+    }
+    return result;
   });
 
 export const update = protectedProcedure
   .input(updateViewSchema)
   .handler(async ({ context, input }) => {
-    return context.db.transaction(async (tx) => {
+    const result = await context.db.transaction(async (tx) => {
       const [categoriesOwned, feedsOwned] = await Promise.all([
         verifyContentCategoriesOwnedByUser({
           categoryIds: input.categoryIds,
@@ -230,6 +241,13 @@ export const update = protectedProcedure
         viewSections: viewSectionSchema.array().parse(updatedSections),
       } satisfies ApplicationView;
     });
+    if (result) {
+      await publishReconciliationInvalidation(
+        context.user.id,
+        organizationInvalidationSummary(),
+      );
+    }
+    return result;
   });
 
 export const updatePlacement = protectedProcedure
@@ -270,14 +288,25 @@ export const updatePlacement = protectedProcedure
           ),
         );
     });
+    await publishReconciliationInvalidation(
+      context.user.id,
+      organizationInvalidationSummary({
+        scopes: { type: "known", selectors: [] },
+      }),
+    );
   });
 
 export const deleteView = protectedProcedure
   .input(deleteViewSchema)
   .handler(async ({ context, input }) => {
-    return await context.db
+    const result = await context.db
       .delete(views)
       .where(and(eq(views.id, input.id), eq(views.userId, context.user.id)));
+    await publishReconciliationInvalidation(
+      context.user.id,
+      organizationInvalidationSummary(),
+    );
+    return result;
   });
 
 export const getAll = protectedProcedure.handler(async ({ context }) => {

@@ -81,7 +81,7 @@ beforeEach(() => {
 });
 
 describe("connected Feed item action revalidation", () => {
-  it("leaves navigation snapshot refresh to the subscription echo", async () => {
+  it("leaves repair to the committed server invalidation", async () => {
     const actions = useFeedItemActions("saved-item");
 
     expect(actions.toggleRead()).toBe(true);
@@ -91,20 +91,21 @@ describe("connected Feed item action revalidation", () => {
 
     expect(
       mocks.refreshNavigationAfterFeedItemChangeIfNeeded,
-    ).toHaveBeenCalledOnce();
+    ).not.toHaveBeenCalled();
     expect(mocks.refreshNavigationSnapshotSafely).not.toHaveBeenCalled();
   });
 
-  it("refreshes directly once when the subscription is disconnected", async () => {
+  it("waits for full reconnect recovery when the subscription is disconnected", async () => {
     mocks.isDataSubscriptionConnected.mockReturnValue(false);
     const actions = useFeedItemActions("saved-item");
 
     expect(actions.toggleRead()).toBe(true);
     await vi.waitFor(() =>
-      expect(mocks.refreshNavigationSnapshotSafely).toHaveBeenCalledOnce(),
+      expect(mocks.resolveOptimisticWatchedValue).toHaveBeenCalledOnce(),
     );
+    expect(mocks.refreshNavigationSnapshotSafely).not.toHaveBeenCalled();
     expect(
       mocks.refreshNavigationAfterFeedItemChangeIfNeeded,
-    ).toHaveBeenCalledOnce();
+    ).not.toHaveBeenCalled();
   });
 });

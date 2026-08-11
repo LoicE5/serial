@@ -22,6 +22,7 @@ import {
 import { publisher, trackChannelConnection } from "../publisher";
 import { getClientChannel, getUserChannel } from "../channels";
 import { insertFeedWithCategories } from "./feed-router/utils";
+import type { PublishedChunk } from "../publisher";
 import type { SQL } from "drizzle-orm";
 import type {
   ApplicationFeed,
@@ -37,13 +38,8 @@ import type {
 } from "~/server/db/schema";
 import type { ORPCContext } from "~/server/orpc/base";
 import type { FetchFeedsStatus } from "~/server/rss/fetchFeeds";
-import type {
-  BookmarkSyncChunk,
-  MixedContentChunk,
-} from "~/server/mixed-content/sync";
 import type { NavigationSnapshot } from "~/server/navigation/snapshot";
 import type { ContentStatusFilter } from "~/lib/content-status";
-import type { RssPublishedChunk } from "~/lib/rss";
 import {
   contentStatusFilterSchema,
   DEFAULT_CONTENT_STATUS_FILTER,
@@ -68,6 +64,7 @@ import {
 import { UNCATEGORIZED_VIEW_ID } from "~/lib/data/views/constants";
 import { sortViewsByPlacement } from "~/lib/data/views/utils";
 import { prepareArrayChunks } from "~/lib/iterators";
+import { organizationInvalidationSummary } from "~/server/reconciliation/invalidation";
 import { buildUncategorizedView } from "~/server/api/utils/buildUncategorizedView";
 import {
   DEFAULT_VIEW_LAYOUT,
@@ -233,15 +230,7 @@ export type RevalidateViewChunk =
   | { type: "view-feeds"; viewId: number; feedIds: number[] }
   | { type: "error"; message: string; phase: string };
 
-type RouterPublishedChunk =
-  | { source: "initial"; chunk: GetByViewChunk }
-  | { source: "revalidate"; chunk: RevalidateViewChunk }
-  | { source: "content-status"; chunk: GetItemsByContentStatusChunk }
-  | { source: "feed"; chunk: GetItemsByFeedChunk }
-  | { source: "category"; chunk: GetItemsByCategoryIdChunk }
-  | { source: "bookmark"; chunk: BookmarkSyncChunk }
-  | { source: "mixed"; chunk: MixedContentChunk }
-  | { source: "rss"; chunk: RssPublishedChunk };
+type RouterPublishedChunk = PublishedChunk;
 
 type ChannelSubscription = {
   channel: string;
@@ -1483,6 +1472,7 @@ export const requestImportedData = protectedProcedure
     await publisher.publish(channel, {
       source: "initial",
       chunk: { type: "initial-data-complete" },
+      invalidation: organizationInvalidationSummary(),
     });
 
     // Step 5: Run fetch and insert for fresh RSS items - ONLY for newly imported feeds
@@ -2115,6 +2105,7 @@ export const streamingImport = protectedProcedure
     await publisher.publish(channel, {
       source: "initial",
       chunk: { type: "initial-data-complete" },
+      invalidation: organizationInvalidationSummary(),
     });
 
     return { status: "completed" };
