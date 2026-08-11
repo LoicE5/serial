@@ -5,6 +5,7 @@ import {
   openBenchmarkDatabase,
 } from "../../../scripts/performance/database";
 import { seedBenchmarkFixture } from "../../../scripts/performance/fixtures";
+import { evaluateNavigationViewAvailabilityPlan } from "../../../scripts/performance/navigation-plan";
 import type { BenchmarkProfileName } from "../../../scripts/performance/model";
 import { queryNavigationSnapshot } from "~/server/navigation/snapshot";
 
@@ -47,25 +48,11 @@ describe("navigation snapshot performance bounds", () => {
       ),
     });
     const planDetails = plan.rows.map((row) => String(row.detail));
-    const joinedPlan = planDetails.join("\n");
 
-    expect(
-      planDetails.filter((detail) =>
-        /^SCAN serial_(view_feeds|view_categories|feed_categories|feed|feed_item)\b/.test(
-          detail,
-        ),
-      ),
-    ).toEqual([]);
-    expect(
-      joinedPlan.match(
-        /SEARCH serial_view_feeds[^\n]*\nSEARCH serial_feed [^\n]*\nSEARCH serial_feed_item[^\n]*/g,
-      ),
-    ).toHaveLength(3);
-    expect(
-      joinedPlan.match(
-        /SEARCH serial_view_categories[^\n]*\nSEARCH serial_feed_categories[^\n]*\nSEARCH serial_feed [^\n]*\nSEARCH serial_feed_item[^\n]*/g,
-      ),
-    ).toHaveLength(3);
+    expect(evaluateNavigationViewAvailabilityPlan(planDetails)).toEqual({
+      membershipFirst: true,
+      missingIndexScans: [],
+    });
   });
 
   it.each<BenchmarkProfileName>(["small", "representative", "stress"])(

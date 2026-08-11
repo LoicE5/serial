@@ -10,6 +10,7 @@ import {
 } from "./database";
 import { seedBenchmarkFixture } from "./fixtures";
 import { BENCHMARK_PROFILES, distribution } from "./model";
+import { evaluateNavigationViewAvailabilityPlan } from "./navigation-plan";
 import type { BenchmarkProfileName } from "./model";
 import { queryNavigationSnapshot as queryCandidate } from "~/server/navigation/snapshot";
 
@@ -199,20 +200,11 @@ async function main() {
       ),
     });
     const planDetails = plan.rows.map((row) => String(row.detail));
-    const missingIndexScans = planDetails.filter((detail) =>
-      /^SCAN serial_(view_feeds|view_categories|feed_categories|feed|feed_item)\b/.test(
-        detail,
-      ),
-    );
-    const joinedPlan = planDetails.join("\n");
-    const membershipFirst =
-      (joinedPlan.match(
-        /SEARCH serial_view_feeds[^\n]*\nSEARCH serial_feed [^\n]*\nSEARCH serial_feed_item[^\n]*/g,
-      )?.length ?? 0) === 3 &&
-      (joinedPlan.match(
-        /SEARCH serial_view_categories[^\n]*\nSEARCH serial_feed_categories[^\n]*\nSEARCH serial_feed [^\n]*\nSEARCH serial_feed_item[^\n]*/g,
-      )?.length ?? 0) === 3;
-    if (missingIndexScans.length > 0 || !membershipFirst) {
+    const planEvaluation = evaluateNavigationViewAvailabilityPlan(planDetails);
+    if (
+      planEvaluation.missingIndexScans.length > 0 ||
+      !planEvaluation.membershipFirst
+    ) {
       throw new Error(
         "Custom-View availability did not use indexed membership-first plans",
       );
@@ -234,7 +226,7 @@ async function main() {
       baseline: baselineSummary,
       candidate,
       ratios,
-      plan: { membershipFirst, missingIndexScans, details: planDetails },
+      plan: { ...planEvaluation, details: planDetails },
       rawSamples: samples,
     };
     if (options.outputPath) {
