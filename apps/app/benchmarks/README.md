@@ -25,6 +25,22 @@ migrations, seeds the small fixture, runs interleaved warm-cache pairs, writes
 `benchmarks/results/local-small.json`, removes the benchmark user, and deletes
 the temporary database.
 
+For a navigation-snapshot query change, compare a checked-out baseline module
+with the current worktree on the same seeded local database:
+
+```sh
+pnpm benchmark:navigation --profile representative \
+  --baseline-module /path/to/baseline/apps/app/src/server/navigation/snapshot.ts \
+  --output benchmarks/results/navigation-representative.json
+```
+
+The runner alternates which implementation executes first, verifies identical
+snapshot results, and reports full-snapshot median/p95 latency. It also fails if
+the custom-View statement does not start from indexed direct or Tag-derived
+membership before seeking Feed items. Profiles are `small`, `representative`,
+`stress`, and `adversarial`; the last uses the stress-size fixture with every
+Feed directly assigned to every View and only Unread content.
+
 Run the full local measurement without turning a known failure into a command
 failure:
 

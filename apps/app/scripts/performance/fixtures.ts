@@ -40,6 +40,7 @@ export async function seedBenchmarkFixture(input: {
   database: Database;
   profileName: BenchmarkProfileName;
   userId: string;
+  navigationShape?: "default" | "all-memberships-unread";
 }) {
   const { database, profileName, userId } = input;
   const profile = BENCHMARK_PROFILES[profileName];
@@ -127,12 +128,17 @@ export async function seedBenchmarkFixture(input: {
     })),
     (chunk) => database.insert(viewCategories).values(chunk),
   );
-  await insertInChunks(
-    configuredViews.map((view, index) => ({
-      viewId: view.id,
-      feedId: feedRows[index % feedRows.length]!.id,
-    })),
-    (chunk) => database.insert(viewFeeds).values(chunk),
+  const directViewFeedRows =
+    input.navigationShape === "all-memberships-unread"
+      ? viewRows.flatMap((view) =>
+          feedRows.map((feed) => ({ viewId: view.id, feedId: feed.id })),
+        )
+      : configuredViews.map((view, index) => ({
+          viewId: view.id,
+          feedId: feedRows[index % feedRows.length]!.id,
+        }));
+  await insertInChunks(directViewFeedRows, (chunk) =>
+    database.insert(viewFeeds).values(chunk),
   );
 
   const sectionRows = configuredViews.flatMap((view, index) => [
@@ -164,8 +170,14 @@ export async function seedBenchmarkFixture(input: {
     (_, index) => {
       const stateBucket = index % 10;
       const postedAt = timestampFor(index);
-      const isWatchLater = stateBucket < 2;
-      const isWatched = !isWatchLater && stateBucket < 6;
+      const isWatchLater =
+        input.navigationShape === "all-memberships-unread"
+          ? false
+          : stateBucket < 2;
+      const isWatched =
+        input.navigationShape === "all-memberships-unread"
+          ? false
+          : !isWatchLater && stateBucket < 6;
       return {
         id: `${userId}-feed-item-${index.toString().padStart(6, "0")}`,
         feedId: feedRows[index % feedRows.length]!.id,
@@ -209,8 +221,14 @@ export async function seedBenchmarkFixture(input: {
         userId,
         sourceUrl: canonicalUrl,
         canonicalUrl,
-        isSaved: stateBucket < 2,
-        isRead: stateBucket >= 6,
+        isSaved:
+          input.navigationShape === "all-memberships-unread"
+            ? false
+            : stateBucket < 2,
+        isRead:
+          input.navigationShape === "all-memberships-unread"
+            ? false
+            : stateBucket >= 6,
         progress: index % 101,
         duration: 100,
         savedUpdatedAt: createdAt,

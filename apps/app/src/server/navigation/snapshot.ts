@@ -176,62 +176,62 @@ function feedExistsForView(input: {
   visibility: VisibilityFilter;
   now: Date;
 }) {
-  const directMembership = exists(
-    input.database
-      .select({ value: sql<number>`1` })
-      .from(viewFeeds)
-      .where(
-        and(
-          eq(viewFeeds.viewId, views.id),
-          eq(viewFeeds.feedId, feedItems.feedId),
-        ),
-      ),
-  );
-  const tagMembership = exists(
-    input.database
-      .select({ value: sql<number>`1` })
-      .from(feedCategories)
-      .innerJoin(
-        viewCategories,
-        eq(viewCategories.categoryId, feedCategories.categoryId),
-      )
-      .where(
-        and(
-          eq(viewCategories.viewId, views.id),
-          eq(feedCategories.feedId, feedItems.feedId),
-        ),
-      ),
-  );
   const nowSeconds = Math.floor(input.now.getTime() / 1000);
   const insideTimeWindow = or(
     eq(views.daysWindow, 0),
     sql`${feedItems.postedAt} >= (${nowSeconds} - (${views.daysWindow} * 86400))`,
   );
+  const eligibleFeedItem = and(
+    eq(feeds.userId, input.userId),
+    contentFilterColumnAllowsDescriptor({
+      filter: views.contentFilter,
+      contentType: feedItems.contentType,
+      orientation: feedItems.orientation,
+    }),
+    insideTimeWindow,
+    viewVisibilityCondition({
+      visibility: input.visibility,
+      isRead: feedItems.isWatched,
+      isLater: feedItems.isWatchLater,
+    }),
+    not(canonicalBookmarkExists(input.database, input.userId)),
+  );
 
-  return exists(
+  const directMembershipItem = exists(
     input.database
       .select({ value: sql<number>`1` })
-      .from(feedItems)
-      .innerJoin(feeds, eq(feeds.id, feedItems.feedId))
+      .from(viewFeeds)
+      // CROSS JOIN preserves the membership-first loop order in SQLite.
+      .crossJoin(feeds)
+      .crossJoin(feedItems)
       .where(
         and(
-          eq(feeds.userId, input.userId),
-          or(directMembership, tagMembership),
-          contentFilterColumnAllowsDescriptor({
-            filter: views.contentFilter,
-            contentType: feedItems.contentType,
-            orientation: feedItems.orientation,
-          }),
-          insideTimeWindow,
-          viewVisibilityCondition({
-            visibility: input.visibility,
-            isRead: feedItems.isWatched,
-            isLater: feedItems.isWatchLater,
-          }),
-          not(canonicalBookmarkExists(input.database, input.userId)),
+          eq(viewFeeds.viewId, views.id),
+          eq(feeds.id, viewFeeds.feedId),
+          eq(feedItems.feedId, feeds.id),
+          eligibleFeedItem,
         ),
       ),
   );
+  const tagMembershipItem = exists(
+    input.database
+      .select({ value: sql<number>`1` })
+      .from(viewCategories)
+      .crossJoin(feedCategories)
+      .crossJoin(feeds)
+      .crossJoin(feedItems)
+      .where(
+        and(
+          eq(viewCategories.viewId, views.id),
+          eq(feedCategories.categoryId, viewCategories.categoryId),
+          eq(feeds.id, feedCategories.feedId),
+          eq(feedItems.feedId, feeds.id),
+          eligibleFeedItem,
+        ),
+      ),
+  );
+
+  return or(directMembershipItem, tagMembershipItem);
 }
 
 function bookmarkExistsForView(input: {
