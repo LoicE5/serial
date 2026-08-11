@@ -47,7 +47,7 @@ export default defineConfig({
     {
       name: "self-hosted",
       testDir: "./tests/e2e/self-hosted",
-      workers: process.env.CI ? 1 : undefined,
+      workers: process.env.CI ? 2 : undefined,
       use: {
         ...baseConfig.use,
         ...devices["Desktop Chrome"],
