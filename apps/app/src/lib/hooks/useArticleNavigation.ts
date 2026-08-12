@@ -10,11 +10,14 @@ import {
   SHORTCUT_KEYS,
 } from "~/lib/constants/shortcuts";
 import { getScrollContainer } from "~/lib/scroll";
+import {
+  getArticleBlockTargetScrollTop,
+  scrollArticleBlockToTarget,
+} from "~/lib/article-block-scroll";
 
 export const articleSelectedElementAtom = atom<HTMLElement | null>(null);
 
 const SCROLL_DURATION_MS = 300;
-const TARGET_VIEWPORT_POSITION = 1 / 3;
 const SELECTABLE_TAGS = new Set([
   "P",
   "H1",
@@ -109,8 +112,6 @@ export function isElementInViewport(element: Element): boolean {
 export function getClosestVisibleElement(elements: HTMLElement[]): number {
   const container = getScrollContainer();
   const containerRect = container.getBoundingClientRect();
-  const viewportTarget =
-    containerRect.top + containerRect.height * TARGET_VIEWPORT_POSITION;
   let closestIndex = -1;
   let closestDistance = Infinity;
 
@@ -119,8 +120,10 @@ export function getClosestVisibleElement(elements: HTMLElement[]): number {
     if (rect.bottom < containerRect.top || rect.top > containerRect.bottom)
       continue;
 
-    const elementCenter = rect.top + rect.height / 2;
-    const distance = Math.abs(elementCenter - viewportTarget);
+    const distance = Math.abs(
+      getArticleBlockTargetScrollTop(elements[i]!, container) -
+        container.scrollTop,
+    );
 
     if (distance < closestDistance) {
       closestDistance = distance;
@@ -186,30 +189,14 @@ export function useArticleNavigation(
 
   const scrollToElement = useCallback(
     (element: HTMLElement, forceInstant = false) => {
-      const container = getScrollContainer();
-      const containerRect = container.getBoundingClientRect();
-      const rect = element.getBoundingClientRect();
-      const hasImage =
-        element.tagName === "IMG" ||
-        element.tagName === "FIGURE" ||
-        !!element.querySelector("img");
-      const targetPosition = hasImage
-        ? containerRect.height / 2
-        : containerRect.height * TARGET_VIEWPORT_POSITION;
-      const scrollTop =
-        container.scrollTop +
-        (rect.top - containerRect.top) -
-        targetPosition +
-        rect.height / 2;
-
       const now = performance.now();
       const isRapid = now - lastNavTimeRef.current < SCROLL_DURATION_MS;
       lastNavTimeRef.current = now;
 
-      container.scrollTo({
-        top: scrollTop,
-        behavior: forceInstant || isRapid ? "instant" : "smooth",
-      });
+      scrollArticleBlockToTarget(
+        element,
+        forceInstant || isRapid ? "instant" : "smooth",
+      );
     },
     [],
   );

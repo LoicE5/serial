@@ -6,7 +6,7 @@ import { getPublicConfigKey } from "./lib/public-config";
 export function getRouter() {
   const router = createRouter({
     routeTree,
-    scrollRestoration: true,
+    scrollRestoration: ({ location }) => location.pathname !== "/",
   });
 
   if (!router.isServer) {

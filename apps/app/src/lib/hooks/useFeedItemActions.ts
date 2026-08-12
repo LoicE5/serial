@@ -15,7 +15,7 @@ import {
 } from "../data/feed-items/mutations";
 import { refreshNavigationAfterFeedItemChangeIfNeeded } from "../data/navigation/refreshOnLocalTransition";
 import { useFeeds as useFeedsArray } from "../data/feeds/store";
-import { saveHomeScrollPosition } from "~/lib/scroll";
+import { captureRootScrollRestoration } from "~/lib/root-scroll-restoration";
 import { getDataSubscriptionClientId } from "~/lib/data/clientChannel";
 import { refreshNavigationSnapshotSafely } from "~/lib/data/navigation/store";
 import { isDataSubscriptionConnected } from "~/lib/data/subscriptionConnection";
@@ -118,12 +118,12 @@ export function useFeedItemActions(itemId: string) {
       feed?.openLocation === "serial" || !feed?.openLocation;
 
     if (shouldOpenInSerial) {
-      saveHomeScrollPosition();
+      captureRootScrollRestoration(itemId);
       router.navigate({ to: `/${itemDestination}/${item.id}` });
     } else {
       window.open(item.url, "_blank", "noopener noreferrer");
     }
-  }, [item, feeds, router]);
+  }, [item, feeds, itemId, router]);
 
   const openOriginal = useCallback(() => {
     if (!item?.url) return;
