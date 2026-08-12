@@ -12,6 +12,7 @@ import {
   getMixedScopeKey,
   mixedContentStore,
 } from "~/lib/data/mixed-content/store";
+import { CONTENT_STATUS_FILTERS } from "~/lib/content-status";
 
 const SCOPE = { type: "view" as const, viewId: 7 };
 
@@ -37,7 +38,7 @@ function applyPages(count: number) {
   for (let pageIndex = 0; pageIndex < count; pageIndex++) {
     mixedContentStore.getState().applyPage({
       scope: SCOPE,
-      visibility: "unread",
+      contentStatus: { saveStatus: "inbox", archiveStatus: "unread" },
       page: {
         references: references(pageIndex),
         bookmarks: [],
@@ -57,11 +58,41 @@ afterEach(() => {
 });
 
 describe("mixed-content page retention", () => {
+  it("keeps four status pages distinct for one View", () => {
+    for (const [index, contentStatus] of CONTENT_STATUS_FILTERS.entries()) {
+      mixedContentStore.getState().applyPage({
+        scope: SCOPE,
+        contentStatus,
+        page: {
+          references: references(index).slice(0, 1),
+          bookmarks: [],
+          feedItems: [],
+          cursor: cursor(index),
+          hasMore: false,
+        },
+        replacesScope: true,
+        feedItems: {},
+      });
+    }
+
+    expect(Object.keys(mixedContentStore.getState().scopes).sort()).toEqual([
+      "view:7:inbox:archived",
+      "view:7:inbox:unread",
+      "view:7:saved:archived",
+      "view:7:saved:unread",
+    ]);
+  });
+
   it("plateaus cursor pages and scope references during repeated pagination", () => {
     applyPages(12);
 
     const scope =
-      mixedContentStore.getState().scopes[getMixedScopeKey(SCOPE, "unread")];
+      mixedContentStore.getState().scopes[
+        getMixedScopeKey(SCOPE, {
+          saveStatus: "inbox",
+          archiveStatus: "unread",
+        })
+      ];
 
     expect(scope?.pages).toHaveLength(8);
     expect(scope?.references).toHaveLength(240);
@@ -81,7 +112,12 @@ describe("mixed-content page retention", () => {
     applyPages(12);
 
     const scope =
-      mixedContentStore.getState().scopes[getMixedScopeKey(SCOPE, "unread")];
+      mixedContentStore.getState().scopes[
+        getMixedScopeKey(SCOPE, {
+          saveStatus: "inbox",
+          archiveStatus: "unread",
+        })
+      ];
     expect(scope?.pages).toHaveLength(8);
     expect(
       scope?.references.some(({ entityId }) => entityId === "page-0-item-0"),

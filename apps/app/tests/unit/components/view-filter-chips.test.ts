@@ -7,11 +7,12 @@ import { createStore, Provider } from "jotai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ApplicationView } from "~/server/db/schema";
+import type { ContentStatusFilter } from "~/lib/content-status";
 import { ViewFilterChips } from "~/components/feed/ViewFilterChips";
 import {
+  contentStatusFilterAtom,
   viewFilterIdAtom,
   viewsAtom,
-  visibilityFilterAtom,
 } from "~/lib/data/atoms";
 import { navigationSnapshotStore } from "~/lib/data/navigation/store";
 import { viewsStore } from "~/lib/data/views/store";
@@ -47,6 +48,7 @@ function renderViewFilterChips(
   input: {
     cachedViews?: ApplicationView[];
     hasFetchedViews?: boolean;
+    contentStatus?: ContentStatusFilter;
   } = {},
 ) {
   const cachedViews = input.cachedViews ?? [
@@ -60,7 +62,9 @@ function renderViewFilterChips(
   const jotaiStore = createStore();
   jotaiStore.set(viewsAtom, cachedViews);
   jotaiStore.set(viewFilterIdAtom, 1);
-  jotaiStore.set(visibilityFilterAtom, "unread");
+  if (input.contentStatus) {
+    jotaiStore.set(contentStatusFilterAtom, input.contentStatus);
+  }
 
   const container = document.createElement("div");
   const root = createRoot(container);
@@ -97,8 +101,8 @@ describe("View filter loading", () => {
   it("keeps cached View chips and their previous dimming while revalidating", () => {
     navigationSnapshotStore.getState().set({
       views: {
-        1: { unread: true, read: false, later: false },
-        2: { unread: false, read: false, later: false },
+        1: { unread: true, read: false, later: false, savedArchived: false },
+        2: { unread: false, read: false, later: false, savedArchived: false },
       },
       tags: {},
       feeds: {},
@@ -142,8 +146,8 @@ describe("View filter loading", () => {
   it("applies fresh View dimming after successful revalidation", () => {
     navigationSnapshotStore.getState().set({
       views: {
-        1: { unread: true, read: false, later: false },
-        2: { unread: false, read: false, later: false },
+        1: { unread: true, read: false, later: false, savedArchived: false },
+        2: { unread: false, read: false, later: false, savedArchived: false },
       },
       tags: {},
       feeds: {},
@@ -151,8 +155,8 @@ describe("View filter loading", () => {
     });
     navigationSnapshotStore.getState().set({
       views: {
-        1: { unread: false, read: false, later: false },
-        2: { unread: true, read: false, later: false },
+        1: { unread: false, read: false, later: false, savedArchived: false },
+        2: { unread: true, read: false, later: false, savedArchived: false },
       },
       tags: {},
       feeds: {},
@@ -167,11 +171,32 @@ describe("View filter loading", () => {
     );
   });
 
+  it("maps Saved + Archived to the flat savedArchived availability cell", () => {
+    navigationSnapshotStore.getState().set({
+      views: {
+        1: { unread: true, read: false, later: true, savedArchived: false },
+        2: { unread: false, read: true, later: false, savedArchived: true },
+      },
+      tags: {},
+      feeds: {},
+      viewFeeds: {},
+    });
+
+    const markup = renderViewFilterChips({
+      contentStatus: { saveStatus: "saved", archiveStatus: "archived" },
+    });
+
+    expect(chipFromMarkup(markup, "Reading").classList).toContain("opacity-50");
+    expect(chipFromMarkup(markup, "Research").classList).not.toContain(
+      "opacity-50",
+    );
+  });
+
   it("retains previous View dimming after failed revalidation", () => {
     navigationSnapshotStore.getState().set({
       views: {
-        1: { unread: true, read: false, later: false },
-        2: { unread: false, read: false, later: false },
+        1: { unread: true, read: false, later: false, savedArchived: false },
+        2: { unread: false, read: false, later: false, savedArchived: false },
       },
       tags: {},
       feeds: {},

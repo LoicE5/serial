@@ -80,7 +80,14 @@ export function getNavigationAvailability(
   availability: Record<number, NavigationAvailability>,
   id: number,
 ): NavigationAvailability {
-  return availability[id] ?? { unread: false, read: false, later: false };
+  return (
+    availability[id] ?? {
+      unread: false,
+      read: false,
+      later: false,
+      savedArchived: false,
+    }
+  );
 }
 
 export const {

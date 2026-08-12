@@ -2,8 +2,8 @@ import { MemoryPublisher } from "@orpc/experimental-publisher/memory";
 import type {
   GetByViewChunk,
   GetItemsByCategoryIdChunk,
+  GetItemsByContentStatusChunk,
   GetItemsByFeedChunk,
-  GetItemsByVisibilityChunk,
   RevalidateViewChunk,
 } from "./routers/initialRouter";
 import type {
@@ -16,7 +16,7 @@ import { logError, logMessage } from "~/server/logger";
 export type PublishedChunk =
   | { source: "initial"; chunk: GetByViewChunk }
   | { source: "revalidate"; chunk: RevalidateViewChunk }
-  | { source: "visibility"; chunk: GetItemsByVisibilityChunk }
+  | { source: "content-status"; chunk: GetItemsByContentStatusChunk }
   | { source: "feed"; chunk: GetItemsByFeedChunk }
   | { source: "category"; chunk: GetItemsByCategoryIdChunk }
   | { source: "bookmark"; chunk: BookmarkSyncChunk }

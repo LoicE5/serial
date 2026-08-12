@@ -203,9 +203,9 @@ describe("legacy server workload contracts", () => {
         });
 
         session.instrumentation.reset();
-        const stream = await api.initial.getItemsByVisibility({
+        const stream = await api.initial.getItemsByContentStatus({
           viewId: 1,
-          visibilityFilter: "unread",
+          contentStatusFilter: { saveStatus: "inbox", archiveStatus: "unread" },
           cursor: {
             postedAt: new Date(now.getTime() - 1_000),
             id: "item-001",
@@ -248,6 +248,135 @@ describe("legacy server workload contracts", () => {
       { statementCount: 6, materializedRows: 8 },
       { statementCount: 6, materializedRows: 8 },
     ]);
+  });
+
+  it("paginates archived feed-only Views globally across sections", async () => {
+    const target = createLocalBenchmarkTarget();
+    const session = openBenchmarkDatabase({ url: target.url });
+    try {
+      await applyMigrations(session.baseClient);
+      const now = new Date("2026-07-31T12:00:00.000Z");
+      await session.database.insert(user).values({
+        id: "user-one",
+        name: "User One",
+        email: "user-one@example.com",
+        emailVerified: true,
+        createdAt: now,
+        updatedAt: now,
+      });
+      await session.database.insert(feeds).values([
+        {
+          id: 1,
+          userId: "user-one",
+          name: "Earlier section",
+          url: "https://example.com/earlier.xml",
+          platform: "website",
+        },
+        {
+          id: 2,
+          userId: "user-one",
+          name: "Later section",
+          url: "https://example.com/later.xml",
+          platform: "website",
+        },
+      ]);
+      await session.database.insert(views).values({
+        id: 1,
+        userId: "user-one",
+        name: "Archived timeline",
+        contentFilter: 3,
+        layout: "list",
+        placement: 0,
+      });
+      await session.database.insert(viewFeeds).values([
+        { viewId: 1, feedId: 1 },
+        { viewId: 1, feedId: 2 },
+      ]);
+      await session.database.insert(viewSections).values([
+        { viewId: 1, placement: 0, itemType: "feed", itemId: 1 },
+        { viewId: 1, placement: 1, itemType: "feed", itemId: 2 },
+      ]);
+      await session.database.insert(feedItems).values([
+        ...Array.from({ length: 30 }, (_, index) => ({
+          id: `earlier-${index.toString().padStart(2, "0")}`,
+          feedId: 1,
+          contentId: `earlier-content-${index}`,
+          title: `Earlier ${index}`,
+          author: "Author",
+          url: `https://example.com/earlier/${index}`,
+          orientation: "horizontal" as const,
+          isWatched: true,
+          isWatchedUpdatedAt: new Date(now.getTime() - index * 1_000),
+          postedAt: now,
+          createdAt: now,
+          updatedAt: now,
+        })),
+        ...["z-newer", "a-newer"].map((id) => ({
+          id,
+          feedId: 2,
+          contentId: `${id}-content`,
+          title: id,
+          author: "Author",
+          url: `https://example.com/${id}`,
+          orientation: "horizontal" as const,
+          isWatched: true,
+          isWatchedUpdatedAt: new Date(now.getTime() + 1_000),
+          postedAt: now,
+          createdAt: now,
+          updatedAt: now,
+        })),
+      ]);
+
+      testState.database = session.database;
+      const api = createRouterClient(orpcRouter, {
+        context: {
+          headers: new Headers(),
+          session: { id: "session-one" },
+          user: { id: "user-one" },
+          db: session.database,
+        } as ORPCContext,
+      });
+      const contentStatusFilter = {
+        saveStatus: "inbox" as const,
+        archiveStatus: "archived" as const,
+      };
+      const firstStream = await api.initial.getItemsByContentStatus({
+        viewId: 1,
+        contentStatusFilter,
+        limit: 30,
+      });
+      const firstChunks = [];
+      for await (const chunk of firstStream) firstChunks.push(chunk);
+      const firstItems = firstChunks.flatMap((chunk) =>
+        chunk.type === "feed-items" ? chunk.feedItems : [],
+      );
+      const firstMetadata = firstChunks.find(
+        (chunk) => chunk.type === "feed-items",
+      );
+      expect(firstItems.slice(0, 2).map(({ id }) => id)).toEqual([
+        "z-newer",
+        "a-newer",
+      ]);
+      expect(firstMetadata?.type).toBe("feed-items");
+      if (firstMetadata?.type !== "feed-items") return;
+
+      const secondStream = await api.initial.getItemsByContentStatus({
+        viewId: 1,
+        contentStatusFilter,
+        cursor: firstMetadata.nextCursor ?? undefined,
+        limit: 30,
+      });
+      const secondItems = [];
+      for await (const chunk of secondStream) {
+        if (chunk.type === "feed-items") secondItems.push(...chunk.feedItems);
+      }
+      const allIds = [...firstItems, ...secondItems].map(({ id }) => id);
+      expect(allIds).toHaveLength(32);
+      expect(new Set(allIds).size).toBe(32);
+    } finally {
+      session.close();
+      target.cleanup();
+    }
   });
 
   it("revalidates only the target View and Uncategorized scopes", async () => {

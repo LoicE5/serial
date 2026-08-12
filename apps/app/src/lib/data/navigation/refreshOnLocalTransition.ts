@@ -12,10 +12,13 @@ import {
   navigationSnapshotStore,
   refreshNavigationSnapshotSafely,
 } from "./store";
-import type { VisibilityFilter } from "../atoms";
 import type { ApplicationFeedItem } from "~/server/db/schema";
+import type { ContentStatusFilter } from "~/lib/content-status";
+import {
+  CONTENT_STATUS_FILTERS,
+  isContentStatusAvailable,
+} from "~/lib/content-status";
 
-const VISIBILITY_FILTERS: VisibilityFilter[] = ["unread", "read", "later"];
 const NAVIGATION_REFRESH_DEBOUNCE_MS = 150;
 
 let navigationRefreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -31,18 +34,18 @@ function scheduleNavigationSnapshotRefresh() {
 
 function localBucketHasContent(
   viewId: number,
-  visibilityFilter: VisibilityFilter,
+  contentStatusFilter: ContentStatusFilter,
   nextItemMatchesBucket: boolean,
 ) {
   const mixedScope =
     mixedContentStore.getState().scopes[
-      getMixedScopeKey({ type: "view", viewId }, visibilityFilter)
+      getMixedScopeKey({ type: "view", viewId }, contentStatusFilter)
     ];
   if (mixedScope) return mixedScope.references.length > 0;
 
   const feedItemScopeIds =
     feedItemsStore.getState().scopeFeedItemIds[
-      getFeedItemScopeKey("view", viewId, visibilityFilter)
+      getFeedItemScopeKey("view", viewId, contentStatusFilter)
     ];
   if (feedItemScopeIds) return feedItemScopeIds.length > 0;
 
@@ -59,7 +62,7 @@ function hasAvailabilityTransition(
 }
 
 /**
- * Checks whether an optimistic Feed-item visibility change crossed a local
+ * Checks whether an optimistic Feed-item content-status change crossed a local
  * empty/non-empty boundary represented by any View chip. The chip state is
  * intentionally the previous-state authority; the local stores provide only
  * the post-mutation signal.
@@ -76,9 +79,9 @@ export function shouldRefreshNavigationAfterFeedItemChange(input: {
   );
 
   for (const view of views) {
-    for (const visibilityFilter of VISIBILITY_FILTERS) {
+    for (const contentStatusFilter of CONTENT_STATUS_FILTERS) {
       const predicate = createFeedItemFilterPredicate({
-        visibilityFilter,
+        contentStatusFilter,
         categoryFilter: -1,
         feedFilter: -1,
         viewFilter: view,
@@ -89,13 +92,13 @@ export function shouldRefreshNavigationAfterFeedItemChange(input: {
 
       if (!previousItemMatchesBucket && !nextItemMatchesBucket) continue;
 
-      const chipHasContent = getNavigationAvailability(
-        viewAvailability,
-        view.id,
-      )[visibilityFilter];
+      const chipHasContent = isContentStatusAvailable(
+        getNavigationAvailability(viewAvailability, view.id),
+        contentStatusFilter,
+      );
       const localHasContent = localBucketHasContent(
         view.id,
-        visibilityFilter,
+        contentStatusFilter,
         nextItemMatchesBucket,
       );
 
@@ -114,14 +117,14 @@ export function shouldRefreshNavigationAfterFeedItemChange(input: {
   for (const viewId of trackedViewIds) {
     if (views.some((view) => view.id === viewId)) continue;
 
-    for (const visibilityFilter of VISIBILITY_FILTERS) {
-      const chipHasContent = getNavigationAvailability(
-        viewAvailability,
-        viewId,
-      )[visibilityFilter];
+    for (const contentStatusFilter of CONTENT_STATUS_FILTERS) {
+      const chipHasContent = isContentStatusAvailable(
+        getNavigationAvailability(viewAvailability, viewId),
+        contentStatusFilter,
+      );
       const localHasContent = localBucketHasContent(
         viewId,
-        visibilityFilter,
+        contentStatusFilter,
         false,
       );
 

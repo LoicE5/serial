@@ -4,7 +4,7 @@ const DIRECT_MEMBERSHIP_PATH =
   /SEARCH serial_view_feeds[^\n]*\nSEARCH serial_feed [^\n]*\nSEARCH serial_feed_item[^\n]*/g;
 const TAG_MEMBERSHIP_PATH =
   /SEARCH serial_view_categories[^\n]*\nSEARCH serial_feed_categories[^\n]*\nSEARCH serial_feed [^\n]*\nSEARCH serial_feed_item[^\n]*/g;
-const VISIBILITY_COUNT = 3;
+const CONTENT_STATUS_COUNT = 4;
 
 export function evaluateNavigationViewAvailabilityPlan(
   planDetails: readonly string[],
@@ -19,8 +19,8 @@ export function evaluateNavigationViewAvailabilityPlan(
 
   return {
     membershipFirst:
-      directMembershipPaths === VISIBILITY_COUNT &&
-      tagMembershipPaths === VISIBILITY_COUNT,
+      directMembershipPaths === CONTENT_STATUS_COUNT &&
+      tagMembershipPaths === CONTENT_STATUS_COUNT,
     missingIndexScans,
   };
 }

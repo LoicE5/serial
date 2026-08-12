@@ -1,6 +1,5 @@
 import { atom, useSetAtom } from "jotai";
 import { clear } from "idb-keyval";
-import { z } from "zod";
 import { feedItemsStore } from "./store";
 import { contentCategoriesStore } from "./content-categories/store";
 import { feedCategoriesStore } from "./feed-categories/store";
@@ -11,14 +10,16 @@ import { bookmarksStore } from "./bookmarks/store";
 import { mixedContentStore } from "./mixed-content/store";
 import { navigationSnapshotStore } from "./navigation/store";
 import type { ApplicationView } from "~/server/db/schema";
+import type { ContentStatusFilter } from "~/lib/content-status";
+import { DEFAULT_CONTENT_STATUS_FILTER } from "~/lib/content-status";
 
 export const viewsAtom = atom<ApplicationView[]>([]);
 
 const ALL_TIME_DATE_FILTER = 0;
 export const dateFilterAtom = atom<number>(ALL_TIME_DATE_FILTER);
-export const visibilityFilterSchema = z.enum(["unread", "read", "later"]);
-export type VisibilityFilter = z.infer<typeof visibilityFilterSchema>;
-export const visibilityFilterAtom = atom<VisibilityFilter>("unread");
+export const contentStatusFilterAtom = atom<ContentStatusFilter>(
+  DEFAULT_CONTENT_STATUS_FILTER,
+);
 export const categoryFilterAtom = atom<number>(-1);
 export const feedFilterAtom = atom<number>(-1);
 

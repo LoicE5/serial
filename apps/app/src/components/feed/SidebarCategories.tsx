@@ -16,9 +16,9 @@ import {
 } from "~/components/ui/sidebar";
 import {
   categoryFilterAtom,
+  contentStatusFilterAtom,
   dateFilterAtom,
   feedFilterAtom,
-  visibilityFilterAtom,
 } from "~/lib/data/atoms";
 import { useContentCategories } from "~/lib/data/content-categories";
 import { useDeselectViewFilter } from "~/lib/data/views";
@@ -27,6 +27,7 @@ import {
   useNavigationSnapshot,
   useNavigationSnapshotStatus,
 } from "~/lib/data/navigation/store";
+import { isContentStatusAvailable } from "~/lib/content-status";
 import { Skeleton } from "~/components/ui/skeleton";
 
 export function SidebarCategories() {
@@ -45,17 +46,19 @@ export function SidebarCategories() {
   const { contentCategories } = useContentCategories();
   const navigationSnapshot = useNavigationSnapshot();
   const navigationSnapshotStatus = useNavigationSnapshotStatus();
-  const visibilityFilter = useAtomValue(visibilityFilterAtom);
+  const contentStatusFilter = useAtomValue(contentStatusFilterAtom);
 
   const categoryOptions = contentCategories.map((category) => ({
     ...category,
-    hasEntries: getNavigationAvailability(navigationSnapshot.tags, category.id)[
-      visibilityFilter
-    ],
+    hasEntries: isContentStatusAvailable(
+      getNavigationAvailability(navigationSnapshot.tags, category.id),
+      contentStatusFilter,
+    ),
   }));
 
   const hasAnyItems = Object.values(navigationSnapshot.feeds).some(
-    (availability) => availability[visibilityFilter],
+    (availability) =>
+      isContentStatusAvailable(availability, contentStatusFilter),
   );
 
   const updateCategoryFilter = (category: number) => {

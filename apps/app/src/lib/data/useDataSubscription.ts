@@ -12,7 +12,7 @@ import { shouldAlwaysKeepSSEConnectionAlive } from "./atoms";
 import { getFeedItemMembershipRevision } from "./feed-items/membershipRevision";
 import { setDataSubscriptionConnected } from "./subscriptionConnection";
 import type { PublishedChunk } from "~/server/api/publisher";
-import type { VisibilityFilter } from "./atoms";
+import type { ContentStatusFilter } from "~/lib/content-status";
 import type {
   ClientManifestEntry,
   PaginationCursor,
@@ -70,7 +70,7 @@ export function useDataSubscription() {
       void orpcRouterClient.mixedContent.requestPage({
         clientId,
         scope: scope.scope,
-        visibility: scope.visibility,
+        contentStatus: scope.contentStatus,
         cursor: null,
       });
     }
@@ -253,17 +253,17 @@ export function useDataSubscription() {
     [clientId],
   );
 
-  const requestItemsByVisibility = useCallback(
+  const requestItemsByContentStatus = useCallback(
     (
       viewId: number,
-      visibilityFilter: VisibilityFilter,
+      contentStatusFilter: ContentStatusFilter,
       cursor?: PaginationCursor,
       limit?: number,
       clientItems?: ClientManifestEntry[],
     ) => {
-      return orpcRouterClient.initial.requestItemsByVisibility({
+      return orpcRouterClient.initial.requestItemsByContentStatus({
         viewId,
-        visibilityFilter,
+        contentStatusFilter,
         cursor,
         limit,
         clientItems,
@@ -277,13 +277,13 @@ export function useDataSubscription() {
   const requestItemsByFeed = useCallback(
     (
       feedId: number,
-      visibilityFilter: VisibilityFilter,
+      contentStatusFilter: ContentStatusFilter,
       cursor?: PaginationCursor,
       limit?: number,
     ) => {
       return orpcRouterClient.initial.requestItemsByFeed({
         feedId,
-        visibilityFilter,
+        contentStatusFilter,
         cursor,
         limit,
         clientId,
@@ -295,13 +295,13 @@ export function useDataSubscription() {
   const requestItemsByCategoryId = useCallback(
     (
       categoryId: number,
-      visibilityFilter: VisibilityFilter,
+      contentStatusFilter: ContentStatusFilter,
       cursor?: PaginationCursor,
       limit?: number,
     ) => {
       return orpcRouterClient.initial.requestItemsByCategoryId({
         categoryId,
-        visibilityFilter,
+        contentStatusFilter,
         cursor,
         limit,
         clientId,
@@ -313,7 +313,7 @@ export function useDataSubscription() {
   return {
     requestInitialData,
     requestFullTextForItems,
-    requestItemsByVisibility,
+    requestItemsByContentStatus,
     requestItemsByFeed,
     requestItemsByCategoryId,
   };
@@ -338,7 +338,7 @@ export const dataSubscriptionActions = {
     scope: Parameters<
       typeof orpcRouterClient.mixedContent.requestPage
     >[0]["scope"],
-    visibility: VisibilityFilter,
+    contentStatus: ContentStatusFilter,
     cursor?: Parameters<
       typeof orpcRouterClient.mixedContent.requestPage
     >[0]["cursor"],
@@ -347,7 +347,7 @@ export const dataSubscriptionActions = {
     orpcRouterClient.mixedContent.requestPage({
       clientId: getDataSubscriptionClientId(),
       scope,
-      visibility,
+      contentStatus,
       cursor,
       limit,
     }),
@@ -372,16 +372,16 @@ export const dataSubscriptionActions = {
     }>,
     importMode?: "tags" | "views" | "ignore",
   ) => orpcRouterClient.initial.streamingImport({ feeds, importMode }),
-  requestItemsByVisibility: (
+  requestItemsByContentStatus: (
     viewId: number,
-    visibilityFilter: VisibilityFilter,
+    contentStatusFilter: ContentStatusFilter,
     cursor?: PaginationCursor,
     limit?: number,
     clientItems?: ClientManifestEntry[],
   ) =>
-    orpcRouterClient.initial.requestItemsByVisibility({
+    orpcRouterClient.initial.requestItemsByContentStatus({
       viewId,
-      visibilityFilter,
+      contentStatusFilter,
       cursor,
       limit,
       clientItems,
@@ -390,26 +390,26 @@ export const dataSubscriptionActions = {
     }),
   requestItemsByFeed: (
     feedId: number,
-    visibilityFilter: VisibilityFilter,
+    contentStatusFilter: ContentStatusFilter,
     cursor?: PaginationCursor,
     limit?: number,
   ) =>
     orpcRouterClient.initial.requestItemsByFeed({
       feedId,
-      visibilityFilter,
+      contentStatusFilter,
       cursor,
       limit,
       clientId: getDataSubscriptionClientId(),
     }),
   requestItemsByCategoryId: (
     categoryId: number,
-    visibilityFilter: VisibilityFilter,
+    contentStatusFilter: ContentStatusFilter,
     cursor?: PaginationCursor,
     limit?: number,
   ) =>
     orpcRouterClient.initial.requestItemsByCategoryId({
       categoryId,
-      visibilityFilter,
+      contentStatusFilter,
       cursor,
       limit,
       clientId: getDataSubscriptionClientId(),

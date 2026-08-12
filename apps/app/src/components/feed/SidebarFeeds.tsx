@@ -30,10 +30,10 @@ import {
 } from "~/components/ui/tooltip";
 import {
   categoryFilterAtom,
+  contentStatusFilterAtom,
   dateFilterAtom,
   feedFilterAtom,
   viewFilterAtom,
-  visibilityFilterAtom,
 } from "~/lib/data/atoms";
 import { useFeeds } from "~/lib/data/feeds";
 import { useFeedStatusDict } from "~/lib/data/store";
@@ -42,6 +42,7 @@ import {
   useNavigationSnapshot,
   useNavigationSnapshotStatus,
 } from "~/lib/data/navigation/store";
+import { isContentStatusAvailable } from "~/lib/content-status";
 
 function useDebouncedState(defaultValue: string, delay: number) {
   const [searchQuery, setSearchQuery] = useState(defaultValue);
@@ -153,7 +154,7 @@ export function SidebarFeeds() {
   const [feedFilter, setFeedFilter] = useAtom(feedFilterAtom);
   const categoryFilter = useAtomValue(categoryFilterAtom);
   const viewFilter = useAtomValue(viewFilterAtom);
-  const visibilityFilter = useAtomValue(visibilityFilterAtom);
+  const contentStatusFilter = useAtomValue(contentStatusFilterAtom);
   const feedStatusDict = useFeedStatusDict();
   const navigationSnapshot = useNavigationSnapshot();
   const navigationSnapshotStatus = useNavigationSnapshotStatus();
@@ -213,14 +214,15 @@ export function SidebarFeeds() {
     )
     .map((feed) => ({
       ...feed,
-      hasEntries: getNavigationAvailability(navigationSnapshot.feeds, feed.id)[
-        visibilityFilter
-      ],
+      hasEntries: isContentStatusAvailable(
+        getNavigationAvailability(navigationSnapshot.feeds, feed.id),
+        contentStatusFilter,
+      ),
       belongsToCurrentView: feed.id in currentViewFeedAvailability,
-      hasEntriesInCurrentView: getNavigationAvailability(
-        currentViewFeedAvailability,
-        feed.id,
-      )[visibilityFilter],
+      hasEntriesInCurrentView: isContentStatusAvailable(
+        getNavigationAvailability(currentViewFeedAvailability, feed.id),
+        contentStatusFilter,
+      ),
     }));
 
   const {
@@ -269,7 +271,8 @@ export function SidebarFeeds() {
   ];
 
   const hasAnyItems = Object.values(navigationSnapshot.feeds).some(
-    (availability) => availability[visibilityFilter],
+    (availability) =>
+      isContentStatusAvailable(availability, contentStatusFilter),
   );
 
   return (

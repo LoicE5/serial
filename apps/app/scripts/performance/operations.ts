@@ -1,7 +1,8 @@
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
-import type { VisibilityFilter } from "~/lib/data/atoms";
+import type { ContentStatusFilter } from "~/lib/content-status";
 import type { db as applicationDatabase } from "~/server/db";
-import { buildVisibilityFilter } from "~/lib/data/feed-items/filters";
+import { selectContentStatusOrderValue } from "~/lib/content-status";
+import { buildContentStatusFilter } from "~/lib/data/feed-items/filters";
 import {
   contentCategories,
   feedCategories,
@@ -43,7 +44,7 @@ const feedItemColumns = {
  * Benchmark adapter for the existing production view-page query path.
  *
  * The adapter deliberately performs the same prerequisite loads as
- * requestItemsByVisibility before executing the bounded feed-item query. The
+ * requestItemsByContentStatus before executing the bounded feed-item query. The
  * fixture's comparison view has no assignments, which is the production "all
  * feeds" semantic and avoids introducing benchmark-only membership shortcuts.
  */
@@ -51,10 +52,10 @@ export async function queryFeedViewPage(input: {
   database: Database;
   userId: string;
   viewId: number;
-  visibility: VisibilityFilter;
+  contentStatus: ContentStatusFilter;
   limit: number;
 }) {
-  const { database, userId, viewId, visibility, limit } = input;
+  const { database, userId, viewId, contentStatus, limit } = input;
   const [viewRows, feedRows, categoryRows] = await Promise.all([
     database
       .select()
@@ -113,22 +114,21 @@ export async function queryFeedViewPage(input: {
   }
 
   const feedIds = feedRows.map((feed) => feed.id);
-  const visibilityFilter = buildVisibilityFilter(visibility);
-  const where = and(inArray(feedItems.feedId, feedIds), visibilityFilter);
-  const orderBy =
-    visibility === "read"
-      ? [
-          desc(feedItems.isWatchedUpdatedAt),
-          desc(feedItems.postedAt),
-          desc(feedItems.id),
-        ]
-      : visibility === "later"
-        ? [
-            desc(feedItems.isWatchLaterUpdatedAt),
-            desc(feedItems.postedAt),
-            desc(feedItems.id),
-          ]
-        : [desc(feedItems.postedAt), desc(feedItems.id)];
+  const contentStatusPredicate = buildContentStatusFilter(contentStatus);
+  const where = and(inArray(feedItems.feedId, feedIds), contentStatusPredicate);
+  const orderBy = selectContentStatusOrderValue(contentStatus, {
+    published: [desc(feedItems.postedAt), desc(feedItems.id)],
+    saved: [
+      desc(feedItems.isWatchLaterUpdatedAt),
+      desc(feedItems.postedAt),
+      desc(feedItems.id),
+    ],
+    archived: [
+      desc(feedItems.isWatchedUpdatedAt),
+      desc(feedItems.postedAt),
+      desc(feedItems.id),
+    ],
+  });
   const rows = await database
     .select(feedItemColumns)
     .from(feedItems)
@@ -163,14 +163,14 @@ export async function queryMixedViewPage(input: {
   database: Database;
   userId: string;
   viewId: number;
-  visibility: VisibilityFilter;
+  contentStatus: ContentStatusFilter;
   limit: number;
 }) {
   return queryMixedContentPage({
     database: input.database,
     userId: input.userId,
     scope: { type: "view", viewId: input.viewId },
-    visibility: input.visibility,
+    contentStatus: input.contentStatus,
     limit: input.limit,
   });
 }

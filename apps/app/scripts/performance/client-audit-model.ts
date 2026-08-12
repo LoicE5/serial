@@ -2,13 +2,17 @@ import { serialize } from "node:v8";
 import { performance } from "node:perf_hooks";
 import { BENCHMARK_PROFILES } from "./model";
 import type { BenchmarkProfileName } from "./model";
-import type { VisibilityFilter } from "~/lib/data/atoms";
 import type { ApplicationFeedItem, ApplicationView } from "~/server/db/schema";
 import type {
   ApplicationBookmark,
   MixedContentReference,
 } from "~/server/mixed-content/projection";
 import type { PublishedChunk } from "~/server/api/publisher";
+import type { ContentStatusFilter } from "~/lib/content-status";
+import {
+  CONTENT_STATUS_FILTERS,
+  selectContentStatusOrderValue,
+} from "~/lib/content-status";
 import { bookmarksStore } from "~/lib/data/bookmarks/store";
 import { feedItemsStore } from "~/lib/data/store";
 import { mixedContentStore } from "~/lib/data/mixed-content/store";
@@ -32,7 +36,7 @@ import {
 import { projectLocalMixedContentOrder } from "~/lib/data/mixed-content/bookmarkProjection";
 
 const PAGE_SIZE = 30;
-const VISIBILITIES: VisibilityFilter[] = ["unread", "read", "later"];
+const CONTENT_STATUSES: readonly ContentStatusFilter[] = CONTENT_STATUS_FILTERS;
 const FIXTURE_TIME = new Date("2026-01-15T12:00:00.000Z");
 const NORMALIZED_PERSISTENCE_MUTATION_BUDGET_BYTES = 512 * 1_024;
 
@@ -428,9 +432,10 @@ function seedClientFixture(profileName: BenchmarkProfileName) {
   });
 
   for (const view of views) {
-    for (const visibility of VISIBILITIES) {
+    for (const contentStatus of CONTENT_STATUSES) {
       const offset =
-        (view.id * VISIBILITIES.length + VISIBILITIES.indexOf(visibility)) *
+        (view.id * CONTENT_STATUSES.length +
+          CONTENT_STATUSES.indexOf(contentStatus)) *
         PAGE_SIZE;
       const references = Array.from({ length: PAGE_SIZE }, (_, index) =>
         feedReference((offset + index) % profile.feedItems),
@@ -441,28 +446,25 @@ function seedClientFixture(profileName: BenchmarkProfileName) {
           : bookmarks.find(
               (bookmark) =>
                 bookmark.viewIds.includes(view.id) &&
-                (bookmark.isSaved
-                  ? visibility === "later"
-                  : bookmark.isRead
-                    ? visibility === "read"
-                    : visibility === "unread"),
+                bookmark.isSaved === (contentStatus.saveStatus === "saved") &&
+                bookmark.isRead ===
+                  (contentStatus.archiveStatus === "archived"),
             );
       if (scopedBookmark) {
         references[references.length - 1] = {
           entityKind: "bookmark",
           entityId: scopedBookmark.id,
           sectionPlacement: null,
-          normalizedAt:
-            visibility === "later"
-              ? scopedBookmark.savedUpdatedAt
-              : visibility === "read"
-                ? scopedBookmark.readUpdatedAt
-                : scopedBookmark.createdAt,
+          normalizedAt: selectContentStatusOrderValue(contentStatus, {
+            published: scopedBookmark.createdAt,
+            saved: scopedBookmark.savedUpdatedAt,
+            archived: scopedBookmark.readUpdatedAt,
+          }),
         };
       }
       mixedContentStore.getState().applyPage({
         scope: { type: "view", viewId: view.id },
-        visibility,
+        contentStatus,
         page: {
           references,
           bookmarks: scopedBookmark ? [scopedBookmark] : [],
@@ -666,7 +668,10 @@ export function runClientAuditProfile(
       bookmarks: bookmarksStore.getState().snapshot(),
       scope: { type: "view", viewId: localProjectionView.id },
       views: fixture.views,
-      visibility: "later",
+      contentStatus: {
+        saveStatus: "saved",
+        archiveStatus: "unread",
+      },
     });
     return 0;
   });
@@ -830,7 +835,7 @@ export function runClientAuditProfile(
       feedItems: profile.feedItems,
       bookmarks: profile.bookmarks,
       views: profile.views,
-      loadedMixedScopes: (profile.views + 1) * VISIBILITIES.length,
+      loadedMixedScopes: (profile.views + 1) * CONTENT_STATUSES.length,
       referencesPerScope: PAGE_SIZE,
     },
     persistedPayloadBytes: payloadBytes,

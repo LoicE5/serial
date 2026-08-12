@@ -3,6 +3,11 @@ import type { ApplicationFeedItem, ApplicationView } from "~/server/db/schema";
 import { shouldRefreshNavigationAfterFeedItemChange } from "~/lib/data/navigation/refreshOnLocalTransition";
 import { feedItemsStore, getFeedItemScopeKey } from "~/lib/data/store";
 import { viewsStore } from "~/lib/data/views/store";
+import {
+  INBOX_ARCHIVED_CONTENT_STATUS,
+  INBOX_UNREAD_CONTENT_STATUS,
+  SAVED_UNREAD_CONTENT_STATUS,
+} from "~/lib/content-status";
 
 const NOW = new Date("2026-08-05T12:00:00.000Z");
 const VIEW_ID = 10;
@@ -57,7 +62,12 @@ beforeEach(() => {
   const view = makeView();
   viewsStore.getState().set([view]);
   viewsStore.getState().setViewAvailability({
-    [VIEW_ID]: { unread: true, read: false, later: false },
+    [VIEW_ID]: {
+      unread: true,
+      read: false,
+      later: false,
+      savedArchived: false,
+    },
   });
   feedItemsStore.getState().reset();
 });
@@ -74,7 +84,7 @@ describe("navigation refresh transitions", () => {
     feedItemsStore.getState().setFeedItems([nextItem]);
     feedItemsStore.setState({
       scopeFeedItemIds: {
-        [getFeedItemScopeKey("view", VIEW_ID, "unread")]: [],
+        [getFeedItemScopeKey("view", VIEW_ID, INBOX_UNREAD_CONTENT_STATUS)]: [],
       },
     });
 
@@ -87,13 +97,21 @@ describe("navigation refresh transitions", () => {
     const previousItem = makeItem(true);
     const nextItem = makeItem(false);
     viewsStore.getState().setViewAvailability({
-      [VIEW_ID]: { unread: false, read: true, later: false },
+      [VIEW_ID]: {
+        unread: false,
+        read: true,
+        later: false,
+        savedArchived: false,
+      },
     });
     feedItemsStore.getState().setFeedItems([nextItem]);
     feedItemsStore.setState({
       scopeFeedItemIds: {
-        [getFeedItemScopeKey("view", VIEW_ID, "read")]: [],
-        [getFeedItemScopeKey("view", VIEW_ID, "unread")]: [nextItem.id],
+        [getFeedItemScopeKey("view", VIEW_ID, INBOX_ARCHIVED_CONTENT_STATUS)]:
+          [],
+        [getFeedItemScopeKey("view", VIEW_ID, INBOX_UNREAD_CONTENT_STATUS)]: [
+          nextItem.id,
+        ],
       },
     });
 
@@ -106,13 +124,22 @@ describe("navigation refresh transitions", () => {
     const previousItem = makeItem(false);
     const nextItem = makeItem(true);
     viewsStore.getState().setViewAvailability({
-      [VIEW_ID]: { unread: true, read: true, later: false },
+      [VIEW_ID]: {
+        unread: true,
+        read: true,
+        later: false,
+        savedArchived: false,
+      },
     });
     feedItemsStore.getState().setFeedItems([nextItem]);
     feedItemsStore.setState({
       scopeFeedItemIds: {
-        [getFeedItemScopeKey("view", VIEW_ID, "unread")]: ["another-item"],
-        [getFeedItemScopeKey("view", VIEW_ID, "read")]: [nextItem.id],
+        [getFeedItemScopeKey("view", VIEW_ID, INBOX_UNREAD_CONTENT_STATUS)]: [
+          "another-item",
+        ],
+        [getFeedItemScopeKey("view", VIEW_ID, INBOX_ARCHIVED_CONTENT_STATUS)]: [
+          nextItem.id,
+        ],
       },
     });
 
@@ -129,12 +156,17 @@ describe("navigation refresh transitions", () => {
     };
     const nextItem = { ...previousItem, isWatchLater: false };
     viewsStore.getState().setViewAvailability({
-      [VIEW_ID]: { unread: true, read: false, later: true },
+      [VIEW_ID]: {
+        unread: true,
+        read: false,
+        later: true,
+        savedArchived: false,
+      },
     });
     feedItemsStore.getState().setFeedItems([nextItem]);
     feedItemsStore.setState({
       scopeFeedItemIds: {
-        [getFeedItemScopeKey("view", VIEW_ID, "later")]: [],
+        [getFeedItemScopeKey("view", VIEW_ID, SAVED_UNREAD_CONTENT_STATUS)]: [],
       },
     });
 

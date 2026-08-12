@@ -8,9 +8,9 @@ import type { ClientAuditBudgetMeasurements } from "../../../scripts/performance
 
 describe("client performance audit model", () => {
   it.each([
-    ["small", 12],
-    ["representative", 33],
-    ["stress", 78],
+    ["small", 16],
+    ["representative", 44],
+    ["stress", 104],
   ] as const)(
     "keeps %s Bookmark events entity-neutral and projection work scope-bound",
     (profile, loadedMixedScopes) => {

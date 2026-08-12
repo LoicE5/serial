@@ -5,9 +5,10 @@ import {
   clearRetainedEntityPins,
   setRetainedEntityPins,
 } from "~/lib/data/page-retention";
-import { feedItemsStore } from "~/lib/data/store";
+import { feedItemsStore, getFeedItemScopeKey } from "~/lib/data/store";
+import { CONTENT_STATUS_FILTERS } from "~/lib/content-status";
 
-const SCOPE_KEY = "view:7:unread";
+const SCOPE_KEY = getFeedItemScopeKey("view", 7, CONTENT_STATUS_FILTERS[0]);
 
 function makeItem(pageIndex: number, itemIndex: number): ApplicationFeedItem {
   const id = `page-${pageIndex}-item-${itemIndex}`;
@@ -67,6 +68,30 @@ afterEach(() => {
 });
 
 describe("Feed-item page retention", () => {
+  it("retains all four content-status pages under collision-free identities", () => {
+    const state = feedItemsStore.getState();
+    for (const [index, contentStatus] of CONTENT_STATUS_FILTERS.entries()) {
+      const item = makeItem(index, 0);
+      state.setFeedItems([item]);
+      state.retainFeedItemPage({
+        scopeKey: getFeedItemScopeKey("view", 7, contentStatus),
+        itemIds: [item.id],
+        requestCursor: null,
+        nextCursor: { id: `cursor-${index}` },
+        replacesScope: true,
+      });
+    }
+
+    expect(
+      Object.keys(feedItemsStore.getState().retainedFeedPages).sort(),
+    ).toEqual([
+      "view:7:inbox:archived",
+      "view:7:inbox:unread",
+      "view:7:saved:archived",
+      "view:7:saved:unread",
+    ]);
+  });
+
   it("plateaus pages, entities, scope references, and retained bytes", () => {
     seedAndRetainPages(12);
 

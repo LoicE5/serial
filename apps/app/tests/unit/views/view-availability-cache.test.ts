@@ -29,8 +29,8 @@ describe("View availability cache", () => {
     try {
       viewsStoreApi.getState().reset();
       viewsStoreApi.getState().setViewAvailability({
-        1: { unread: true, read: false, later: false },
-        2: { unread: false, read: true, later: true },
+        1: { unread: true, read: false, later: false, savedArchived: false },
+        2: { unread: false, read: true, later: true, savedArchived: true },
       });
       const persisted = values.get("serial-views-store");
       if (!persisted) throw new Error("View availability was not persisted");
@@ -40,8 +40,8 @@ describe("View availability cache", () => {
       await viewsStoreApi.persist.rehydrate();
 
       expect(viewsStoreApi.getState().viewAvailability).toEqual({
-        1: { unread: true, read: false, later: false },
-        2: { unread: false, read: true, later: true },
+        1: { unread: true, read: false, later: false, savedArchived: false },
+        2: { unread: false, read: true, later: true, savedArchived: true },
       });
       expect(Object.keys(persisted.state)).not.toEqual(
         expect.arrayContaining(["tags", "feeds", "viewFeeds"]),

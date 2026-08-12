@@ -1,5 +1,4 @@
 import { INBOX_VIEW_ID } from "../views/constants";
-import type { VisibilityFilter } from "../atoms";
 import type {
   ApplicationFeedItem,
   ApplicationView,
@@ -11,11 +10,22 @@ import type {
   MixedContentReference,
   MixedContentScope,
 } from "~/server/mixed-content/projection";
+import type { ContentStatusFilter } from "~/lib/content-status";
+import {
+  buildContentStatusKey,
+  contentStatusOrderDimension,
+  contentStatusUsesSectionOrder,
+  selectContentStatusOrderValue,
+} from "~/lib/content-status";
 import { contentFilterAllowsDescriptor } from "~/lib/views/contentFilter";
+import {
+  compareDescendingIds,
+  compareDescendingIdsThenKinds,
+} from "~/lib/sortOrder";
 
 export type LoadedMixedScope = {
   scope: MixedContentScope;
-  visibility: VisibilityFilter;
+  contentStatus: ContentStatusFilter;
   references: MixedContentReference[];
   cursor: MixedContentCursor;
   hasMore: boolean;
@@ -30,36 +40,60 @@ export type ProjectionIndexes = {
 
 export function getMixedScopeKey(
   scope: MixedContentScope,
-  visibility: VisibilityFilter,
+  contentStatus: ContentStatusFilter,
 ) {
+  const contentStatusKey = buildContentStatusKey(contentStatus);
   return scope.type === "view"
-    ? `view:${scope.viewId}:${visibility}`
-    : `tag:${scope.tagId}:${visibility}`;
+    ? `view:${scope.viewId}:${contentStatusKey}`
+    : `tag:${scope.tagId}:${contentStatusKey}`;
 }
 
 function compareReferences(
   left: MixedContentReference,
   right: MixedContentReference,
+  usesGlobalEntityIdTieBreak = false,
 ) {
   const leftPlacement = left.sectionPlacement ?? 0;
   const rightPlacement = right.sectionPlacement ?? 0;
-  if (leftPlacement !== rightPlacement) return leftPlacement - rightPlacement;
+  if (!usesGlobalEntityIdTieBreak && leftPlacement !== rightPlacement) {
+    return leftPlacement - rightPlacement;
+  }
   const timeDifference =
     right.normalizedAt.getTime() - left.normalizedAt.getTime();
   if (timeDifference !== 0) return timeDifference;
+  if (usesGlobalEntityIdTieBreak) {
+    return compareDescendingIdsThenKinds(
+      left.entityId,
+      right.entityId,
+      left.entityKind,
+      right.entityKind,
+    );
+  }
   const kindDifference = left.entityKind.localeCompare(right.entityKind);
   if (kindDifference !== 0) return kindDifference;
-  return right.entityId.localeCompare(left.entityId);
+  return compareDescendingIds(left.entityId, right.entityId);
 }
 
-export function uniqueReferences(references: MixedContentReference[]) {
+export function uniqueReferences(
+  references: MixedContentReference[],
+  options: { usesGlobalEntityIdTieBreak?: boolean } = {},
+) {
   const byKey = new Map(
     references.map((reference) => [
       `${reference.entityKind}:${reference.entityId}`,
       reference,
     ]),
   );
-  return [...byKey.values()].sort(compareReferences);
+  return [...byKey.values()].sort((left, right) =>
+    compareReferences(left, right, options.usesGlobalEntityIdTieBreak),
+  );
+}
+
+export function usesGlobalArchivedViewOrder(
+  scope: MixedContentScope,
+  contentStatus: ContentStatusFilter,
+) {
+  return scope.type === "view" && !contentStatusUsesSectionOrder(contentStatus);
 }
 
 export function referencesEqual(
@@ -220,11 +254,13 @@ export function buildProjectionIndexes(
   return indexes;
 }
 
-export function bookmarkVisibility(
+export function bookmarkContentStatus(
   bookmark: ApplicationBookmark,
-): VisibilityFilter {
-  if (bookmark.isSaved) return "later";
-  return bookmark.isRead ? "read" : "unread";
+): ContentStatusFilter {
+  return {
+    saveStatus: bookmark.isSaved ? "saved" : "inbox",
+    archiveStatus: bookmark.isRead ? "archived" : "unread",
+  };
 }
 
 function sameIds(left: number[], right: number[]) {
@@ -253,20 +289,18 @@ export function isBookmarkProjectionChange(
     return true;
   }
 
-  const visibility = bookmarkVisibility(bookmark);
-  if (visibility === "later") {
-    return (
+  const contentStatus = bookmarkContentStatus(bookmark);
+  const orderDimension = contentStatusOrderDimension(contentStatus);
+  if (orderDimension === "published") return false;
+  return selectContentStatusOrderValue(contentStatus, {
+    published: false,
+    saved:
       previousBookmark.savedUpdatedAt.getTime() !==
-      bookmark.savedUpdatedAt.getTime()
-    );
-  }
-  if (visibility === "read") {
-    return (
+      bookmark.savedUpdatedAt.getTime(),
+    archived:
       previousBookmark.readUpdatedAt.getTime() !==
-      bookmark.readUpdatedAt.getTime()
-    );
-  }
-  return false;
+      bookmark.readUpdatedAt.getTime(),
+  });
 }
 
 function isBookmarkCompatibleWithView(view: ApplicationView) {
@@ -339,10 +373,10 @@ export function matchingLoadedScopeKeys(
   scopes: Record<string, LoadedMixedScope>,
   views: ApplicationView[],
 ) {
-  const visibility = bookmarkVisibility(bookmark);
+  const contentStatus = bookmarkContentStatus(bookmark);
   const keys = new Set<string>();
   for (const tagId of bookmark.tagIds) {
-    const key = getMixedScopeKey({ type: "tag", tagId }, visibility);
+    const key = getMixedScopeKey({ type: "tag", tagId }, contentStatus);
     if (scopes[key]) keys.add(key);
   }
 
@@ -351,16 +385,19 @@ export function matchingLoadedScopeKeys(
     const view = index.compatibleViewsById.get(viewId);
     if (!view) continue;
     if (!isInsideTimeWindow(bookmark.createdAt, view.daysWindow)) continue;
-    const key = getMixedScopeKey({ type: "view", viewId: view.id }, visibility);
+    const key = getMixedScopeKey(
+      { type: "view", viewId: view.id },
+      contentStatus,
+    );
     if (scopes[key]) keys.add(key);
   }
 
   if (matchingIds.size === 0) {
-    const inboxKey = getMixedScopeKey(
+    const uncategorizedKey = getMixedScopeKey(
       { type: "view", viewId: INBOX_VIEW_ID },
-      visibility,
+      contentStatus,
     );
-    if (scopes[inboxKey]) keys.add(inboxKey);
+    if (scopes[uncategorizedKey]) keys.add(uncategorizedKey);
   }
   return keys;
 }
@@ -385,24 +422,24 @@ export function matchesScope(
 
 function feedItemNormalizedAt(
   item: ApplicationFeedItem,
-  visibility: VisibilityFilter,
+  contentStatus: ContentStatusFilter,
 ) {
-  if (visibility === "later") {
-    return item.isWatchLaterUpdatedAt ?? item.postedAt;
-  }
-  if (visibility === "read") {
-    return item.isWatchedUpdatedAt ?? item.postedAt;
-  }
-  return item.postedAt;
+  return selectContentStatusOrderValue(contentStatus, {
+    published: item.postedAt,
+    saved: item.isWatchLaterUpdatedAt ?? item.postedAt,
+    archived: item.isWatchedUpdatedAt ?? item.postedAt,
+  });
 }
 
 function bookmarkNormalizedAt(
   bookmark: ApplicationBookmark,
-  visibility: VisibilityFilter,
+  contentStatus: ContentStatusFilter,
 ) {
-  if (visibility === "later") return bookmark.savedUpdatedAt;
-  if (visibility === "read") return bookmark.readUpdatedAt;
-  return bookmark.createdAt;
+  return selectContentStatusOrderValue(contentStatus, {
+    published: bookmark.createdAt,
+    saved: bookmark.savedUpdatedAt,
+    archived: bookmark.readUpdatedAt,
+  });
 }
 
 function localSectionPlacement(input: {
@@ -447,7 +484,7 @@ export function projectLocalMixedContentOrder(input: {
   bookmarks: Record<string, ApplicationBookmark>;
   scope: MixedContentScope;
   views: ApplicationView[];
-  visibility: VisibilityFilter;
+  contentStatus: ContentStatusFilter;
   feedCategories?: DatabaseFeedCategory[];
 }) {
   const {
@@ -456,7 +493,7 @@ export function projectLocalMixedContentOrder(input: {
     bookmarks,
     scope,
     views,
-    visibility,
+    contentStatus,
     feedCategories = [],
   } = input;
   const bookmarkValues = Object.values(bookmarks);
@@ -464,6 +501,10 @@ export function projectLocalMixedContentOrder(input: {
     scope.type === "view"
       ? views.find((candidate) => candidate.id === scope.viewId)
       : undefined;
+  const usesGlobalEntityIdTieBreak = usesGlobalArchivedViewOrder(
+    scope,
+    contentStatus,
+  );
   const categoryIdsByFeedId = new Map<number, Set<number>>();
   for (const assignment of feedCategories) {
     const categoryIds = categoryIdsByFeedId.get(assignment.feedId);
@@ -491,41 +532,61 @@ export function projectLocalMixedContentOrder(input: {
     entries.push({
       id,
       entityKind: "feed-item",
-      normalizedAt: feedItemNormalizedAt(item, visibility),
-      sectionPlacement: localSectionPlacement({
-        entityKind: "feed-item",
-        feedId: item.feedId,
-        view,
-        categoryIdsByFeedId,
-      }),
+      normalizedAt: feedItemNormalizedAt(item, contentStatus),
+      sectionPlacement: usesGlobalEntityIdTieBreak
+        ? 0
+        : localSectionPlacement({
+            entityKind: "feed-item",
+            feedId: item.feedId,
+            view,
+            categoryIdsByFeedId,
+          }),
     });
   }
   for (const bookmark of bookmarkValues) {
-    if (bookmarkVisibility(bookmark) !== visibility) continue;
+    if (
+      buildContentStatusKey(bookmarkContentStatus(bookmark)) !==
+      buildContentStatusKey(contentStatus)
+    ) {
+      continue;
+    }
     if (!matchesScope(bookmark, scope, views)) continue;
     entries.push({
       id: bookmark.id,
       entityKind: "bookmark",
-      normalizedAt: bookmarkNormalizedAt(bookmark, visibility),
-      sectionPlacement: localSectionPlacement({
-        entityKind: "bookmark",
-        tagIds: bookmark.tagIds,
-        view,
-        categoryIdsByFeedId,
-      }),
+      normalizedAt: bookmarkNormalizedAt(bookmark, contentStatus),
+      sectionPlacement: usesGlobalEntityIdTieBreak
+        ? 0
+        : localSectionPlacement({
+            entityKind: "bookmark",
+            tagIds: bookmark.tagIds,
+            view,
+            categoryIdsByFeedId,
+          }),
     });
   }
 
   entries.sort((left, right) => {
-    if (left.sectionPlacement !== right.sectionPlacement) {
+    if (
+      !usesGlobalEntityIdTieBreak &&
+      left.sectionPlacement !== right.sectionPlacement
+    ) {
       return left.sectionPlacement - right.sectionPlacement;
     }
     const timeDifference =
       right.normalizedAt.getTime() - left.normalizedAt.getTime();
     if (timeDifference !== 0) return timeDifference;
+    if (usesGlobalEntityIdTieBreak) {
+      return compareDescendingIdsThenKinds(
+        left.id,
+        right.id,
+        left.entityKind,
+        right.entityKind,
+      );
+    }
     const kindDifference = left.entityKind.localeCompare(right.entityKind);
     if (kindDifference !== 0) return kindDifference;
-    return right.id.localeCompare(left.id);
+    return compareDescendingIds(left.id, right.id);
   });
   return entries.map(({ id }) => id);
 }
@@ -541,7 +602,9 @@ export function bookmarkReference(
     scope.type === "view"
       ? views.find((candidate) => candidate.id === scope.viewId)
       : undefined;
-  const hasSections = (view?.viewSections.length ?? 0) > 0;
+  const hasSections =
+    (view?.viewSections.length ?? 0) > 0 &&
+    contentStatusUsesSectionOrder(scopeState.contentStatus);
   const matchingPlacements =
     view?.viewSections
       .filter(
@@ -549,12 +612,7 @@ export function bookmarkReference(
           section.itemType === "tag" && bookmarkTagIds.has(section.itemId),
       )
       .map((section) => section.placement) ?? [];
-  const normalizedAt =
-    scopeState.visibility === "later"
-      ? bookmark.savedUpdatedAt
-      : scopeState.visibility === "read"
-        ? bookmark.readUpdatedAt
-        : bookmark.createdAt;
+  const normalizedAt = bookmarkNormalizedAt(bookmark, scopeState.contentStatus);
   return {
     entityKind: "bookmark",
     entityId: bookmark.id,

@@ -17,14 +17,18 @@ import type {
   MixedContentCursor,
   MixedContentEntityKind,
   MixedContentScope,
-  SavedReadState,
 } from "../projection";
 import type { ScopeData } from "./scope";
-import type { VisibilityFilter } from "~/lib/data/atoms";
 import type { db as defaultDatabase } from "~/server/db";
 import type { ApplicationFeedItem } from "~/server/db/schema";
+import type { ContentStatusFilter } from "~/lib/content-status";
+import { selectContentStatusOrderValue } from "~/lib/content-status";
 import { bookmarks, feedItems, feeds } from "~/server/db/schema";
 import { UNCATEGORIZED_SECTION_PLACEMENT } from "~/lib/views/sections";
+import {
+  compareDescendingIds,
+  compareDescendingIdsThenKinds,
+} from "~/lib/sortOrder";
 
 type MixedContentDatabase = typeof defaultDatabase;
 
@@ -48,52 +52,34 @@ export type Candidate = FeedCandidate | BookmarkCandidate;
 const applicationFeedItemColumns = { ...getTableColumns(feedItems) };
 Reflect.deleteProperty(applicationFeedItemColumns, "normalizedUrl");
 
-function bookmarkVisibilityCondition(
-  visibility: VisibilityFilter,
-  savedState: SavedReadState = "unread",
-) {
-  if (visibility === "later") {
-    return and(
-      eq(bookmarks.isSaved, true),
-      eq(bookmarks.isRead, savedState === "archived"),
-    );
-  }
+function bookmarkContentStatusCondition(contentStatus: ContentStatusFilter) {
   return and(
-    eq(bookmarks.isSaved, false),
-    eq(bookmarks.isRead, visibility === "read"),
+    eq(bookmarks.isSaved, contentStatus.saveStatus === "saved"),
+    eq(bookmarks.isRead, contentStatus.archiveStatus === "archived"),
   );
 }
 
-function feedVisibilityCondition(
-  visibility: VisibilityFilter,
-  savedState: SavedReadState = "unread",
-) {
-  if (visibility === "later") {
-    return and(
-      eq(feedItems.isWatchLater, true),
-      eq(feedItems.isWatched, savedState === "archived"),
-    );
-  }
+function feedContentStatusCondition(contentStatus: ContentStatusFilter) {
   return and(
-    eq(feedItems.isWatchLater, false),
-    eq(feedItems.isWatched, visibility === "read"),
+    eq(feedItems.isWatchLater, contentStatus.saveStatus === "saved"),
+    eq(feedItems.isWatched, contentStatus.archiveStatus === "archived"),
   );
 }
 
-function bookmarkTimeExpression(visibility: VisibilityFilter) {
-  if (visibility === "later") return sql<number>`${bookmarks.savedUpdatedAt}`;
-  if (visibility === "read") return sql<number>`${bookmarks.readUpdatedAt}`;
-  return sql<number>`${bookmarks.createdAt}`;
+function bookmarkTimeExpression(contentStatus: ContentStatusFilter) {
+  return selectContentStatusOrderValue(contentStatus, {
+    published: sql<number>`${bookmarks.createdAt}`,
+    saved: sql<number>`${bookmarks.savedUpdatedAt}`,
+    archived: sql<number>`${bookmarks.readUpdatedAt}`,
+  });
 }
 
-function feedTimeExpression(visibility: VisibilityFilter) {
-  if (visibility === "later") {
-    return sql<number>`COALESCE(${feedItems.isWatchLaterUpdatedAt}, ${feedItems.postedAt})`;
-  }
-  if (visibility === "read") {
-    return sql<number>`COALESCE(${feedItems.isWatchedUpdatedAt}, ${feedItems.postedAt})`;
-  }
-  return sql<number>`${feedItems.postedAt}`;
+function feedTimeExpression(contentStatus: ContentStatusFilter) {
+  return selectContentStatusOrderValue(contentStatus, {
+    published: sql<number>`${feedItems.postedAt}`,
+    saved: sql<number>`COALESCE(${feedItems.isWatchLaterUpdatedAt}, ${feedItems.postedAt})`,
+    archived: sql<number>`COALESCE(${feedItems.isWatchedUpdatedAt}, ${feedItems.postedAt})`,
+  });
 }
 
 function qualifiedColumn(table: unknown, column: { name: string }) {
@@ -153,15 +139,30 @@ function cursorCondition(input: {
   normalizedAt: SQL<number>;
   entityKind: MixedContentEntityKind;
   entityId: typeof bookmarks.id | typeof feedItems.id;
+  usesGlobalEntityIdTieBreak: boolean;
 }) {
-  const { cursor, placement, normalizedAt, entityKind, entityId } = input;
+  const {
+    cursor,
+    placement,
+    normalizedAt,
+    entityKind,
+    entityId,
+    usesGlobalEntityIdTieBreak,
+  } = input;
   if (!cursor) return undefined;
   const cursorPlacement = cursor.sectionPlacement ?? 0;
   const cursorTime = cursor.normalizedAt.getTime();
   const kindOrder = entityKind === "bookmark" ? 0 : 1;
   const cursorKindOrder = cursor.entityKind === "bookmark" ? 0 : 1;
-  const idTie =
-    kindOrder > cursorKindOrder
+  const idTie = usesGlobalEntityIdTieBreak
+    ? or(
+        lt(entityId, cursor.entityId),
+        and(
+          eq(entityId, cursor.entityId),
+          kindOrder > cursorKindOrder ? sql`1` : sql`0`,
+        ),
+      )
+    : kindOrder > cursorKindOrder
       ? sql`1`
       : kindOrder === cursorKindOrder
         ? lt(entityId, cursor.entityId)
@@ -182,15 +183,15 @@ export async function queryBookmarkCandidates(input: {
   userId: string;
   scope: MixedContentScope;
   scopeData: ScopeData;
-  visibility: VisibilityFilter;
-  savedState?: SavedReadState;
+  contentStatus: ContentStatusFilter;
   sectionPlacement?: number | null;
   cursor?: MixedContentCursor;
   limit: number;
-  hasSections: boolean;
+  usesSectionOrder: boolean;
+  usesGlobalEntityIdTieBreak: boolean;
 }): Promise<BookmarkCandidate[]> {
-  const normalizedAt = bookmarkTimeExpression(input.visibility);
-  const placement = input.hasSections
+  const normalizedAt = bookmarkTimeExpression(input.contentStatus);
+  const placement = input.usesSectionOrder
     ? bookmarkSectionPlacement((input.scope as { viewId: number }).viewId)
     : sql<number>`CAST(0 AS INTEGER)`;
   const rows = await input.database
@@ -199,9 +200,9 @@ export async function queryBookmarkCandidates(input: {
     .where(
       and(
         eq(bookmarks.userId, input.userId),
-        bookmarkVisibilityCondition(input.visibility, input.savedState),
+        bookmarkContentStatusCondition(input.contentStatus),
         bookmarkScopeCondition(input),
-        input.sectionPlacement === undefined || !input.hasSections
+        input.sectionPlacement === undefined || !input.usesSectionOrder
           ? undefined
           : eq(placement, input.sectionPlacement),
         cursorCondition({
@@ -210,6 +211,7 @@ export async function queryBookmarkCandidates(input: {
           normalizedAt,
           entityKind: "bookmark",
           entityId: bookmarks.id,
+          usesGlobalEntityIdTieBreak: input.usesGlobalEntityIdTieBreak,
         }),
       ),
     )
@@ -218,7 +220,7 @@ export async function queryBookmarkCandidates(input: {
   return rows.map((row) => ({
     entityKind: "bookmark",
     entityId: row.id,
-    sectionPlacement: input.hasSections ? row.placement : null,
+    sectionPlacement: input.usesSectionOrder ? row.placement : null,
     normalizedAt: new Date(row.normalizedAt),
   }));
 }
@@ -228,15 +230,15 @@ export async function queryFeedCandidates(input: {
   userId: string;
   scope: MixedContentScope;
   scopeData: ScopeData;
-  visibility: VisibilityFilter;
-  savedState?: SavedReadState;
+  contentStatus: ContentStatusFilter;
   sectionPlacement?: number | null;
   cursor?: MixedContentCursor;
   limit: number;
-  hasSections: boolean;
+  usesSectionOrder: boolean;
+  usesGlobalEntityIdTieBreak: boolean;
 }): Promise<FeedCandidate[]> {
-  const normalizedAt = feedTimeExpression(input.visibility);
-  const placement = input.hasSections
+  const normalizedAt = feedTimeExpression(input.contentStatus);
+  const placement = input.usesSectionOrder
     ? feedSectionPlacement((input.scope as { viewId: number }).viewId)
     : sql<number>`CAST(0 AS INTEGER)`;
   const normalizedFeedUrl = sql<string>`COALESCE(
@@ -266,9 +268,9 @@ export async function queryFeedCandidates(input: {
     .where(
       and(
         eq(feeds.userId, input.userId),
-        feedVisibilityCondition(input.visibility, input.savedState),
+        feedContentStatusCondition(input.contentStatus),
         feedScopeCondition(input),
-        input.sectionPlacement === undefined || !input.hasSections
+        input.sectionPlacement === undefined || !input.usesSectionOrder
           ? undefined
           : eq(placement, input.sectionPlacement),
         not(canonicalBookmark),
@@ -278,6 +280,7 @@ export async function queryFeedCandidates(input: {
           normalizedAt,
           entityKind: "feed-item",
           entityId: feedItems.id,
+          usesGlobalEntityIdTieBreak: input.usesGlobalEntityIdTieBreak,
         }),
       ),
     )
@@ -287,19 +290,31 @@ export async function queryFeedCandidates(input: {
     entityKind: "feed-item",
     entityId: row.item.id,
     item: { ...row.item, platform: row.platform } as ApplicationFeedItem,
-    sectionPlacement: input.hasSections ? row.placement : null,
+    sectionPlacement: input.usesSectionOrder ? row.placement : null,
     normalizedAt: new Date(row.normalizedAt),
   }));
 }
 
-export function compareCandidates(left: Candidate, right: Candidate) {
+export function compareCandidates(
+  left: Candidate,
+  right: Candidate,
+  options: { usesGlobalEntityIdTieBreak?: boolean } = {},
+) {
   const placementDifference =
     (left.sectionPlacement ?? 0) - (right.sectionPlacement ?? 0);
   if (placementDifference !== 0) return placementDifference;
   const timeDifference =
     right.normalizedAt.getTime() - left.normalizedAt.getTime();
   if (timeDifference !== 0) return timeDifference;
+  if (options.usesGlobalEntityIdTieBreak) {
+    return compareDescendingIdsThenKinds(
+      left.entityId,
+      right.entityId,
+      left.entityKind,
+      right.entityKind,
+    );
+  }
   const kindDifference = left.entityKind.localeCompare(right.entityKind);
   if (kindDifference !== 0) return kindDifference;
-  return right.entityId.localeCompare(left.entityId);
+  return compareDescendingIds(left.entityId, right.entityId);
 }

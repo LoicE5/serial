@@ -4,6 +4,7 @@ import type {
 } from "./data/feed-items/listProjection";
 import type { ApplicationViewSection } from "~/server/db/schema";
 import { VIEW_LAYOUT_ITEM_TYPE } from "~/server/db/constants";
+import { compareDescendingIds } from "~/lib/sortOrder";
 
 type SavedOrderCoordinate = {
   isWatchLaterUpdatedAt?: Date | string | null;
@@ -15,28 +16,23 @@ function dateValue(date: Date | string) {
   return date instanceof Date ? date.getTime() : new Date(date).getTime();
 }
 
-function descendingId(leftId: string, rightId: string) {
-  if (leftId === rightId) return 0;
-  return leftId > rightId ? -1 : 1;
-}
-
 export function compareSavedOrderCoordinates(
   left: SavedOrderCoordinate,
   right: SavedOrderCoordinate,
 ) {
   const leftSavedAt = left.isWatchLaterUpdatedAt
     ? dateValue(left.isWatchLaterUpdatedAt)
-    : Number.NEGATIVE_INFINITY;
+    : dateValue(left.postedAt);
   const rightSavedAt = right.isWatchLaterUpdatedAt
     ? dateValue(right.isWatchLaterUpdatedAt)
-    : Number.NEGATIVE_INFINITY;
+    : dateValue(right.postedAt);
   if (leftSavedAt !== rightSavedAt) return rightSavedAt - leftSavedAt;
 
   const leftPostedAt = dateValue(left.postedAt);
   const rightPostedAt = dateValue(right.postedAt);
   if (leftPostedAt !== rightPostedAt) return rightPostedAt - leftPostedAt;
 
-  return descendingId(left.id, right.id);
+  return compareDescendingIds(left.id, right.id);
 }
 
 function getItemPlacement(
@@ -89,7 +85,7 @@ export function sortFeedItemsOrderByDate(
       return timeB - timeA;
     }
 
-    return descendingId(itemA.id, itemB.id);
+    return compareDescendingIds(itemA.id, itemB.id);
   };
 }
 
@@ -118,31 +114,18 @@ export function sortFeedItemsOrderByWatchedAt(
       ? itemA.isWatchedUpdatedAt instanceof Date
         ? itemA.isWatchedUpdatedAt.getTime()
         : new Date(itemA.isWatchedUpdatedAt).getTime()
-      : 0;
+      : dateValue(itemA.postedAt);
     const watchedTimeB = itemB.isWatchedUpdatedAt
       ? itemB.isWatchedUpdatedAt instanceof Date
         ? itemB.isWatchedUpdatedAt.getTime()
         : new Date(itemB.isWatchedUpdatedAt).getTime()
-      : 0;
+      : dateValue(itemB.postedAt);
 
     if (watchedTimeB !== watchedTimeA) {
       return watchedTimeB - watchedTimeA;
     }
 
-    const timeA =
-      itemA.postedAt instanceof Date
-        ? itemA.postedAt.getTime()
-        : new Date(itemA.postedAt).getTime();
-    const timeB =
-      itemB.postedAt instanceof Date
-        ? itemB.postedAt.getTime()
-        : new Date(itemB.postedAt).getTime();
-
-    if (timeB !== timeA) {
-      return timeB - timeA;
-    }
-
-    return descendingId(itemA.id, itemB.id);
+    return compareDescendingIds(itemA.id, itemB.id);
   };
 }
 
@@ -185,7 +168,7 @@ export function sortFeedItemsOrderBySectionThenDate(
       return timeB - timeA;
     }
 
-    return descendingId(itemA.id, itemB.id);
+    return compareDescendingIds(itemA.id, itemB.id);
   };
 }
 
