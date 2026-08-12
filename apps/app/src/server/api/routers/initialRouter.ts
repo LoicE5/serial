@@ -50,6 +50,7 @@ import {
 } from "~/server/subscriptions/helpers";
 import {
   contentStatusFilterSchema,
+  contentStatusUsesSectionOrder,
   DEFAULT_CONTENT_STATUS_FILTER,
   selectContentStatusOrderValue,
 } from "~/lib/content-status";
@@ -867,6 +868,7 @@ function buildPaginatedFeedItemQuery({
 }) {
   const hasSections =
     scope.type === "view" &&
+    contentStatusUsesSectionOrder(contentStatusFilter) &&
     scope.view.viewSections &&
     scope.view.viewSections.length > 0;
   const placementExpr =
@@ -2133,6 +2135,15 @@ function buildCursorCondition(
   // SQLite timestamp columns persist epoch seconds. The composite expression
   // has no encoder, so bind the persisted representation explicitly.
   const cursorCoordinateSeconds = Math.floor(cursorCoordinate.getTime() / 1000);
+  if (!contentStatusUsesSectionOrder(contentStatusFilter)) {
+    return or(
+      sql`${orderCoordinate} < ${cursorCoordinateSeconds}`,
+      and(
+        sql`${orderCoordinate} = ${cursorCoordinateSeconds}`,
+        lt(feedItems.id, cursor.id),
+      ),
+    );
+  }
   const coordinateCondition = or(
     sql`${orderCoordinate} < ${cursorCoordinateSeconds}`,
     and(
@@ -2163,6 +2174,12 @@ function contentStatusOrderExpression(contentStatus: ContentStatusFilter) {
 }
 
 function buildFlatItemsOrderBy(contentStatusFilter: ContentStatusFilter) {
+  if (!contentStatusUsesSectionOrder(contentStatusFilter)) {
+    return [
+      desc(contentStatusOrderExpression(contentStatusFilter)),
+      desc(feedItems.id),
+    ];
+  }
   return [
     desc(contentStatusOrderExpression(contentStatusFilter)),
     desc(feedItems.postedAt),

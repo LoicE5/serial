@@ -7,6 +7,7 @@ import {
   contentStatusFromScopeKey,
   contentStatusFromVisibilityFilter,
   contentStatusOrderDimension,
+  contentStatusUsesSectionOrder,
   isContentStatusAvailable,
   selectContentStatusOrderValue,
   upgradeLegacyContentStatusScopeKey,
@@ -68,6 +69,12 @@ describe("content status contract", () => {
         }),
       ),
     ).toEqual(["publishedAt", "archivedAt", "savedAt", "archivedAt"]);
+    expect(CONTENT_STATUS_FILTERS.map(contentStatusUsesSectionOrder)).toEqual([
+      true,
+      false,
+      true,
+      false,
+    ]);
   });
 
   it("keeps the legacy three-state control compatible without inventing the fourth cell", () => {

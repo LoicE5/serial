@@ -23,6 +23,7 @@ import {
   referencesEqual,
   replaceScopeInIndexes,
   uniqueReferences,
+  usesGlobalArchivedViewOrder,
 } from "./bookmarkProjection";
 import {
   filterSuppressedReferences,
@@ -112,7 +113,14 @@ function feedItemReference(input: {
   return {
     entityKind: "feed-item",
     entityId: item.id,
-    sectionPlacement: getItemSectionPlacement(item, view, filterIndex) ?? null,
+    sectionPlacement:
+      view &&
+      usesGlobalArchivedViewOrder(
+        { type: "view", viewId: view.id },
+        contentStatus,
+      )
+        ? null
+        : (getItemSectionPlacement(item, view, filterIndex) ?? null),
     normalizedAt,
   };
 }
@@ -185,6 +193,12 @@ const vanillaMixedContentStore = createStore<MixedContentStore>()(
             replacesScope
               ? page.references
               : [...(existing?.references ?? []), ...page.references],
+            {
+              usesGlobalEntityIdTieBreak: usesGlobalArchivedViewOrder(
+                scope,
+                contentStatus,
+              ),
+            },
           ).filter(
             (reference) =>
               retainedKeys.has(mixedReferenceKey(reference)) ||
@@ -312,7 +326,12 @@ const vanillaMixedContentStore = createStore<MixedContentStore>()(
               bookmarkReference(bookmark, scopeState, views),
             ];
           }
-          references = uniqueReferences(references);
+          references = uniqueReferences(references, {
+            usesGlobalEntityIdTieBreak: usesGlobalArchivedViewOrder(
+              scopeState.scope,
+              scopeState.contentStatus,
+            ),
+          });
           if (referencesEqual(scopeState.references, references)) continue;
 
           const nextScope = {
@@ -382,14 +401,22 @@ const vanillaMixedContentStore = createStore<MixedContentStore>()(
         for (const key of candidateKeys) {
           const scopeState = current.scopes[key];
           if (!scopeState) continue;
-          const references = uniqueReferences([
-            ...scopeState.references.filter(
-              (reference) =>
-                reference.entityKind !== "bookmark" ||
-                reference.entityId !== bookmarkId,
-            ),
-            ...(suppressedForBookmark[key] ?? []),
-          ]);
+          const references = uniqueReferences(
+            [
+              ...scopeState.references.filter(
+                (reference) =>
+                  reference.entityKind !== "bookmark" ||
+                  reference.entityId !== bookmarkId,
+              ),
+              ...(suppressedForBookmark[key] ?? []),
+            ],
+            {
+              usesGlobalEntityIdTieBreak: usesGlobalArchivedViewOrder(
+                scopeState.scope,
+                scopeState.contentStatus,
+              ),
+            },
+          );
           if (referencesEqual(scopeState.references, references)) continue;
 
           const nextScope = {
@@ -558,7 +585,12 @@ const vanillaMixedContentStore = createStore<MixedContentStore>()(
             }
           }
 
-          references = uniqueReferences(references);
+          references = uniqueReferences(references, {
+            usesGlobalEntityIdTieBreak: usesGlobalArchivedViewOrder(
+              scopeState.scope,
+              scopeState.contentStatus,
+            ),
+          });
           if (
             referencesEqual(scopeState.references, references) &&
             pages === scopeState.pages

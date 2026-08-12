@@ -55,8 +55,14 @@ function isItemOlderThanCursor(
 ): boolean {
   if (!cursor) return false;
 
+  const orderDimension = contentStatusOrderDimension(contentStatusFilter);
+
   // Sectioned views are ordered by placement asc, then postedAt/id desc.
-  if (cursor.placement !== undefined && sectionPlacement !== undefined) {
+  if (
+    orderDimension !== "archived" &&
+    cursor.placement !== undefined &&
+    sectionPlacement !== undefined
+  ) {
     if (sectionPlacement > cursor.placement) {
       return true;
     }
@@ -66,7 +72,6 @@ function isItemOlderThanCursor(
   }
 
   // Archived ordering takes precedence over save status.
-  const orderDimension = contentStatusOrderDimension(contentStatusFilter);
   if (orderDimension === "archived") {
     const itemWatchedTime =
       item.isWatchedUpdatedAt?.getTime() ?? item.postedAt.getTime();
@@ -77,15 +82,7 @@ function isItemOlderThanCursor(
       return true;
     }
     if (itemWatchedTime === cursorWatchedTime) {
-      const itemTime = item.postedAt.getTime();
-      const cursorTime = cursor.postedAt.getTime();
-
-      if (itemTime < cursorTime) {
-        return true;
-      }
-      if (itemTime === cursorTime && item.id < cursor.id) {
-        return true;
-      }
+      return item.id < cursor.id;
     }
     return false;
   }

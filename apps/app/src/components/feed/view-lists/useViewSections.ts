@@ -1,8 +1,11 @@
 "use client";
 
+import { useAtomValue } from "jotai";
 import { useMemo } from "react";
+import { arrangeArchivedViewSection } from "./archivedViewSection";
 import type { ViewLayout } from "~/server/db/constants";
 import type { ApplicationView } from "~/server/db/schema";
+import { contentStatusFilterAtom } from "~/lib/data/atoms";
 import { bookmarksStore } from "~/lib/data/bookmarks/store";
 import { useContentCategories } from "~/lib/data/content-categories";
 import { useFeedCategories } from "~/lib/data/feed-categories";
@@ -34,6 +37,7 @@ export function useViewSections(
 ) {
   const { feeds } = useFeeds();
   const { contentCategories } = useContentCategories();
+  const contentStatusFilter = useAtomValue(contentStatusFilterAtom);
   const feedItemsProjection = useFeedItemsListProjection();
   const feedCategories = useFeedCategories();
   const filterIndex = useMemo(
@@ -56,6 +60,16 @@ export function useViewSections(
 
   const computedSections = useMemo(() => {
     const feedItemsDict = feedItemsProjection.getItems();
+    const archivedSection = arrangeArchivedViewSection({
+      contentStatusFilter,
+      currentViewName: currentView?.name,
+      filteredItemIds: filteredFeedItemsOrder,
+      feedItemsById: feedItemsDict,
+      bookmarksById: bookmarksStore.getState().snapshot(),
+      baseLayout,
+    });
+    if (archivedSection) return [archivedSection];
+
     if (!hasSubviews || !currentView) {
       return [
         {
@@ -169,6 +183,7 @@ export function useViewSections(
     return sections;
   }, [
     hasSubviews,
+    contentStatusFilter,
     currentView,
     filteredFeedItemsOrder,
     feeds,

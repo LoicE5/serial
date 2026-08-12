@@ -69,6 +69,10 @@ export function selectContentStatusOrderValue<T>(
   return values[contentStatusOrderDimension(filter)];
 }
 
+export function contentStatusUsesSectionOrder(filter: ContentStatusFilter) {
+  return contentStatusOrderDimension(filter) !== "archived";
+}
+
 export function buildContentStatusKey(
   filter: ContentStatusFilter,
 ): ContentStatusKey {
