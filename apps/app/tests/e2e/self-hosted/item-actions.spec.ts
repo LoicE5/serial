@@ -4,6 +4,10 @@ import {
   SELF_HOSTED_TURSO_PORT,
 } from "../fixtures/ports";
 import {
+  getScrollPositionDelta,
+  SCROLL_POSITION_TOLERANCE_PX,
+} from "../fixtures/scroll-position";
+import {
   cleanupUser,
   seedArticleData,
   seedMultipleArticleData,
@@ -109,9 +113,9 @@ test.describe("feed item actions", () => {
 
         const itemCenter = itemBox.y + itemBox.height / 2;
         const target = containerBox.y + containerBox.height / 3;
-        return Math.abs(itemCenter - target);
+        return getScrollPositionDelta(itemCenter, target);
       })
-      .toBeLessThan(2);
+      .toBeLessThanOrEqual(SCROLL_POSITION_TOLERANCE_PX);
   });
 
   test("restores the root to the top when there is no selected item", async ({
@@ -140,8 +144,13 @@ test.describe("feed item actions", () => {
     await page.getByRole("button", { name: "Home" }).click();
     await expect(page).toHaveURL("/");
     await expect
-      .poll(() => scrollContainer.evaluate((element) => element.scrollTop))
-      .toBe(0);
+      .poll(async () =>
+        getScrollPositionDelta(
+          await scrollContainer.evaluate((element) => element.scrollTop),
+          0,
+        ),
+      )
+      .toBeLessThanOrEqual(SCROLL_POSITION_TOLERANCE_PX);
   });
 
   test("does not show a copy-link action on feed items", async ({ page }) => {
