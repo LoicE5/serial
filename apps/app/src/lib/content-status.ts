@@ -48,6 +48,27 @@ export const CONTENT_STATUS_FILTERS = [
 export type ContentStatusAvailabilityKey =
   "unread" | "read" | "later" | "savedArchived";
 
+export type ContentStatusOrderDimension = "published" | "saved" | "archived";
+
+/**
+ * Select the timestamp dimension used to order a content-status cell.
+ * Archive time takes precedence over save time for Saved + Archived.
+ */
+export function contentStatusOrderDimension(
+  filter: ContentStatusFilter,
+): ContentStatusOrderDimension {
+  if (filter.archiveStatus === "archived") return "archived";
+  if (filter.saveStatus === "saved") return "saved";
+  return "published";
+}
+
+export function selectContentStatusOrderValue<T>(
+  filter: ContentStatusFilter,
+  values: Record<ContentStatusOrderDimension, T>,
+): T {
+  return values[contentStatusOrderDimension(filter)];
+}
+
 export function buildContentStatusKey(
   filter: ContentStatusFilter,
 ): ContentStatusKey {
@@ -84,33 +105,44 @@ export function contentStatusFromVisibilityFilter(
 export function contentStatusFromScopeKey(
   scopeKey: string,
 ): ContentStatusFilter | undefined {
+  return classifyContentStatusScopeSuffix(scopeKey)?.contentStatus;
+}
+
+type ContentStatusScopeSuffix = {
+  contentStatus: ContentStatusFilter;
+  kind: "compound" | "legacy";
+};
+
+function classifyContentStatusScopeSuffix(
+  scopeKey: string,
+): ContentStatusScopeSuffix | undefined {
   const parts = scopeKey.split(":");
   const compoundResult = contentStatusFilterSchema.safeParse({
     saveStatus: parts.at(-2),
     archiveStatus: parts.at(-1),
   });
-  if (compoundResult.success) return compoundResult.data;
+  if (compoundResult.success) {
+    return { contentStatus: compoundResult.data, kind: "compound" };
+  }
 
   const legacyResult = legacyVisibilityFilterSchema.safeParse(parts.at(-1));
-  return legacyResult.success
-    ? contentStatusFromVisibilityFilter(legacyResult.data)
-    : undefined;
+  if (!legacyResult.success) return undefined;
+  return {
+    contentStatus: contentStatusFromVisibilityFilter(legacyResult.data),
+    kind: "legacy",
+  };
 }
 
 /** Re-key retained main pages without changing or disposing the IndexedDB schema. */
 export function upgradeLegacyContentStatusScopeKey(scopeKey: string) {
-  const parts = scopeKey.split(":");
-  const compoundResult = contentStatusFilterSchema.safeParse({
-    saveStatus: parts.at(-2),
-    archiveStatus: parts.at(-1),
-  });
-  if (compoundResult.success) return scopeKey;
+  const suffix = classifyContentStatusScopeSuffix(scopeKey);
+  if (!suffix || suffix.kind === "compound") return scopeKey;
 
-  const contentStatus = contentStatusFromScopeKey(scopeKey);
-  if (!contentStatus) return scopeKey;
-  return [...parts.slice(0, -1), buildContentStatusKey(contentStatus)].join(
-    ":",
-  );
+  const parts = scopeKey.split(":");
+  return [
+    ...parts.slice(0, -1),
+    buildContentStatusKey(suffix.contentStatus),
+  ].join(":");
 }
 
 export function isInboxUnread(filter: ContentStatusFilter) {

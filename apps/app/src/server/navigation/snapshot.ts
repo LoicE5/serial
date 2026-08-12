@@ -79,17 +79,31 @@ function hasAny(condition: SQL | undefined) {
   return sql<number>`CASE WHEN ${condition ?? sql`0`} THEN 1 ELSE 0 END`;
 }
 
+function availabilityProjection(
+  existsFor: (contentStatus: ContentStatusFilter) => SQL | undefined,
+) {
+  return {
+    unread: hasAny(existsFor(INBOX_UNREAD_CONTENT_STATUS)),
+    read: hasAny(existsFor(INBOX_ARCHIVED_CONTENT_STATUS)),
+    later: hasAny(existsFor(SAVED_UNREAD_CONTENT_STATUS)),
+    savedArchived: hasAny(existsFor(SAVED_ARCHIVED_CONTENT_STATUS)),
+  };
+}
+
+function normalizeAvailabilityRow(
+  row: Pick<AvailabilityRow, ContentStatusAvailabilityKey>,
+): NavigationAvailability {
+  return {
+    unread: Boolean(row.unread),
+    read: Boolean(row.read),
+    later: Boolean(row.later),
+    savedArchived: Boolean(row.savedArchived),
+  };
+}
+
 function availabilityRecord(rows: AvailabilityRow[]) {
   return Object.fromEntries(
-    rows.map((row) => [
-      row.id,
-      {
-        unread: Boolean(row.unread),
-        read: Boolean(row.read),
-        later: Boolean(row.later),
-        savedArchived: Boolean(row.savedArchived),
-      },
-    ]),
+    rows.map((row) => [row.id, normalizeAvailabilityRow(row)]),
   ) as Record<number, NavigationAvailability>;
 }
 
@@ -311,10 +325,7 @@ async function queryViewAvailability(input: {
   const customViewRows = await input.database
     .select({
       id: views.id,
-      unread: hasAny(contentStatusExists(INBOX_UNREAD_CONTENT_STATUS)),
-      read: hasAny(contentStatusExists(INBOX_ARCHIVED_CONTENT_STATUS)),
-      later: hasAny(contentStatusExists(SAVED_UNREAD_CONTENT_STATUS)),
-      savedArchived: hasAny(contentStatusExists(SAVED_ARCHIVED_CONTENT_STATUS)),
+      ...availabilityProjection(contentStatusExists),
     })
     .from(views)
     .where(eq(views.userId, input.userId));
@@ -371,12 +382,7 @@ async function queryViewAvailability(input: {
   const inboxRows = await input.database
     .select({
       id: sql<number>`${INBOX_VIEW_ID}`,
-      unread: hasAny(inboxContentStatusExists(INBOX_UNREAD_CONTENT_STATUS)),
-      read: hasAny(inboxContentStatusExists(INBOX_ARCHIVED_CONTENT_STATUS)),
-      later: hasAny(inboxContentStatusExists(SAVED_UNREAD_CONTENT_STATUS)),
-      savedArchived: hasAny(
-        inboxContentStatusExists(SAVED_ARCHIVED_CONTENT_STATUS),
-      ),
+      ...availabilityProjection(inboxContentStatusExists),
     })
     .from(user)
     .where(eq(user.id, input.userId))
@@ -433,10 +439,7 @@ async function queryTagAvailability(input: {
   const rows = await input.database
     .select({
       id: contentCategories.id,
-      unread: hasAny(contentStatusExists(INBOX_UNREAD_CONTENT_STATUS)),
-      read: hasAny(contentStatusExists(INBOX_ARCHIVED_CONTENT_STATUS)),
-      later: hasAny(contentStatusExists(SAVED_UNREAD_CONTENT_STATUS)),
-      savedArchived: hasAny(contentStatusExists(SAVED_ARCHIVED_CONTENT_STATUS)),
+      ...availabilityProjection(contentStatusExists),
     })
     .from(contentCategories)
     .where(eq(contentCategories.userId, input.userId));
@@ -466,10 +469,7 @@ async function queryFeedAvailability(input: {
   const rows = await input.database
     .select({
       id: feeds.id,
-      unread: hasAny(contentStatusExists(INBOX_UNREAD_CONTENT_STATUS)),
-      read: hasAny(contentStatusExists(INBOX_ARCHIVED_CONTENT_STATUS)),
-      later: hasAny(contentStatusExists(SAVED_UNREAD_CONTENT_STATUS)),
-      savedArchived: hasAny(contentStatusExists(SAVED_ARCHIVED_CONTENT_STATUS)),
+      ...availabilityProjection(contentStatusExists),
     })
     .from(feeds)
     .where(eq(feeds.userId, input.userId));
@@ -548,10 +548,7 @@ async function queryCustomViewFeedAvailability(input: {
       id: feeds.id,
       viewId: views.id,
       feedId: feeds.id,
-      unread: hasAny(contentStatusExists(INBOX_UNREAD_CONTENT_STATUS)),
-      read: hasAny(contentStatusExists(INBOX_ARCHIVED_CONTENT_STATUS)),
-      later: hasAny(contentStatusExists(SAVED_UNREAD_CONTENT_STATUS)),
-      savedArchived: hasAny(contentStatusExists(SAVED_ARCHIVED_CONTENT_STATUS)),
+      ...availabilityProjection(contentStatusExists),
     })
     .from(views)
     .innerJoin(feeds, and(eq(feeds.userId, input.userId), belongsToView))
@@ -586,10 +583,7 @@ async function queryInboxViewFeedAvailability(input: {
       id: feeds.id,
       viewId: sql<number>`${INBOX_VIEW_ID}`,
       feedId: feeds.id,
-      unread: hasAny(contentStatusExists(INBOX_UNREAD_CONTENT_STATUS)),
-      read: hasAny(contentStatusExists(INBOX_ARCHIVED_CONTENT_STATUS)),
-      later: hasAny(contentStatusExists(SAVED_UNREAD_CONTENT_STATUS)),
-      savedArchived: hasAny(contentStatusExists(SAVED_ARCHIVED_CONTENT_STATUS)),
+      ...availabilityProjection(contentStatusExists),
     })
     .from(feeds)
     .where(and(eq(feeds.userId, input.userId), feedScopeCondition(inboxScope)));
@@ -606,12 +600,7 @@ function viewFeedAvailabilityRecord(
 
   for (const row of rows) {
     result[row.viewId] ??= {};
-    result[row.viewId]![row.feedId] = {
-      unread: Boolean(row.unread),
-      read: Boolean(row.read),
-      later: Boolean(row.later),
-      savedArchived: Boolean(row.savedArchived),
-    };
+    result[row.viewId]![row.feedId] = normalizeAvailabilityRow(row);
   }
   return result;
 }

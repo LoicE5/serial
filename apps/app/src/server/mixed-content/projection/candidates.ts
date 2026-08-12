@@ -19,9 +19,10 @@ import type {
   MixedContentScope,
 } from "../projection";
 import type { ScopeData } from "./scope";
-import type { ContentStatusFilter } from "~/lib/content-status";
 import type { db as defaultDatabase } from "~/server/db";
 import type { ApplicationFeedItem } from "~/server/db/schema";
+import type { ContentStatusFilter } from "~/lib/content-status";
+import { selectContentStatusOrderValue } from "~/lib/content-status";
 import { bookmarks, feedItems, feeds } from "~/server/db/schema";
 import { UNCATEGORIZED_SECTION_PLACEMENT } from "~/lib/views/sections";
 
@@ -62,23 +63,19 @@ function feedContentStatusCondition(contentStatus: ContentStatusFilter) {
 }
 
 function bookmarkTimeExpression(contentStatus: ContentStatusFilter) {
-  if (contentStatus.archiveStatus === "archived") {
-    return sql<number>`${bookmarks.readUpdatedAt}`;
-  }
-  if (contentStatus.saveStatus === "saved") {
-    return sql<number>`${bookmarks.savedUpdatedAt}`;
-  }
-  return sql<number>`${bookmarks.createdAt}`;
+  return selectContentStatusOrderValue(contentStatus, {
+    published: sql<number>`${bookmarks.createdAt}`,
+    saved: sql<number>`${bookmarks.savedUpdatedAt}`,
+    archived: sql<number>`${bookmarks.readUpdatedAt}`,
+  });
 }
 
 function feedTimeExpression(contentStatus: ContentStatusFilter) {
-  if (contentStatus.archiveStatus === "archived") {
-    return sql<number>`COALESCE(${feedItems.isWatchedUpdatedAt}, ${feedItems.postedAt})`;
-  }
-  if (contentStatus.saveStatus === "saved") {
-    return sql<number>`COALESCE(${feedItems.isWatchLaterUpdatedAt}, ${feedItems.postedAt})`;
-  }
-  return sql<number>`${feedItems.postedAt}`;
+  return selectContentStatusOrderValue(contentStatus, {
+    published: sql<number>`${feedItems.postedAt}`,
+    saved: sql<number>`COALESCE(${feedItems.isWatchLaterUpdatedAt}, ${feedItems.postedAt})`,
+    archived: sql<number>`COALESCE(${feedItems.isWatchedUpdatedAt}, ${feedItems.postedAt})`,
+  });
 }
 
 function qualifiedColumn(table: unknown, column: { name: string }) {

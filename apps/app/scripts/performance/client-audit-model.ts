@@ -2,14 +2,17 @@ import { serialize } from "node:v8";
 import { performance } from "node:perf_hooks";
 import { BENCHMARK_PROFILES } from "./model";
 import type { BenchmarkProfileName } from "./model";
-import type { ContentStatusFilter } from "~/lib/content-status";
 import type { ApplicationFeedItem, ApplicationView } from "~/server/db/schema";
 import type {
   ApplicationBookmark,
   MixedContentReference,
 } from "~/server/mixed-content/projection";
 import type { PublishedChunk } from "~/server/api/publisher";
-import { CONTENT_STATUS_FILTERS } from "~/lib/content-status";
+import type { ContentStatusFilter } from "~/lib/content-status";
+import {
+  CONTENT_STATUS_FILTERS,
+  selectContentStatusOrderValue,
+} from "~/lib/content-status";
 import { bookmarksStore } from "~/lib/data/bookmarks/store";
 import { feedItemsStore } from "~/lib/data/store";
 import { mixedContentStore } from "~/lib/data/mixed-content/store";
@@ -452,12 +455,11 @@ function seedClientFixture(profileName: BenchmarkProfileName) {
           entityKind: "bookmark",
           entityId: scopedBookmark.id,
           sectionPlacement: null,
-          normalizedAt:
-            contentStatus.archiveStatus === "archived"
-              ? scopedBookmark.readUpdatedAt
-              : contentStatus.saveStatus === "saved"
-                ? scopedBookmark.savedUpdatedAt
-                : scopedBookmark.createdAt,
+          normalizedAt: selectContentStatusOrderValue(contentStatus, {
+            published: scopedBookmark.createdAt,
+            saved: scopedBookmark.savedUpdatedAt,
+            archived: scopedBookmark.readUpdatedAt,
+          }),
         };
       }
       mixedContentStore.getState().applyPage({

@@ -25,7 +25,10 @@ import type { ApplicationFeedItem, ApplicationView } from "~/server/db/schema";
 import type { FeedItemFilterIndex } from "./listProjection";
 import type { PaginationCursor } from "~/server/api/routers/initialRouter";
 import type { ContentStatusFilter } from "~/lib/content-status";
-import { buildContentStatusKey } from "~/lib/content-status";
+import {
+  buildContentStatusKey,
+  contentStatusOrderDimension,
+} from "~/lib/content-status";
 import {
   compareSavedOrderCoordinates,
   sortFeedItemsOrderByDate,
@@ -63,7 +66,8 @@ function isItemOlderThanCursor(
   }
 
   // Archived ordering takes precedence over save status.
-  if (contentStatusFilter.archiveStatus === "archived") {
+  const orderDimension = contentStatusOrderDimension(contentStatusFilter);
+  if (orderDimension === "archived") {
     const itemWatchedTime =
       item.isWatchedUpdatedAt?.getTime() ?? item.postedAt.getTime();
     const cursorWatchedTime =
@@ -86,7 +90,7 @@ function isItemOlderThanCursor(
     return false;
   }
 
-  if (contentStatusFilter.saveStatus === "saved") {
+  if (orderDimension === "saved") {
     return compareSavedOrderCoordinates(item, cursor) > 0;
   }
 
@@ -117,18 +121,19 @@ function getActiveFeedItemsSort({
   viewFilter: ApplicationView | null;
   filterIndex: FeedItemFilterIndex;
 }) {
-  if (contentStatusFilter.archiveStatus === "archived") {
+  const orderDimension = contentStatusOrderDimension(contentStatusFilter);
+  if (orderDimension === "archived") {
     return sortFeedItemsOrderByWatchedAt(feedItemsDict);
   }
 
   const isFeedOrCategoryScoped = feedFilter >= 0 || categoryFilter >= 0;
   if (isFeedOrCategoryScoped || !viewFilter?.viewSections?.length) {
-    return contentStatusFilter.saveStatus === "saved"
+    return orderDimension === "saved"
       ? sortFeedItemsOrderBySavedAt(feedItemsDict)
       : sortFeedItemsOrderByDate(feedItemsDict);
   }
 
-  return contentStatusFilter.saveStatus === "saved"
+  return orderDimension === "saved"
     ? sortFeedItemsOrderBySectionThenSavedAt(
         feedItemsDict,
         viewFilter.viewSections,

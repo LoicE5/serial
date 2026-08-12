@@ -11,7 +11,11 @@ import type {
   MixedContentScope,
 } from "~/server/mixed-content/projection";
 import type { ContentStatusFilter } from "~/lib/content-status";
-import { buildContentStatusKey } from "~/lib/content-status";
+import {
+  buildContentStatusKey,
+  contentStatusOrderDimension,
+  selectContentStatusOrderValue,
+} from "~/lib/content-status";
 import { contentFilterAllowsDescriptor } from "~/lib/views/contentFilter";
 
 export type LoadedMixedScope = {
@@ -258,19 +262,17 @@ export function isBookmarkProjectionChange(
   }
 
   const contentStatus = bookmarkContentStatus(bookmark);
-  if (contentStatus.archiveStatus === "archived") {
-    return (
-      previousBookmark.readUpdatedAt.getTime() !==
-      bookmark.readUpdatedAt.getTime()
-    );
-  }
-  if (contentStatus.saveStatus === "saved") {
-    return (
+  const orderDimension = contentStatusOrderDimension(contentStatus);
+  if (orderDimension === "published") return false;
+  return selectContentStatusOrderValue(contentStatus, {
+    published: false,
+    saved:
       previousBookmark.savedUpdatedAt.getTime() !==
-      bookmark.savedUpdatedAt.getTime()
-    );
-  }
-  return false;
+      bookmark.savedUpdatedAt.getTime(),
+    archived:
+      previousBookmark.readUpdatedAt.getTime() !==
+      bookmark.readUpdatedAt.getTime(),
+  });
 }
 
 function isBookmarkCompatibleWithView(view: ApplicationView) {
@@ -394,24 +396,22 @@ function feedItemNormalizedAt(
   item: ApplicationFeedItem,
   contentStatus: ContentStatusFilter,
 ) {
-  if (contentStatus.archiveStatus === "archived") {
-    return item.isWatchedUpdatedAt ?? item.postedAt;
-  }
-  if (contentStatus.saveStatus === "saved") {
-    return item.isWatchLaterUpdatedAt ?? item.postedAt;
-  }
-  return item.postedAt;
+  return selectContentStatusOrderValue(contentStatus, {
+    published: item.postedAt,
+    saved: item.isWatchLaterUpdatedAt ?? item.postedAt,
+    archived: item.isWatchedUpdatedAt ?? item.postedAt,
+  });
 }
 
 function bookmarkNormalizedAt(
   bookmark: ApplicationBookmark,
   contentStatus: ContentStatusFilter,
 ) {
-  if (contentStatus.archiveStatus === "archived") {
-    return bookmark.readUpdatedAt;
-  }
-  if (contentStatus.saveStatus === "saved") return bookmark.savedUpdatedAt;
-  return bookmark.createdAt;
+  return selectContentStatusOrderValue(contentStatus, {
+    published: bookmark.createdAt,
+    saved: bookmark.savedUpdatedAt,
+    archived: bookmark.readUpdatedAt,
+  });
 }
 
 function localSectionPlacement(input: {

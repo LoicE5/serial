@@ -6,7 +6,9 @@ import {
   contentStatusFilterSchema,
   contentStatusFromScopeKey,
   contentStatusFromVisibilityFilter,
+  contentStatusOrderDimension,
   isContentStatusAvailable,
+  selectContentStatusOrderValue,
   upgradeLegacyContentStatusScopeKey,
 } from "~/lib/content-status";
 
@@ -50,6 +52,24 @@ describe("content status contract", () => {
     ).toEqual([false, true, false, true]);
   });
 
+  it("defines one archive-first ordering dimension for every adapter", () => {
+    expect(CONTENT_STATUS_FILTERS.map(contentStatusOrderDimension)).toEqual([
+      "published",
+      "archived",
+      "saved",
+      "archived",
+    ]);
+    expect(
+      CONTENT_STATUS_FILTERS.map((filter) =>
+        selectContentStatusOrderValue(filter, {
+          published: "publishedAt",
+          saved: "savedAt",
+          archived: "archivedAt",
+        }),
+      ),
+    ).toEqual(["publishedAt", "archivedAt", "savedAt", "archivedAt"]);
+  });
+
   it("keeps the legacy three-state control compatible without inventing the fourth cell", () => {
     expect(contentStatusFromVisibilityFilter("unread")).toEqual(
       CONTENT_STATUS_FILTERS[0],
@@ -74,6 +94,9 @@ describe("content status contract", () => {
     );
     expect(contentStatusFromScopeKey("view:7:saved:archived")).toEqual(
       CONTENT_STATUS_FILTERS[3],
+    );
+    expect(upgradeLegacyContentStatusScopeKey("view:7:unknown")).toBe(
+      "view:7:unknown",
     );
   });
 });

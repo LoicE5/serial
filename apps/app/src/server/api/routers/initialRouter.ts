@@ -23,7 +23,6 @@ import { publisher, trackChannelConnection } from "../publisher";
 import { getClientChannel, getUserChannel } from "../channels";
 import { insertFeedWithCategories } from "./feed-router/utils";
 import type { SQL } from "drizzle-orm";
-import type { ContentStatusFilter } from "~/lib/content-status";
 import type {
   ApplicationFeed,
   ApplicationFeedItem,
@@ -43,6 +42,7 @@ import type {
   MixedContentChunk,
 } from "~/server/mixed-content/sync";
 import type { NavigationSnapshot } from "~/server/navigation/snapshot";
+import type { ContentStatusFilter } from "~/lib/content-status";
 import { captureException, logDebug } from "~/server/logger";
 import {
   checkUserRefreshEligibility,
@@ -51,6 +51,7 @@ import {
 import {
   contentStatusFilterSchema,
   DEFAULT_CONTENT_STATUS_FILTER,
+  selectContentStatusOrderValue,
 } from "~/lib/content-status";
 import {
   buildContentFilter,
@@ -2124,12 +2125,11 @@ function buildCursorCondition(
   if (!cursor) return undefined;
 
   const orderCoordinate = contentStatusOrderExpression(contentStatusFilter);
-  const cursorCoordinate =
-    contentStatusFilter.archiveStatus === "archived"
-      ? (cursor.isWatchedUpdatedAt ?? cursor.postedAt)
-      : contentStatusFilter.saveStatus === "saved"
-        ? (cursor.isWatchLaterUpdatedAt ?? cursor.postedAt)
-        : cursor.postedAt;
+  const cursorCoordinate = selectContentStatusOrderValue(contentStatusFilter, {
+    published: cursor.postedAt,
+    saved: cursor.isWatchLaterUpdatedAt ?? cursor.postedAt,
+    archived: cursor.isWatchedUpdatedAt ?? cursor.postedAt,
+  });
   // SQLite timestamp columns persist epoch seconds. The composite expression
   // has no encoder, so bind the persisted representation explicitly.
   const cursorCoordinateSeconds = Math.floor(cursorCoordinate.getTime() / 1000);
@@ -2155,13 +2155,11 @@ function buildCursorCondition(
 }
 
 function contentStatusOrderExpression(contentStatus: ContentStatusFilter) {
-  if (contentStatus.archiveStatus === "archived") {
-    return sql<Date>`COALESCE(${feedItems.isWatchedUpdatedAt}, ${feedItems.postedAt})`;
-  }
-  if (contentStatus.saveStatus === "saved") {
-    return sql<Date>`COALESCE(${feedItems.isWatchLaterUpdatedAt}, ${feedItems.postedAt})`;
-  }
-  return sql<Date>`${feedItems.postedAt}`;
+  return selectContentStatusOrderValue(contentStatus, {
+    published: sql<Date>`${feedItems.postedAt}`,
+    saved: sql<Date>`COALESCE(${feedItems.isWatchLaterUpdatedAt}, ${feedItems.postedAt})`,
+    archived: sql<Date>`COALESCE(${feedItems.isWatchedUpdatedAt}, ${feedItems.postedAt})`,
+  });
 }
 
 function buildFlatItemsOrderBy(contentStatusFilter: ContentStatusFilter) {

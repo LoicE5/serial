@@ -55,6 +55,7 @@ import type { ContentStatusFilter } from "~/lib/content-status";
 import {
   buildContentStatusKey,
   contentStatusFromScopeKey,
+  selectContentStatusOrderValue,
   upgradeLegacyContentStatusScopeKey,
 } from "~/lib/content-status";
 
@@ -103,12 +104,11 @@ function feedItemReference(input: {
   filterIndex: ReturnType<typeof createFeedItemFilterIndex>;
 }): MixedContentReference {
   const { item, contentStatus, view, filterIndex } = input;
-  const normalizedAt =
-    contentStatus.archiveStatus === "archived"
-      ? (item.isWatchedUpdatedAt ?? item.postedAt)
-      : contentStatus.saveStatus === "saved"
-        ? (item.isWatchLaterUpdatedAt ?? item.postedAt)
-        : item.postedAt;
+  const normalizedAt = selectContentStatusOrderValue(contentStatus, {
+    published: item.postedAt,
+    saved: item.isWatchLaterUpdatedAt ?? item.postedAt,
+    archived: item.isWatchedUpdatedAt ?? item.postedAt,
+  });
   return {
     entityKind: "feed-item",
     entityId: item.id,

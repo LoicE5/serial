@@ -12,6 +12,7 @@ import {
   Trash2Icon,
 } from "lucide-react";
 import type { ApplicationBookmark } from "~/server/mixed-content/projection";
+import type { ContentStatusFilter } from "~/lib/content-status";
 import { CONTENT_TYPE } from "~/lib/content/descriptor";
 import { KeyboardShortcutDisplay } from "~/components/ButtonWithShortcut";
 import { Button } from "~/components/ui/button";
@@ -37,9 +38,30 @@ import {
 import { useDialogStore } from "~/components/feed/dialogStore";
 import { contentDestination } from "~/lib/data/content-items/resolver";
 import { REMOTE_IMAGE_PROPS } from "~/lib/remoteMedia";
+import {
+  contentStatusOrderDimension,
+  selectContentStatusOrderValue,
+} from "~/lib/content-status";
 
 export type ItemSize = "standard" | "large";
 type WatchedDatePrefix = "read" | "watched";
+
+function feedItemDatePresentation(
+  item: {
+    postedAt: Date;
+    isWatchLaterUpdatedAt?: Date | null;
+  },
+  contentStatus: ContentStatusFilter,
+) {
+  const orderDimension = contentStatusOrderDimension(contentStatus);
+  return {
+    displayDate:
+      orderDimension === "saved"
+        ? (item.isWatchLaterUpdatedAt ?? item.postedAt)
+        : item.postedAt,
+    shouldShowWatchedDate: orderDimension === "archived",
+  };
+}
 
 // Typography components for consistent styling across layouts
 
@@ -626,12 +648,11 @@ function BookmarkItemDisplay({
   });
   const href = destination.href;
   const isLarge = size === "large";
-  const date =
-    contentStatusFilter.archiveStatus === "archived"
-      ? bookmark.readUpdatedAt
-      : contentStatusFilter.saveStatus === "saved"
-        ? bookmark.savedUpdatedAt
-        : bookmark.publishedAt || bookmark.createdAt;
+  const date = selectContentStatusOrderValue(contentStatusFilter, {
+    published: bookmark.publishedAt || bookmark.createdAt,
+    saved: bookmark.savedUpdatedAt,
+    archived: bookmark.readUpdatedAt,
+  });
 
   if (grid) {
     return (
@@ -765,12 +786,10 @@ function FeedItemDisplay({
   const rel = shouldOpenInSerial ? undefined : "noopener noreferrer";
 
   const isLarge = size === "large";
-  const shouldShowWatchedDate =
-    contentStatusFilter.archiveStatus === "archived";
-  const displayDate =
-    contentStatusFilter.saveStatus === "saved"
-      ? (item.isWatchLaterUpdatedAt ?? item.postedAt)
-      : item.postedAt;
+  const { displayDate, shouldShowWatchedDate } = feedItemDatePresentation(
+    item,
+    contentStatusFilter,
+  );
   const watchedDatePrefix = getWatchedDatePrefix(item);
 
   return (
@@ -885,12 +904,10 @@ function FeedGridItemDisplay({
   const rel = shouldOpenInSerial ? undefined : "noopener noreferrer";
 
   const isLarge = size === "large";
-  const shouldShowWatchedDate =
-    contentStatusFilter.archiveStatus === "archived";
-  const displayDate =
-    contentStatusFilter.saveStatus === "saved"
-      ? (item.isWatchLaterUpdatedAt ?? item.postedAt)
-      : item.postedAt;
+  const { displayDate, shouldShowWatchedDate } = feedItemDatePresentation(
+    item,
+    contentStatusFilter,
+  );
   const watchedDatePrefix = getWatchedDatePrefix(item);
 
   return (
