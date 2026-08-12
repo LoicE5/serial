@@ -5,17 +5,18 @@ import {
   SELF_HOSTED_TURSO_PORT,
 } from "../fixtures/ports";
 import { cleanupUser, seedArticleData } from "../fixtures/seed-db";
-import { saveStatusSwitch, selectSaveStatus } from "../fixtures/content-status";
 import type { Locator, Page } from "@playwright/test";
 
 function contentStatusTab(page: Page, name: string) {
-  const accessibleName = `Switch to ${name.toLowerCase()} content`;
+  const isSaveStatus = name === "Inbox" || name === "Saved";
+  const accessibleName = isSaveStatus
+    ? new RegExp(`^${name}`)
+    : `Switch to ${name.toLowerCase()} content`;
+  const axisAnchor = isSaveStatus ? /^Inbox/ : "Switch to unread content";
 
   return page
     .locator('[data-slot="tabs-list"]')
-    .filter({
-      has: page.getByRole("tab", { name: "Switch to unread content" }),
-    })
+    .filter({ has: page.getByRole("tab", { name: axisAnchor }) })
     .getByRole("tab", { name: accessibleName });
 }
 
@@ -45,22 +46,20 @@ test.describe("content status controls", () => {
       timeout: 30_000,
     });
 
-    const saveSwitch = saveStatusSwitch(page);
-    const saveSwitchThumb = saveSwitch.locator(":scope > span[data-state]");
+    const inbox = contentStatusTab(page, "Inbox");
+    const saved = contentStatusTab(page, "Saved");
     const unread = contentStatusTab(page, "Unread");
     const archived = contentStatusTab(page, "Archived");
 
-    await expect(saveSwitch).toBeVisible();
-    await expect(saveSwitch).toHaveAccessibleName("Inbox or Saved");
-    await expect(saveSwitch).toHaveAttribute("aria-checked", "false");
-    await expect(saveSwitch).toContainText("Inbox");
-    await expect(saveSwitch).toContainText("Saved");
+    await expect(inbox).toBeVisible();
+    await expect(saved).toBeVisible();
     await expect(unread).toHaveAccessibleName("Switch to unread content");
     await expect(archived).toHaveAccessibleName("Switch to archived content");
     await expect(unread.locator("svg")).toHaveCount(1);
     await expect(archived.locator("svg")).toHaveCount(1);
     await page.keyboard.down("Alt");
-    await expect(saveSwitch.locator("kbd")).toHaveText(["i", "b"]);
+    await expect(inbox.locator("kbd")).toHaveText("i");
+    await expect(saved.locator("kbd")).toHaveText("b");
     await expect(unread.locator("kbd")).toHaveText("u");
     await expect(archived.locator("kbd")).toHaveText("y");
     await page.keyboard.up("Alt");
@@ -73,41 +72,37 @@ test.describe("content status controls", () => {
     await archived.hover();
     await expect(page.getByRole("tooltip", { name: "Archived" })).toBeVisible();
 
+    await expectSelected(inbox, true);
     await expectSelected(unread, true);
     await expect(
       page.getByRole("button", { name: "Mark all as read" }),
     ).toBeVisible();
 
-    const inboxThumbBox = await saveSwitchThumb.boundingBox();
-    expect(inboxThumbBox).not.toBeNull();
-    await selectSaveStatus(page, "saved");
-    await expect(saveSwitch).toHaveAttribute("aria-checked", "true");
-    await expect
-      .poll(async () => (await saveSwitchThumb.boundingBox())?.x ?? 0)
-      .toBeGreaterThan(inboxThumbBox!.x + inboxThumbBox!.width * 0.8);
+    await saved.click();
+    await expectSelected(saved, true);
     await expectSelected(unread, true);
     await expect(
       page.getByRole("button", { name: "Mark all as read" }),
     ).toHaveCount(0);
 
     await archived.click();
-    await expect(saveSwitch).toHaveAttribute("aria-checked", "true");
+    await expectSelected(saved, true);
     await expectSelected(archived, true);
 
     await page.keyboard.press("i");
-    await expect(saveSwitch).toHaveAttribute("aria-checked", "false");
+    await expectSelected(inbox, true);
     await expectSelected(archived, true);
     await page.keyboard.press("u");
-    await expect(saveSwitch).toHaveAttribute("aria-checked", "false");
+    await expectSelected(inbox, true);
     await expectSelected(unread, true);
     await expect(
       page.getByRole("button", { name: "Mark all as read" }),
     ).toBeVisible();
     await page.keyboard.press("b");
-    await expect(saveSwitch).toHaveAttribute("aria-checked", "true");
+    await expectSelected(saved, true);
     await expectSelected(unread, true);
     await page.keyboard.press("y");
-    await expect(saveSwitch).toHaveAttribute("aria-checked", "true");
+    await expectSelected(saved, true);
     await expectSelected(archived, true);
   });
 
@@ -121,7 +116,7 @@ test.describe("content status controls", () => {
     testEmail = email;
     await signIn({ page, email, password });
 
-    const saveAxis = saveStatusSwitch(page);
+    const saveAxis = contentStatusTab(page, "Inbox").locator("xpath=..");
     const archiveAxis = contentStatusTab(page, "Unread").locator("xpath=..");
     const viewChip = page.getByRole("radio", { name: "All", exact: true });
 

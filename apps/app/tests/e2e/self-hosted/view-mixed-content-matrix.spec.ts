@@ -1,7 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { signIn } from "../fixtures/auth";
 import { indexedDbKeys } from "../fixtures/indexed-db";
-import { selectSaveStatus } from "../fixtures/content-status";
 import {
   MIXED_VIEW_SECTION_CASES,
   mixedViewSectionCaseName,
@@ -37,26 +36,17 @@ async function renderedItemIds(locator: Locator) {
   ).sort();
 }
 
-async function selectContentStatus(page: Page, name: string) {
+function contentStatusTab(page: Page, name: string) {
   const isSaveStatus = name === "Inbox" || name === "Saved";
-  if (isSaveStatus) {
-    await selectSaveStatus(page, name === "Saved" ? "saved" : "inbox");
-    return;
-  }
+  const accessibleName = isSaveStatus
+    ? name
+    : `Switch to ${name.toLowerCase()} content`;
+  const axisAnchor = isSaveStatus ? "Inbox" : "Switch to unread content";
 
-  await page
+  return page
     .locator('[data-slot="tabs-list"]')
-    .filter({
-      has: page.getByRole("tab", {
-        name: "Switch to unread content",
-        exact: true,
-      }),
-    })
-    .getByRole("tab", {
-      name: `Switch to ${name.toLowerCase()} content`,
-      exact: true,
-    })
-    .click();
+    .filter({ has: page.getByRole("tab", { name: axisAnchor, exact: true }) })
+    .getByRole("tab", { name: accessibleName, exact: true });
 }
 
 async function beginSkeletonObservation(locator: Locator) {
@@ -146,7 +136,7 @@ test.describe("exhaustive mixed-content View section matrix", () => {
         email: fixture.email,
         password: fixture.password,
       });
-      await selectContentStatus(page, "Saved");
+      await contentStatusTab(page, "Saved").click();
 
       const feedMain = page
         .locator("main")
@@ -254,14 +244,14 @@ test.describe("exhaustive mixed-content View section matrix", () => {
         email: fixture.email,
         password: fixture.password,
       });
-      await selectContentStatus(
+      await contentStatusTab(
         page,
         contentStatus.saveStatus === "saved" ? "Saved" : "Inbox",
-      );
-      await selectContentStatus(
+      ).click();
+      await contentStatusTab(
         page,
         contentStatus.archiveStatus === "archived" ? "Archived" : "Unread",
-      );
+      ).click();
 
       const feedMain = page
         .locator("main")
@@ -336,7 +326,7 @@ test.describe("exhaustive mixed-content View section matrix", () => {
       email: fixture.email,
       password: fixture.password,
     });
-    await selectContentStatus(page, "Saved");
+    await contentStatusTab(page, "Saved").click();
 
     const feedMain = page
       .locator("main")
@@ -364,7 +354,7 @@ test.describe("exhaustive mixed-content View section matrix", () => {
       feedMain.getByRole("heading", { name: "Test Blog", exact: true }),
     ).toHaveCount(0);
 
-    await selectContentStatus(page, "Archived");
+    await contentStatusTab(page, "Archived").click();
     await expect(feedItem).toBeVisible();
   });
 
@@ -395,8 +385,8 @@ test.describe("exhaustive mixed-content View section matrix", () => {
       email: fixture.email,
       password: fixture.password,
     });
-    await selectContentStatus(page, "Saved");
-    await selectContentStatus(page, "Archived");
+    await contentStatusTab(page, "Saved").click();
+    await contentStatusTab(page, "Archived").click();
 
     const feedMain = page
       .locator("main")
@@ -458,7 +448,7 @@ test.describe("exhaustive mixed-content View section matrix", () => {
     await item.getByRole("link").hover();
     await page.keyboard.press("s");
 
-    await selectContentStatus(page, "Saved");
+    await contentStatusTab(page, "Saved").click();
     await feedMain
       .getByRole("radio", { name: fixture.viewName, exact: true })
       .click();
@@ -491,7 +481,7 @@ test.describe("exhaustive mixed-content View section matrix", () => {
       exact: true,
     });
 
-    await selectContentStatus(page, "Saved");
+    await contentStatusTab(page, "Saved").click();
     await targetViewChip.click();
     await expect(feedMain.locator("article[data-item-id]").first()).toBeVisible(
       {
@@ -513,7 +503,7 @@ test.describe("exhaustive mixed-content View section matrix", () => {
       )
       .toBe(true);
 
-    await selectContentStatus(page, "Inbox");
+    await contentStatusTab(page, "Inbox").click();
     const targetItem = feedMain.locator(
       `article[data-item-id="${fixture.targetItemId}"]`,
     );
@@ -521,7 +511,7 @@ test.describe("exhaustive mixed-content View section matrix", () => {
     await targetItem.getByRole("link").hover();
     await page.keyboard.press("s");
 
-    await selectContentStatus(page, "Saved");
+    await contentStatusTab(page, "Saved").click();
     await expect(targetItem).toBeVisible({ timeout: 5_000 });
   });
 
@@ -549,7 +539,7 @@ test.describe("exhaustive mixed-content View section matrix", () => {
       email: fixture.email,
       password: fixture.password,
     });
-    await selectContentStatus(page, "Archived");
+    await contentStatusTab(page, "Archived").click();
 
     const feedMain = page
       .locator("main")

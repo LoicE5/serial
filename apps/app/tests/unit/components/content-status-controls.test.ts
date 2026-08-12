@@ -49,32 +49,19 @@ function selectTab(target: HTMLButtonElement) {
   );
 }
 
-function saveStatusSwitch(container: HTMLElement) {
-  const control = container.querySelector('[role="switch"]');
-  if (!(control instanceof HTMLButtonElement)) {
-    throw new Error("Missing Inbox or Saved switch");
-  }
-  return control;
-}
-
 afterEach(() => {
   for (const root of roots.splice(0)) act(() => root.unmount());
   document.body.replaceChildren();
 });
 
 describe("ContentStatusControls", () => {
-  it("renders a labeled save switch beside explicitly named icon tabs", () => {
+  it("renders adjacent labeled save tabs and explicitly named icon tabs", () => {
     const { container } = renderControls();
     const lists = container.querySelectorAll('[role="tablist"]');
-    const saveSwitch = saveStatusSwitch(container);
 
-    expect(lists).toHaveLength(1);
-    expect(saveSwitch.getAttribute("aria-label")).toBe("Inbox or Saved");
-    expect(saveSwitch.getAttribute("aria-checked")).toBe("false");
-    expect(saveSwitch.textContent).toContain("Inbox");
-    expect(saveSwitch.textContent).toContain("Saved");
-    expect(saveSwitch.textContent).toContain("i");
-    expect(saveSwitch.textContent).toContain("b");
+    expect(lists).toHaveLength(2);
+    expect(tab(container, "Inbox").textContent).toContain("i");
+    expect(tab(container, "Saved").textContent).toContain("b");
     expect(tab(container, "Switch to unread content").textContent).toContain(
       "u",
     );
@@ -91,28 +78,27 @@ describe("ContentStatusControls", () => {
 
   it("updates either axis without changing the other", () => {
     const { container, store } = renderControls();
-    const saveSwitch = saveStatusSwitch(container);
 
-    act(() => saveSwitch.click());
+    act(() => selectTab(tab(container, "Saved")));
     expect(store.get(contentStatusFilterAtom)).toEqual({
       saveStatus: "saved",
       archiveStatus: "unread",
     });
-    expect(saveSwitch.getAttribute("aria-checked")).toBe("true");
+    expect(tab(container, "Saved").getAttribute("data-state")).toBe("active");
 
     act(() => selectTab(tab(container, "Switch to archived content")));
     expect(store.get(contentStatusFilterAtom)).toEqual({
       saveStatus: "saved",
       archiveStatus: "archived",
     });
-    expect(saveSwitch.getAttribute("aria-checked")).toBe("true");
+    expect(tab(container, "Saved").getAttribute("data-state")).toBe("active");
     expect(
       tab(container, "Switch to archived content").getAttribute(
         "aria-selected",
       ),
     ).toBe("true");
 
-    act(() => saveSwitch.click());
+    act(() => selectTab(tab(container, "Inbox")));
     expect(store.get(contentStatusFilterAtom)).toEqual({
       saveStatus: "inbox",
       archiveStatus: "archived",
