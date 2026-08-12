@@ -31,7 +31,7 @@ test.describe("sectioned View client state", () => {
         uncategorizedFeedItem: false,
         uncategorizedBookmark: false,
       },
-      "unread",
+      { saveStatus: "inbox", archiveStatus: "unread" },
     );
     testEmail = fixture.email;
 

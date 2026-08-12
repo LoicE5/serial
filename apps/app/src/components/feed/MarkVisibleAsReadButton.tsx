@@ -4,7 +4,7 @@ import { useAtomValue, useSetAtom } from "jotai";
 import { useCallback, useState } from "react";
 import { FlameIcon } from "lucide-react";
 import { PaginationLoader } from "./view-lists/PaginationLoader";
-import { selectedItemIdAtom, visibilityFilterAtom } from "~/lib/data/atoms";
+import { contentStatusFilterAtom, selectedItemIdAtom } from "~/lib/data/atoms";
 import { useFilteredContentOrder } from "~/lib/data/feed-items";
 import { ButtonWithShortcut } from "~/components/ButtonWithShortcut";
 import { useShortcut } from "~/lib/hooks/useShortcut";
@@ -21,6 +21,7 @@ import {
 import { bookmarksStore } from "~/lib/data/bookmarks/store";
 import { setMixedReadValue } from "~/lib/data/mixed-content/mutations";
 import { useLoadMoreItems } from "~/lib/hooks/useLoadMoreItems";
+import { isInboxUnread } from "~/lib/content-status";
 
 let nextUndoRetentionOwnerId = 0;
 
@@ -29,7 +30,7 @@ export function MarkVisibleAsReadButton() {
   const setSelectedItemId = useSetAtom(selectedItemIdAtom);
   const scrollToItem = useScrollToFeedItem();
 
-  const visibilityFilter = useAtomValue(visibilityFilterAtom);
+  const contentStatusFilter = useAtomValue(contentStatusFilterAtom);
   const filteredItemIds = useFilteredContentOrder();
   const { handleRefresh } = useLoadMoreItems();
 
@@ -44,7 +45,8 @@ export function MarkVisibleAsReadButton() {
   }, [scrollToItem, setSelectedItemId]);
 
   const handleMarkAsRead = async () => {
-    if (visibilityFilter !== "unread" || filteredItemIds.length === 0) return;
+    if (!isInboxUnread(contentStatusFilter) || filteredItemIds.length === 0)
+      return;
 
     setIsLoading(true);
     try {
@@ -95,8 +97,8 @@ export function MarkVisibleAsReadButton() {
 
   useShortcut(SHORTCUT_KEYS.MARK_VISIBLE_READ, handleMarkAsRead);
 
-  // Only show for unread filter
-  if (visibilityFilter !== "unread") return null;
+  // Bulk archive applies only to the Inbox + Unread scope.
+  if (!isInboxUnread(contentStatusFilter)) return null;
 
   // Don't show if no items visible
   if (filteredItemIds.length === 0) return null;

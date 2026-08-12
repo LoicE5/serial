@@ -1,16 +1,9 @@
-import type { VisibilityFilter } from "~/lib/data/atoms";
-
-export type SavedSectionVisibility = "unread" | "all" | null;
+import type { ContentStatusFilter } from "~/lib/content-status";
 
 export function shouldAdvanceAfterToggleRead({
-  visibilityFilter,
-  savedSectionVisibility,
+  contentStatusFilter,
 }: {
-  visibilityFilter: VisibilityFilter;
-  savedSectionVisibility: SavedSectionVisibility;
+  contentStatusFilter: ContentStatusFilter;
 }) {
-  return (
-    visibilityFilter === "unread" ||
-    (visibilityFilter === "later" && savedSectionVisibility === "unread")
-  );
+  return contentStatusFilter.archiveStatus === "unread";
 }

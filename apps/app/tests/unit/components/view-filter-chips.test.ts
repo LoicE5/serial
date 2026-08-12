@@ -13,7 +13,6 @@ import {
   contentStatusFilterAtom,
   viewFilterIdAtom,
   viewsAtom,
-  visibilityFilterAtom,
 } from "~/lib/data/atoms";
 import { navigationSnapshotStore } from "~/lib/data/navigation/store";
 import { viewsStore } from "~/lib/data/views/store";
@@ -63,7 +62,6 @@ function renderViewFilterChips(
   const jotaiStore = createStore();
   jotaiStore.set(viewsAtom, cachedViews);
   jotaiStore.set(viewFilterIdAtom, 1);
-  jotaiStore.set(visibilityFilterAtom, "unread");
   if (input.contentStatus) {
     jotaiStore.set(contentStatusFilterAtom, input.contentStatus);
   }
