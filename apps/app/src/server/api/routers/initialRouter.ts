@@ -15,7 +15,7 @@ import {
 import { z } from "zod";
 import {
   GET_BY_VIEW_CHUNK_SIZE,
-  ITEMS_BY_VISIBILITY_CHUNK_SIZE,
+  ITEMS_BY_CONTENT_STATUS_CHUNK_SIZE,
   ITEMS_PER_PAGE,
   REVALIDATE_VIEW_CHUNK_SIZE,
 } from "../constants";
@@ -49,10 +49,9 @@ import {
   getFeedsActivationBudget,
 } from "~/server/subscriptions/helpers";
 import {
-  contentStatusFromVisibilityFilter,
+  contentStatusFilterSchema,
   DEFAULT_CONTENT_STATUS_FILTER,
 } from "~/lib/content-status";
-import { visibilityFilterSchema } from "~/lib/data/atoms";
 import {
   buildContentFilter,
   buildContentStatusFilter,
@@ -137,7 +136,7 @@ export type ViewDataChunk =
       viewId?: number;
       feedId?: number;
       feedItems: ApplicationFeedItem[];
-      visibilityFilter?: string;
+      contentStatusFilter?: ContentStatusFilter;
       hasMore?: boolean;
       nextCursor?: PaginationCursor;
       refreshNavigationSnapshot?: boolean;
@@ -172,7 +171,7 @@ export type GetByViewChunk =
   | {
       type: "view-diff";
       viewId: number;
-      visibilityFilter: string;
+      contentStatusFilter: ContentStatusFilter;
       diff: DiffEntry[];
       cursor: PaginationCursor;
       hasMore: boolean;
@@ -181,7 +180,7 @@ export type GetByViewChunk =
   | {
       type: "view-lightweight-items";
       viewId: number;
-      visibilityFilter: string;
+      contentStatusFilter: ContentStatusFilter;
       items: LightweightFeedItem[];
       cursor: PaginationCursor;
       hasMore: boolean;
@@ -199,7 +198,7 @@ export type RevalidateViewChunk =
       type: "feed-items";
       viewId: number;
       feedItems: ApplicationFeedItem[];
-      visibilityFilter?: string;
+      contentStatusFilter?: ContentStatusFilter;
       hasMore?: boolean;
       nextCursor?: PaginationCursor;
     }
@@ -209,7 +208,7 @@ export type RevalidateViewChunk =
 type RouterPublishedChunk =
   | { source: "initial"; chunk: GetByViewChunk }
   | { source: "revalidate"; chunk: RevalidateViewChunk }
-  | { source: "visibility"; chunk: GetItemsByVisibilityChunk }
+  | { source: "content-status"; chunk: GetItemsByContentStatusChunk }
   | { source: "feed"; chunk: GetItemsByFeedChunk }
   | { source: "category"; chunk: GetItemsByCategoryIdChunk }
   | { source: "bookmark"; chunk: BookmarkSyncChunk }
@@ -2215,15 +2214,15 @@ function buildSectionPlacementExpression(viewId: number): SQL<number> {
 }
 
 /**
- * Request items for a specific visibility filter with cursor-based pagination.
- * Used for lazy loading "read" and "later" visibility filters,
+ * Request items for a specific content-status filter with cursor-based pagination.
+ * Used for lazy loading non-default status pages,
  * and for infinite scroll pagination.
  */
-export const requestItemsByVisibility = protectedProcedure
+export const requestItemsByContentStatus = protectedProcedure
   .input(
     clientScopedInputSchema.extend({
       viewId: z.number(),
-      visibilityFilter: visibilityFilterSchema,
+      contentStatusFilter: contentStatusFilterSchema,
       cursor: cursorSchema.optional(),
       limit: z.number().min(1).max(500).optional(),
       clientItems: z
@@ -2250,7 +2249,7 @@ export const requestItemsByVisibility = protectedProcedure
     } catch (error) {
       captureException(error);
       await publisher.publish(channel, {
-        source: "visibility",
+        source: "content-status",
         chunk: {
           type: "error",
           message:
@@ -2265,7 +2264,7 @@ export const requestItemsByVisibility = protectedProcedure
 
     if (!pageData) {
       await publisher.publish(channel, {
-        source: "visibility",
+        source: "content-status",
         chunk: {
           type: "error",
           message: `View with ID ${input.viewId} not found`,
@@ -2279,11 +2278,11 @@ export const requestItemsByVisibility = protectedProcedure
 
     if (feedIds.length === 0) {
       await publisher.publish(channel, {
-        source: "visibility",
+        source: "content-status",
         chunk: {
           type: "view-diff",
           viewId: input.viewId,
-          visibilityFilter: input.visibilityFilter,
+          contentStatusFilter: input.contentStatusFilter,
           diff: [],
           cursor: null,
           hasMore: false,
@@ -2298,9 +2297,7 @@ export const requestItemsByVisibility = protectedProcedure
         context,
         targetView,
         {
-          contentStatusFilter: contentStatusFromVisibilityFilter(
-            input.visibilityFilter,
-          ),
+          contentStatusFilter: input.contentStatusFilter,
           feedIds,
           cursor: input.cursor ?? null,
           limit,
@@ -2317,11 +2314,11 @@ export const requestItemsByVisibility = protectedProcedure
       const diff = computeViewDiff(items, clientItems ?? []);
 
       await publisher.publish(channel, {
-        source: "visibility",
+        source: "content-status",
         chunk: {
           type: "view-diff",
           viewId: input.viewId,
-          visibilityFilter: input.visibilityFilter,
+          contentStatusFilter: input.contentStatusFilter,
           diff,
           cursor: nextCursor,
           hasMore,
@@ -2332,7 +2329,7 @@ export const requestItemsByVisibility = protectedProcedure
     } catch (error) {
       captureException(error);
       await publisher.publish(channel, {
-        source: "visibility",
+        source: "content-status",
         chunk: {
           type: "error",
           message:
@@ -2356,7 +2353,7 @@ export const requestItemsByFeed = protectedProcedure
   .input(
     clientScopedInputSchema.extend({
       feedId: z.number(),
-      visibilityFilter: visibilityFilterSchema,
+      contentStatusFilter: contentStatusFilterSchema,
       cursor: cursorSchema.optional(),
       limit: z.number().min(1).max(500).optional(),
     }),
@@ -2385,9 +2382,7 @@ export const requestItemsByFeed = protectedProcedure
     try {
       const queryParts = buildPaginatedFeedItemQuery({
         scope: { type: "feed", feedId: input.feedId },
-        contentStatusFilter: contentStatusFromVisibilityFilter(
-          input.visibilityFilter,
-        ),
+        contentStatusFilter: input.contentStatusFilter,
         cursor: input.cursor ?? null,
       });
 
@@ -2424,7 +2419,7 @@ export const requestItemsByFeed = protectedProcedure
             type: "feed-items",
             feedId: input.feedId,
             feedItems: chunk,
-            visibilityFilter: input.visibilityFilter,
+            contentStatusFilter: input.contentStatusFilter,
             hasMore,
             nextCursor,
             replacesScope: input.cursor == null && chunkIndex === 0,
@@ -2440,7 +2435,7 @@ export const requestItemsByFeed = protectedProcedure
             type: "feed-items",
             feedId: input.feedId,
             feedItems: [],
-            visibilityFilter: input.visibilityFilter,
+            contentStatusFilter: input.contentStatusFilter,
             hasMore: false,
             nextCursor: null,
             replacesScope: input.cursor == null,
@@ -2474,7 +2469,7 @@ export const requestItemsByCategoryId = protectedProcedure
   .input(
     clientScopedInputSchema.extend({
       categoryId: z.number(),
-      visibilityFilter: visibilityFilterSchema,
+      contentStatusFilter: contentStatusFilterSchema,
       cursor: cursorSchema.optional(),
       limit: z.number().min(1).max(500).optional(),
     }),
@@ -2518,7 +2513,7 @@ export const requestItemsByCategoryId = protectedProcedure
           type: "feed-items",
           categoryId: input.categoryId,
           feedItems: [],
-          visibilityFilter: input.visibilityFilter,
+          contentStatusFilter: input.contentStatusFilter,
           hasMore: false,
           nextCursor: null,
           replacesScope: input.cursor == null,
@@ -2540,9 +2535,7 @@ export const requestItemsByCategoryId = protectedProcedure
     try {
       const queryParts = buildPaginatedFeedItemQuery({
         scope: { type: "category", feedIds: feedIdsInCategory },
-        contentStatusFilter: contentStatusFromVisibilityFilter(
-          input.visibilityFilter,
-        ),
+        contentStatusFilter: input.contentStatusFilter,
         cursor: input.cursor ?? null,
       });
 
@@ -2579,7 +2572,7 @@ export const requestItemsByCategoryId = protectedProcedure
             type: "feed-items",
             categoryId: input.categoryId,
             feedItems: chunk,
-            visibilityFilter: input.visibilityFilter,
+            contentStatusFilter: input.contentStatusFilter,
             hasMore,
             nextCursor,
             replacesScope: input.cursor == null && chunkIndex === 0,
@@ -2595,7 +2588,7 @@ export const requestItemsByCategoryId = protectedProcedure
             type: "feed-items",
             categoryId: input.categoryId,
             feedItems: [],
-            visibilityFilter: input.visibilityFilter,
+            contentStatusFilter: input.contentStatusFilter,
             hasMore: false,
             nextCursor: null,
             replacesScope: input.cursor == null,
@@ -2718,12 +2711,12 @@ export const revalidateView = protectedProcedure
     return;
   });
 
-export type GetItemsByVisibilityChunk =
+export type GetItemsByContentStatusChunk =
   | {
       type: "feed-items";
       viewId: number;
       feedItems: ApplicationFeedItem[];
-      visibilityFilter: string;
+      contentStatusFilter: ContentStatusFilter;
       hasMore: boolean;
       nextCursor: PaginationCursor;
       replacesScope?: boolean;
@@ -2732,7 +2725,7 @@ export type GetItemsByVisibilityChunk =
   | {
       type: "view-diff";
       viewId: number;
-      visibilityFilter: string;
+      contentStatusFilter: ContentStatusFilter;
       diff: DiffEntry[];
       cursor: PaginationCursor;
       hasMore: boolean;
@@ -2746,7 +2739,7 @@ export type GetItemsByFeedChunk =
       type: "feed-items";
       feedId: number;
       feedItems: ApplicationFeedItem[];
-      visibilityFilter: string;
+      contentStatusFilter: ContentStatusFilter;
       hasMore: boolean;
       nextCursor: PaginationCursor;
       replacesScope?: boolean;
@@ -2758,7 +2751,7 @@ export type GetItemsByCategoryIdChunk =
       type: "feed-items";
       categoryId: number;
       feedItems: ApplicationFeedItem[];
-      visibilityFilter: string;
+      contentStatusFilter: ContentStatusFilter;
       hasMore: boolean;
       nextCursor: PaginationCursor;
       replacesScope?: boolean;
@@ -2766,15 +2759,15 @@ export type GetItemsByCategoryIdChunk =
   | { type: "error"; message: string; phase: string };
 
 /**
- * Fetch items for a specific visibility filter with cursor-based pagination.
- * Used for lazy loading "read" and "later" visibility filters,
+ * Fetch items for a specific content-status filter with cursor-based pagination.
+ * Used for lazy loading non-default status pages,
  * and for infinite scroll pagination.
  */
-export const getItemsByVisibility = protectedProcedure
+export const getItemsByContentStatus = protectedProcedure
   .input(
     z.object({
       viewId: z.number(),
-      visibilityFilter: visibilityFilterSchema,
+      contentStatusFilter: contentStatusFilterSchema,
       cursor: cursorSchema.optional(),
       limit: z.number().min(1).max(500).optional(),
     }),
@@ -2782,7 +2775,7 @@ export const getItemsByVisibility = protectedProcedure
   .handler(async function* ({
     context,
     input,
-  }): AsyncGenerator<GetItemsByVisibilityChunk> {
+  }): AsyncGenerator<GetItemsByContentStatusChunk> {
     const limit = input.limit ?? ITEMS_PER_PAGE;
 
     let pageData: ScopedViewPageData | null;
@@ -2817,7 +2810,7 @@ export const getItemsByVisibility = protectedProcedure
         type: "feed-items",
         viewId: input.viewId,
         feedItems: [],
-        visibilityFilter: input.visibilityFilter,
+        contentStatusFilter: input.contentStatusFilter,
         hasMore: false,
         nextCursor: null,
         replacesScope: input.cursor == null,
@@ -2838,23 +2831,21 @@ export const getItemsByVisibility = protectedProcedure
         customViews: [],
         applicationFeeds,
         membershipResolved: true,
-        contentStatusFilter: contentStatusFromVisibilityFilter(
-          input.visibilityFilter,
-        ),
+        contentStatusFilter: input.contentStatusFilter,
         cursor: input.cursor ?? null,
         limit,
       });
 
       const chunks = prepareArrayChunks(
         applicationFeedItems,
-        ITEMS_BY_VISIBILITY_CHUNK_SIZE,
+        ITEMS_BY_CONTENT_STATUS_CHUNK_SIZE,
       );
       for (const [chunkIndex, chunk] of chunks.entries()) {
         yield {
           type: "feed-items",
           viewId: input.viewId,
           feedItems: chunk,
-          visibilityFilter: input.visibilityFilter,
+          contentStatusFilter: input.contentStatusFilter,
           hasMore,
           nextCursor,
           replacesScope: input.cursor == null && chunkIndex === 0,
@@ -2866,7 +2857,7 @@ export const getItemsByVisibility = protectedProcedure
           type: "feed-items",
           viewId: input.viewId,
           feedItems: [],
-          visibilityFilter: input.visibilityFilter,
+          contentStatusFilter: input.contentStatusFilter,
           hasMore: false,
           nextCursor: null,
           replacesScope: input.cursor == null,

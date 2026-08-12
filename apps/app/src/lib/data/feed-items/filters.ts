@@ -2,7 +2,6 @@ import { and, eq, gte, inArray } from "drizzle-orm";
 
 import { INBOX_VIEW_ID } from "../views/constants";
 import type { SQL } from "drizzle-orm";
-import type { VisibilityFilter } from "../atoms";
 import type { ContentStatusFilter } from "~/lib/content-status";
 import type {
   ApplicationView,
@@ -44,37 +43,6 @@ export function isFeedCompatibleWithContentFilter(
     );
   }
   return hasContentFilterOption(contentFilter, CONTENT_FILTER_OPTION.VIDEOS);
-}
-
-/**
- * Build a Drizzle filter condition for visibility (unread/read/later)
- *
- * - "unread": items that are not watched AND not watch later
- * - "read": items that are watched AND not watch later
- * - "later": unread items that are marked as watch later
- */
-export function buildVisibilityFilter(
-  visibilityFilter: VisibilityFilter,
-): SQL | undefined {
-  switch (visibilityFilter) {
-    case "unread":
-      return and(
-        eq(feedItems.isWatched, false),
-        eq(feedItems.isWatchLater, false),
-      );
-    case "read":
-      return and(
-        eq(feedItems.isWatched, true),
-        eq(feedItems.isWatchLater, false),
-      );
-    case "later":
-      return and(
-        eq(feedItems.isWatchLater, true),
-        eq(feedItems.isWatched, false),
-      );
-    default:
-      return undefined;
-  }
 }
 
 /** Build the independent save/archive predicate for Feed items. */

@@ -1,10 +1,10 @@
 import { z } from "zod";
+import type { ContentStatusFilter } from "~/lib/content-status";
 import type { MixedContentScope } from "~/server/mixed-content/projection";
 import { getClientChannel } from "~/server/api/channels";
 import { ITEMS_PER_PAGE } from "~/server/api/constants";
 import { publisher } from "~/server/api/publisher";
-import { visibilityFilterSchema } from "~/lib/data/atoms";
-import { contentStatusFromVisibilityFilter } from "~/lib/content-status";
+import { contentStatusFilterSchema } from "~/lib/content-status";
 import { protectedProcedure } from "~/server/orpc/base";
 import {
   loadApplicationBookmarks,
@@ -68,20 +68,20 @@ async function publishPage(input: {
   userId: string;
   clientId: string;
   scope: MixedContentScope;
-  visibility: "unread" | "read" | "later";
+  contentStatus: ContentStatusFilter;
   cursor?: Parameters<typeof queryMixedContentPage>[0]["cursor"];
   limit: number;
 }) {
   const page = await queryMixedContentPage({
     ...input,
-    contentStatus: contentStatusFromVisibilityFilter(input.visibility),
+    contentStatus: input.contentStatus,
   });
   await publisher.publish(getClientChannel(input.userId, input.clientId), {
     source: "mixed",
     chunk: {
       type: "mixed-content-page",
       scope: input.scope,
-      visibility: input.visibility,
+      contentStatus: input.contentStatus,
       page,
       replacesScope: !input.cursor,
     },
@@ -93,7 +93,7 @@ export const requestPage = protectedProcedure
     z.object({
       clientId: clientIdSchema,
       scope: scopeSchema,
-      visibility: visibilityFilterSchema,
+      contentStatus: contentStatusFilterSchema,
       cursor: cursorSchema.optional(),
       limit: z.number().int().min(1).max(500).optional(),
     }),
@@ -104,7 +104,7 @@ export const requestPage = protectedProcedure
       userId: context.user.id,
       clientId: input.clientId,
       scope: input.scope,
-      visibility: input.visibility,
+      contentStatus: input.contentStatus,
       cursor: input.cursor,
       limit: input.limit ?? ITEMS_PER_PAGE,
     });

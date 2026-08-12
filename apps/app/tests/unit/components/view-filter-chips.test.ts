@@ -7,8 +7,10 @@ import { createStore, Provider } from "jotai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ApplicationView } from "~/server/db/schema";
+import type { ContentStatusFilter } from "~/lib/content-status";
 import { ViewFilterChips } from "~/components/feed/ViewFilterChips";
 import {
+  contentStatusFilterAtom,
   viewFilterIdAtom,
   viewsAtom,
   visibilityFilterAtom,
@@ -47,6 +49,7 @@ function renderViewFilterChips(
   input: {
     cachedViews?: ApplicationView[];
     hasFetchedViews?: boolean;
+    contentStatus?: ContentStatusFilter;
   } = {},
 ) {
   const cachedViews = input.cachedViews ?? [
@@ -61,6 +64,9 @@ function renderViewFilterChips(
   jotaiStore.set(viewsAtom, cachedViews);
   jotaiStore.set(viewFilterIdAtom, 1);
   jotaiStore.set(visibilityFilterAtom, "unread");
+  if (input.contentStatus) {
+    jotaiStore.set(contentStatusFilterAtom, input.contentStatus);
+  }
 
   const container = document.createElement("div");
   const root = createRoot(container);
@@ -160,6 +166,27 @@ describe("View filter loading", () => {
     });
 
     const markup = renderViewFilterChips();
+
+    expect(chipFromMarkup(markup, "Reading").classList).toContain("opacity-50");
+    expect(chipFromMarkup(markup, "Research").classList).not.toContain(
+      "opacity-50",
+    );
+  });
+
+  it("maps Saved + Archived to the flat savedArchived availability cell", () => {
+    navigationSnapshotStore.getState().set({
+      views: {
+        1: { unread: true, read: false, later: true, savedArchived: false },
+        2: { unread: false, read: true, later: false, savedArchived: true },
+      },
+      tags: {},
+      feeds: {},
+      viewFeeds: {},
+    });
+
+    const markup = renderViewFilterChips({
+      contentStatus: { saveStatus: "saved", archiveStatus: "archived" },
+    });
 
     expect(chipFromMarkup(markup, "Reading").classList).toContain("opacity-50");
     expect(chipFromMarkup(markup, "Research").classList).not.toContain(

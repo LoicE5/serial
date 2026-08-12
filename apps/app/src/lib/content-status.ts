@@ -12,6 +12,8 @@ export const contentStatusFilterSchema = z.object({
 });
 export type ContentStatusFilter = z.infer<typeof contentStatusFilterSchema>;
 
+const legacyVisibilityFilterSchema = z.enum(["unread", "read", "later"]);
+
 export type ContentStatusKey = `${SaveStatus}:${ArchiveStatus}`;
 
 export const INBOX_UNREAD_CONTENT_STATUS = {
@@ -62,13 +64,53 @@ export function contentStatusAvailabilityKey(
   return filter.archiveStatus === "archived" ? "read" : "unread";
 }
 
-/** Temporary transport adapter while main's client still sends VisibilityFilter. */
+export function isContentStatusAvailable(
+  availability:
+    Partial<Record<ContentStatusAvailabilityKey, boolean>> | undefined,
+  filter: ContentStatusFilter,
+) {
+  return availability?.[contentStatusAvailabilityKey(filter)] ?? false;
+}
+
+/** Compatibility mapping for the legacy control during the phased UI cutover. */
 export function contentStatusFromVisibilityFilter(
   visibility: "unread" | "read" | "later",
 ): ContentStatusFilter {
   if (visibility === "read") return INBOX_ARCHIVED_CONTENT_STATUS;
   if (visibility === "later") return SAVED_UNREAD_CONTENT_STATUS;
   return INBOX_UNREAD_CONTENT_STATUS;
+}
+
+export function contentStatusFromScopeKey(
+  scopeKey: string,
+): ContentStatusFilter | undefined {
+  const parts = scopeKey.split(":");
+  const compoundResult = contentStatusFilterSchema.safeParse({
+    saveStatus: parts.at(-2),
+    archiveStatus: parts.at(-1),
+  });
+  if (compoundResult.success) return compoundResult.data;
+
+  const legacyResult = legacyVisibilityFilterSchema.safeParse(parts.at(-1));
+  return legacyResult.success
+    ? contentStatusFromVisibilityFilter(legacyResult.data)
+    : undefined;
+}
+
+/** Re-key retained main pages without changing or disposing the IndexedDB schema. */
+export function upgradeLegacyContentStatusScopeKey(scopeKey: string) {
+  const parts = scopeKey.split(":");
+  const compoundResult = contentStatusFilterSchema.safeParse({
+    saveStatus: parts.at(-2),
+    archiveStatus: parts.at(-1),
+  });
+  if (compoundResult.success) return scopeKey;
+
+  const contentStatus = contentStatusFromScopeKey(scopeKey);
+  if (!contentStatus) return scopeKey;
+  return [...parts.slice(0, -1), buildContentStatusKey(contentStatus)].join(
+    ":",
+  );
 }
 
 export function isInboxUnread(filter: ContentStatusFilter) {

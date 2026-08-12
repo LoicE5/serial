@@ -3,6 +3,11 @@ import type { ApplicationFeedItem, ApplicationView } from "~/server/db/schema";
 import { shouldRefreshNavigationAfterFeedItemChange } from "~/lib/data/navigation/refreshOnLocalTransition";
 import { feedItemsStore, getFeedItemScopeKey } from "~/lib/data/store";
 import { viewsStore } from "~/lib/data/views/store";
+import {
+  INBOX_ARCHIVED_CONTENT_STATUS,
+  INBOX_UNREAD_CONTENT_STATUS,
+  SAVED_UNREAD_CONTENT_STATUS,
+} from "~/lib/content-status";
 
 const NOW = new Date("2026-08-05T12:00:00.000Z");
 const VIEW_ID = 10;
@@ -79,7 +84,7 @@ describe("navigation refresh transitions", () => {
     feedItemsStore.getState().setFeedItems([nextItem]);
     feedItemsStore.setState({
       scopeFeedItemIds: {
-        [getFeedItemScopeKey("view", VIEW_ID, "unread")]: [],
+        [getFeedItemScopeKey("view", VIEW_ID, INBOX_UNREAD_CONTENT_STATUS)]: [],
       },
     });
 
@@ -102,8 +107,11 @@ describe("navigation refresh transitions", () => {
     feedItemsStore.getState().setFeedItems([nextItem]);
     feedItemsStore.setState({
       scopeFeedItemIds: {
-        [getFeedItemScopeKey("view", VIEW_ID, "read")]: [],
-        [getFeedItemScopeKey("view", VIEW_ID, "unread")]: [nextItem.id],
+        [getFeedItemScopeKey("view", VIEW_ID, INBOX_ARCHIVED_CONTENT_STATUS)]:
+          [],
+        [getFeedItemScopeKey("view", VIEW_ID, INBOX_UNREAD_CONTENT_STATUS)]: [
+          nextItem.id,
+        ],
       },
     });
 
@@ -126,8 +134,12 @@ describe("navigation refresh transitions", () => {
     feedItemsStore.getState().setFeedItems([nextItem]);
     feedItemsStore.setState({
       scopeFeedItemIds: {
-        [getFeedItemScopeKey("view", VIEW_ID, "unread")]: ["another-item"],
-        [getFeedItemScopeKey("view", VIEW_ID, "read")]: [nextItem.id],
+        [getFeedItemScopeKey("view", VIEW_ID, INBOX_UNREAD_CONTENT_STATUS)]: [
+          "another-item",
+        ],
+        [getFeedItemScopeKey("view", VIEW_ID, INBOX_ARCHIVED_CONTENT_STATUS)]: [
+          nextItem.id,
+        ],
       },
     });
 
@@ -154,7 +166,7 @@ describe("navigation refresh transitions", () => {
     feedItemsStore.getState().setFeedItems([nextItem]);
     feedItemsStore.setState({
       scopeFeedItemIds: {
-        [getFeedItemScopeKey("view", VIEW_ID, "later")]: [],
+        [getFeedItemScopeKey("view", VIEW_ID, SAVED_UNREAD_CONTENT_STATUS)]: [],
       },
     });
 
