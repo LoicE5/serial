@@ -1,7 +1,16 @@
 import { and, eq, exists, inArray, not, or, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import type { db as defaultDatabase } from "~/server/db";
-import type { VisibilityFilter } from "~/lib/data/atoms";
+import type {
+  ContentStatusAvailabilityKey,
+  ContentStatusFilter,
+} from "~/lib/content-status";
+import {
+  INBOX_ARCHIVED_CONTENT_STATUS,
+  INBOX_UNREAD_CONTENT_STATUS,
+  SAVED_ARCHIVED_CONTENT_STATUS,
+  SAVED_UNREAD_CONTENT_STATUS,
+} from "~/lib/content-status";
 import { INBOX_VIEW_ID } from "~/lib/data/views/constants";
 import { VIDEO_PLATFORMS } from "~/lib/data/feed-items/filters";
 import {
@@ -30,7 +39,10 @@ import {
 type NavigationDatabase = typeof defaultDatabase;
 type SqlColumn = Parameters<typeof eq>[0];
 
-export type NavigationAvailability = Record<VisibilityFilter, boolean>;
+export type NavigationAvailability = Record<
+  ContentStatusAvailabilityKey,
+  boolean
+>;
 
 export type NavigationSnapshot = {
   views: Record<number, NavigationAvailability>;
@@ -44,6 +56,7 @@ type AvailabilityRow = {
   unread: number;
   read: number;
   later: number;
+  savedArchived: number;
 };
 
 type ViewFeedAvailabilityRow = AvailabilityRow & {
@@ -51,27 +64,15 @@ type ViewFeedAvailabilityRow = AvailabilityRow & {
   feedId: number;
 };
 
-function visibilityCondition(input: {
-  visibility: VisibilityFilter;
+function contentStatusCondition(input: {
+  contentStatus: ContentStatusFilter;
   isRead: SqlColumn;
-  isLater: SqlColumn;
+  isSaved: SqlColumn;
 }) {
-  if (input.visibility === "later") return eq(input.isLater, true);
   return and(
-    eq(input.isLater, false),
-    eq(input.isRead, input.visibility === "read"),
+    eq(input.isSaved, input.contentStatus.saveStatus === "saved"),
+    eq(input.isRead, input.contentStatus.archiveStatus === "archived"),
   );
-}
-
-function viewVisibilityCondition(input: {
-  visibility: VisibilityFilter;
-  isRead: SqlColumn;
-  isLater: SqlColumn;
-}) {
-  if (input.visibility === "later") {
-    return and(eq(input.isLater, true), eq(input.isRead, false));
-  }
-  return visibilityCondition(input);
 }
 
 function hasAny(condition: SQL | undefined) {
@@ -86,6 +87,7 @@ function availabilityRecord(rows: AvailabilityRow[]) {
         unread: Boolean(row.unread),
         read: Boolean(row.read),
         later: Boolean(row.later),
+        savedArchived: Boolean(row.savedArchived),
       },
     ]),
   ) as Record<number, NavigationAvailability>;
@@ -137,7 +139,7 @@ function feedCompatibleWithView() {
 function feedExistsForViewFeed(input: {
   database: NavigationDatabase;
   userId: string;
-  visibility: VisibilityFilter;
+  contentStatus: ContentStatusFilter;
   now: Date;
 }) {
   const nowSeconds = Math.floor(input.now.getTime() / 1000);
@@ -159,10 +161,10 @@ function feedExistsForViewFeed(input: {
             orientation: feedItems.orientation,
           }),
           insideTimeWindow,
-          viewVisibilityCondition({
-            visibility: input.visibility,
+          contentStatusCondition({
+            contentStatus: input.contentStatus,
             isRead: feedItems.isWatched,
-            isLater: feedItems.isWatchLater,
+            isSaved: feedItems.isWatchLater,
           }),
           not(canonicalBookmarkExists(input.database, input.userId)),
         ),
@@ -173,7 +175,7 @@ function feedExistsForViewFeed(input: {
 function feedExistsForView(input: {
   database: NavigationDatabase;
   userId: string;
-  visibility: VisibilityFilter;
+  contentStatus: ContentStatusFilter;
   now: Date;
 }) {
   const nowSeconds = Math.floor(input.now.getTime() / 1000);
@@ -189,10 +191,10 @@ function feedExistsForView(input: {
       orientation: feedItems.orientation,
     }),
     insideTimeWindow,
-    viewVisibilityCondition({
-      visibility: input.visibility,
+    contentStatusCondition({
+      contentStatus: input.contentStatus,
       isRead: feedItems.isWatched,
-      isLater: feedItems.isWatchLater,
+      isSaved: feedItems.isWatchLater,
     }),
     not(canonicalBookmarkExists(input.database, input.userId)),
   );
@@ -237,7 +239,7 @@ function feedExistsForView(input: {
 function bookmarkExistsForView(input: {
   database: NavigationDatabase;
   userId: string;
-  visibility: VisibilityFilter;
+  contentStatus: ContentStatusFilter;
   now: Date;
 }) {
   const directMembership = exists(
@@ -286,10 +288,10 @@ function bookmarkExistsForView(input: {
             orientation: bookmarks.orientation,
           }),
           insideTimeWindow,
-          viewVisibilityCondition({
-            visibility: input.visibility,
+          contentStatusCondition({
+            contentStatus: input.contentStatus,
             isRead: bookmarks.isRead,
-            isLater: bookmarks.isSaved,
+            isSaved: bookmarks.isSaved,
           }),
         ),
       ),
@@ -301,17 +303,18 @@ async function queryViewAvailability(input: {
   userId: string;
   now: Date;
 }) {
-  const visibilityExists = (visibility: VisibilityFilter) =>
+  const contentStatusExists = (contentStatus: ContentStatusFilter) =>
     or(
-      feedExistsForView({ ...input, visibility }),
-      bookmarkExistsForView({ ...input, visibility }),
+      feedExistsForView({ ...input, contentStatus }),
+      bookmarkExistsForView({ ...input, contentStatus }),
     );
   const customViewRows = await input.database
     .select({
       id: views.id,
-      unread: hasAny(visibilityExists("unread")),
-      read: hasAny(visibilityExists("read")),
-      later: hasAny(visibilityExists("later")),
+      unread: hasAny(contentStatusExists(INBOX_UNREAD_CONTENT_STATUS)),
+      read: hasAny(contentStatusExists(INBOX_ARCHIVED_CONTENT_STATUS)),
+      later: hasAny(contentStatusExists(SAVED_UNREAD_CONTENT_STATUS)),
+      savedArchived: hasAny(contentStatusExists(SAVED_ARCHIVED_CONTENT_STATUS)),
     })
     .from(views)
     .where(eq(views.userId, input.userId));
@@ -328,7 +331,7 @@ async function queryViewAvailability(input: {
       sections: [],
     },
   };
-  const inboxVisibilityExists = (visibility: VisibilityFilter) =>
+  const inboxContentStatusExists = (contentStatus: ContentStatusFilter) =>
     or(
       exists(
         input.database
@@ -339,10 +342,10 @@ async function queryViewAvailability(input: {
             and(
               eq(feeds.userId, input.userId),
               feedScopeCondition(inboxScope),
-              viewVisibilityCondition({
-                visibility,
+              contentStatusCondition({
+                contentStatus,
                 isRead: feedItems.isWatched,
-                isLater: feedItems.isWatchLater,
+                isSaved: feedItems.isWatchLater,
               }),
               not(canonicalBookmarkExists(input.database, input.userId)),
             ),
@@ -356,10 +359,10 @@ async function queryViewAvailability(input: {
             and(
               eq(bookmarks.userId, input.userId),
               bookmarkScopeCondition(inboxScope),
-              viewVisibilityCondition({
-                visibility,
+              contentStatusCondition({
+                contentStatus,
                 isRead: bookmarks.isRead,
-                isLater: bookmarks.isSaved,
+                isSaved: bookmarks.isSaved,
               }),
             ),
           ),
@@ -368,9 +371,12 @@ async function queryViewAvailability(input: {
   const inboxRows = await input.database
     .select({
       id: sql<number>`${INBOX_VIEW_ID}`,
-      unread: hasAny(inboxVisibilityExists("unread")),
-      read: hasAny(inboxVisibilityExists("read")),
-      later: hasAny(inboxVisibilityExists("later")),
+      unread: hasAny(inboxContentStatusExists(INBOX_UNREAD_CONTENT_STATUS)),
+      read: hasAny(inboxContentStatusExists(INBOX_ARCHIVED_CONTENT_STATUS)),
+      later: hasAny(inboxContentStatusExists(SAVED_UNREAD_CONTENT_STATUS)),
+      savedArchived: hasAny(
+        inboxContentStatusExists(SAVED_ARCHIVED_CONTENT_STATUS),
+      ),
     })
     .from(user)
     .where(eq(user.id, input.userId))
@@ -383,7 +389,7 @@ async function queryTagAvailability(input: {
   database: NavigationDatabase;
   userId: string;
 }) {
-  const feedExistsForTag = (visibility: VisibilityFilter) =>
+  const feedExistsForTag = (contentStatus: ContentStatusFilter) =>
     exists(
       input.database
         .select({ value: sql<number>`1` })
@@ -394,16 +400,16 @@ async function queryTagAvailability(input: {
           and(
             eq(feeds.userId, input.userId),
             eq(feedCategories.categoryId, contentCategories.id),
-            visibilityCondition({
-              visibility,
+            contentStatusCondition({
+              contentStatus,
               isRead: feedItems.isWatched,
-              isLater: feedItems.isWatchLater,
+              isSaved: feedItems.isWatchLater,
             }),
             not(canonicalBookmarkExists(input.database, input.userId)),
           ),
         ),
     );
-  const bookmarkExistsForTag = (visibility: VisibilityFilter) =>
+  const bookmarkExistsForTag = (contentStatus: ContentStatusFilter) =>
     exists(
       input.database
         .select({ value: sql<number>`1` })
@@ -413,23 +419,24 @@ async function queryTagAvailability(input: {
           and(
             eq(bookmarks.userId, input.userId),
             eq(bookmarkTags.tagId, contentCategories.id),
-            visibilityCondition({
-              visibility,
+            contentStatusCondition({
+              contentStatus,
               isRead: bookmarks.isRead,
-              isLater: bookmarks.isSaved,
+              isSaved: bookmarks.isSaved,
             }),
           ),
         ),
     );
-  const visibilityExists = (visibility: VisibilityFilter) =>
-    or(feedExistsForTag(visibility), bookmarkExistsForTag(visibility));
+  const contentStatusExists = (contentStatus: ContentStatusFilter) =>
+    or(feedExistsForTag(contentStatus), bookmarkExistsForTag(contentStatus));
 
   const rows = await input.database
     .select({
       id: contentCategories.id,
-      unread: hasAny(visibilityExists("unread")),
-      read: hasAny(visibilityExists("read")),
-      later: hasAny(visibilityExists("later")),
+      unread: hasAny(contentStatusExists(INBOX_UNREAD_CONTENT_STATUS)),
+      read: hasAny(contentStatusExists(INBOX_ARCHIVED_CONTENT_STATUS)),
+      later: hasAny(contentStatusExists(SAVED_UNREAD_CONTENT_STATUS)),
+      savedArchived: hasAny(contentStatusExists(SAVED_ARCHIVED_CONTENT_STATUS)),
     })
     .from(contentCategories)
     .where(eq(contentCategories.userId, input.userId));
@@ -440,7 +447,7 @@ async function queryFeedAvailability(input: {
   database: NavigationDatabase;
   userId: string;
 }) {
-  const visibilityExists = (visibility: VisibilityFilter) =>
+  const contentStatusExists = (contentStatus: ContentStatusFilter) =>
     exists(
       input.database
         .select({ value: sql<number>`1` })
@@ -448,10 +455,10 @@ async function queryFeedAvailability(input: {
         .where(
           and(
             eq(feedItems.feedId, feeds.id),
-            visibilityCondition({
-              visibility,
+            contentStatusCondition({
+              contentStatus,
               isRead: feedItems.isWatched,
-              isLater: feedItems.isWatchLater,
+              isSaved: feedItems.isWatchLater,
             }),
           ),
         ),
@@ -459,9 +466,10 @@ async function queryFeedAvailability(input: {
   const rows = await input.database
     .select({
       id: feeds.id,
-      unread: hasAny(visibilityExists("unread")),
-      read: hasAny(visibilityExists("read")),
-      later: hasAny(visibilityExists("later")),
+      unread: hasAny(contentStatusExists(INBOX_UNREAD_CONTENT_STATUS)),
+      read: hasAny(contentStatusExists(INBOX_ARCHIVED_CONTENT_STATUS)),
+      later: hasAny(contentStatusExists(SAVED_UNREAD_CONTENT_STATUS)),
+      savedArchived: hasAny(contentStatusExists(SAVED_ARCHIVED_CONTENT_STATUS)),
     })
     .from(feeds)
     .where(eq(feeds.userId, input.userId));
@@ -532,17 +540,18 @@ async function queryCustomViewFeedAvailability(input: {
       or(tagMembership, not(hasConfiguredMembership ?? sql`0`)),
     ),
   );
-  const visibilityExists = (visibility: VisibilityFilter) =>
-    feedExistsForViewFeed({ ...input, visibility });
+  const contentStatusExists = (contentStatus: ContentStatusFilter) =>
+    feedExistsForViewFeed({ ...input, contentStatus });
 
   return input.database
     .select({
       id: feeds.id,
       viewId: views.id,
       feedId: feeds.id,
-      unread: hasAny(visibilityExists("unread")),
-      read: hasAny(visibilityExists("read")),
-      later: hasAny(visibilityExists("later")),
+      unread: hasAny(contentStatusExists(INBOX_UNREAD_CONTENT_STATUS)),
+      read: hasAny(contentStatusExists(INBOX_ARCHIVED_CONTENT_STATUS)),
+      later: hasAny(contentStatusExists(SAVED_UNREAD_CONTENT_STATUS)),
+      savedArchived: hasAny(contentStatusExists(SAVED_ARCHIVED_CONTENT_STATUS)),
     })
     .from(views)
     .innerJoin(feeds, and(eq(feeds.userId, input.userId), belongsToView))
@@ -554,7 +563,7 @@ async function queryInboxViewFeedAvailability(input: {
   userId: string;
 }) {
   const inboxScope = buildInboxScope(input.database, input.userId);
-  const visibilityExists = (visibility: VisibilityFilter) =>
+  const contentStatusExists = (contentStatus: ContentStatusFilter) =>
     exists(
       input.database
         .select({ value: sql<number>`1` })
@@ -562,10 +571,10 @@ async function queryInboxViewFeedAvailability(input: {
         .where(
           and(
             eq(feedItems.feedId, feeds.id),
-            viewVisibilityCondition({
-              visibility,
+            contentStatusCondition({
+              contentStatus,
               isRead: feedItems.isWatched,
-              isLater: feedItems.isWatchLater,
+              isSaved: feedItems.isWatchLater,
             }),
             not(canonicalBookmarkExists(input.database, input.userId)),
           ),
@@ -577,9 +586,10 @@ async function queryInboxViewFeedAvailability(input: {
       id: feeds.id,
       viewId: sql<number>`${INBOX_VIEW_ID}`,
       feedId: feeds.id,
-      unread: hasAny(visibilityExists("unread")),
-      read: hasAny(visibilityExists("read")),
-      later: hasAny(visibilityExists("later")),
+      unread: hasAny(contentStatusExists(INBOX_UNREAD_CONTENT_STATUS)),
+      read: hasAny(contentStatusExists(INBOX_ARCHIVED_CONTENT_STATUS)),
+      later: hasAny(contentStatusExists(SAVED_UNREAD_CONTENT_STATUS)),
+      savedArchived: hasAny(contentStatusExists(SAVED_ARCHIVED_CONTENT_STATUS)),
     })
     .from(feeds)
     .where(and(eq(feeds.userId, input.userId), feedScopeCondition(inboxScope)));
@@ -600,6 +610,7 @@ function viewFeedAvailabilityRecord(
       unread: Boolean(row.unread),
       read: Boolean(row.read),
       later: Boolean(row.later),
+      savedArchived: Boolean(row.savedArchived),
     };
   }
   return result;

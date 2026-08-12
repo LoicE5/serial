@@ -17,10 +17,9 @@ import type {
   MixedContentCursor,
   MixedContentEntityKind,
   MixedContentScope,
-  SavedReadState,
 } from "../projection";
 import type { ScopeData } from "./scope";
-import type { VisibilityFilter } from "~/lib/data/atoms";
+import type { ContentStatusFilter } from "~/lib/content-status";
 import type { db as defaultDatabase } from "~/server/db";
 import type { ApplicationFeedItem } from "~/server/db/schema";
 import { bookmarks, feedItems, feeds } from "~/server/db/schema";
@@ -48,50 +47,36 @@ export type Candidate = FeedCandidate | BookmarkCandidate;
 const applicationFeedItemColumns = { ...getTableColumns(feedItems) };
 Reflect.deleteProperty(applicationFeedItemColumns, "normalizedUrl");
 
-function bookmarkVisibilityCondition(
-  visibility: VisibilityFilter,
-  savedState: SavedReadState = "unread",
-) {
-  if (visibility === "later") {
-    return and(
-      eq(bookmarks.isSaved, true),
-      eq(bookmarks.isRead, savedState === "archived"),
-    );
-  }
+function bookmarkContentStatusCondition(contentStatus: ContentStatusFilter) {
   return and(
-    eq(bookmarks.isSaved, false),
-    eq(bookmarks.isRead, visibility === "read"),
+    eq(bookmarks.isSaved, contentStatus.saveStatus === "saved"),
+    eq(bookmarks.isRead, contentStatus.archiveStatus === "archived"),
   );
 }
 
-function feedVisibilityCondition(
-  visibility: VisibilityFilter,
-  savedState: SavedReadState = "unread",
-) {
-  if (visibility === "later") {
-    return and(
-      eq(feedItems.isWatchLater, true),
-      eq(feedItems.isWatched, savedState === "archived"),
-    );
-  }
+function feedContentStatusCondition(contentStatus: ContentStatusFilter) {
   return and(
-    eq(feedItems.isWatchLater, false),
-    eq(feedItems.isWatched, visibility === "read"),
+    eq(feedItems.isWatchLater, contentStatus.saveStatus === "saved"),
+    eq(feedItems.isWatched, contentStatus.archiveStatus === "archived"),
   );
 }
 
-function bookmarkTimeExpression(visibility: VisibilityFilter) {
-  if (visibility === "later") return sql<number>`${bookmarks.savedUpdatedAt}`;
-  if (visibility === "read") return sql<number>`${bookmarks.readUpdatedAt}`;
+function bookmarkTimeExpression(contentStatus: ContentStatusFilter) {
+  if (contentStatus.archiveStatus === "archived") {
+    return sql<number>`${bookmarks.readUpdatedAt}`;
+  }
+  if (contentStatus.saveStatus === "saved") {
+    return sql<number>`${bookmarks.savedUpdatedAt}`;
+  }
   return sql<number>`${bookmarks.createdAt}`;
 }
 
-function feedTimeExpression(visibility: VisibilityFilter) {
-  if (visibility === "later") {
-    return sql<number>`COALESCE(${feedItems.isWatchLaterUpdatedAt}, ${feedItems.postedAt})`;
-  }
-  if (visibility === "read") {
+function feedTimeExpression(contentStatus: ContentStatusFilter) {
+  if (contentStatus.archiveStatus === "archived") {
     return sql<number>`COALESCE(${feedItems.isWatchedUpdatedAt}, ${feedItems.postedAt})`;
+  }
+  if (contentStatus.saveStatus === "saved") {
+    return sql<number>`COALESCE(${feedItems.isWatchLaterUpdatedAt}, ${feedItems.postedAt})`;
   }
   return sql<number>`${feedItems.postedAt}`;
 }
@@ -182,14 +167,13 @@ export async function queryBookmarkCandidates(input: {
   userId: string;
   scope: MixedContentScope;
   scopeData: ScopeData;
-  visibility: VisibilityFilter;
-  savedState?: SavedReadState;
+  contentStatus: ContentStatusFilter;
   sectionPlacement?: number | null;
   cursor?: MixedContentCursor;
   limit: number;
   hasSections: boolean;
 }): Promise<BookmarkCandidate[]> {
-  const normalizedAt = bookmarkTimeExpression(input.visibility);
+  const normalizedAt = bookmarkTimeExpression(input.contentStatus);
   const placement = input.hasSections
     ? bookmarkSectionPlacement((input.scope as { viewId: number }).viewId)
     : sql<number>`CAST(0 AS INTEGER)`;
@@ -199,7 +183,7 @@ export async function queryBookmarkCandidates(input: {
     .where(
       and(
         eq(bookmarks.userId, input.userId),
-        bookmarkVisibilityCondition(input.visibility, input.savedState),
+        bookmarkContentStatusCondition(input.contentStatus),
         bookmarkScopeCondition(input),
         input.sectionPlacement === undefined || !input.hasSections
           ? undefined
@@ -228,14 +212,13 @@ export async function queryFeedCandidates(input: {
   userId: string;
   scope: MixedContentScope;
   scopeData: ScopeData;
-  visibility: VisibilityFilter;
-  savedState?: SavedReadState;
+  contentStatus: ContentStatusFilter;
   sectionPlacement?: number | null;
   cursor?: MixedContentCursor;
   limit: number;
   hasSections: boolean;
 }): Promise<FeedCandidate[]> {
-  const normalizedAt = feedTimeExpression(input.visibility);
+  const normalizedAt = feedTimeExpression(input.contentStatus);
   const placement = input.hasSections
     ? feedSectionPlacement((input.scope as { viewId: number }).viewId)
     : sql<number>`CAST(0 AS INTEGER)`;
@@ -266,7 +249,7 @@ export async function queryFeedCandidates(input: {
     .where(
       and(
         eq(feeds.userId, input.userId),
-        feedVisibilityCondition(input.visibility, input.savedState),
+        feedContentStatusCondition(input.contentStatus),
         feedScopeCondition(input),
         input.sectionPlacement === undefined || !input.hasSections
           ? undefined

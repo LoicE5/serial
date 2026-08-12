@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import type { VisibilityFilter } from "~/lib/data/atoms";
 import type { db as applicationDatabase } from "~/server/db";
+import { contentStatusFromVisibilityFilter } from "~/lib/content-status";
 import { buildVisibilityFilter } from "~/lib/data/feed-items/filters";
 import {
   contentCategories,
@@ -170,7 +171,7 @@ export async function queryMixedViewPage(input: {
     database: input.database,
     userId: input.userId,
     scope: { type: "view", viewId: input.viewId },
-    visibility: input.visibility,
+    contentStatus: contentStatusFromVisibilityFilter(input.visibility),
     limit: input.limit,
   });
 }

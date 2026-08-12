@@ -3,6 +3,7 @@ import { and, eq, gte, inArray } from "drizzle-orm";
 import { INBOX_VIEW_ID } from "../views/constants";
 import type { SQL } from "drizzle-orm";
 import type { VisibilityFilter } from "../atoms";
+import type { ContentStatusFilter } from "~/lib/content-status";
 import type {
   ApplicationView,
   DatabaseFeed,
@@ -74,6 +75,16 @@ export function buildVisibilityFilter(
     default:
       return undefined;
   }
+}
+
+/** Build the independent save/archive predicate for Feed items. */
+export function buildContentStatusFilter(
+  contentStatusFilter: ContentStatusFilter,
+): SQL {
+  return and(
+    eq(feedItems.isWatchLater, contentStatusFilter.saveStatus === "saved"),
+    eq(feedItems.isWatched, contentStatusFilter.archiveStatus === "archived"),
+  )!;
 }
 
 /**

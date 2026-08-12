@@ -118,13 +118,23 @@ describe("navigation snapshot performance bounds", () => {
 
     expect(evidence.statementCount).toBe(6);
     expect(Object.values(snapshot.views)).toEqual(
-      expect.arrayContaining([{ unread: true, read: false, later: false }]),
+      expect.arrayContaining([
+        {
+          unread: true,
+          read: false,
+          later: false,
+          savedArchived: false,
+        },
+      ]),
     );
     expect(Object.values(snapshot.views)).toHaveLength(26);
     expect(
       Object.values(snapshot.views).every(
         (availability) =>
-          availability.unread && !availability.read && !availability.later,
+          availability.unread &&
+          !availability.read &&
+          !availability.later &&
+          !availability.savedArchived,
       ),
     ).toBe(true);
   }, 30_000);

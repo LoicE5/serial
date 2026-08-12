@@ -4,6 +4,7 @@ import { getClientChannel } from "~/server/api/channels";
 import { ITEMS_PER_PAGE } from "~/server/api/constants";
 import { publisher } from "~/server/api/publisher";
 import { visibilityFilterSchema } from "~/lib/data/atoms";
+import { contentStatusFromVisibilityFilter } from "~/lib/content-status";
 import { protectedProcedure } from "~/server/orpc/base";
 import {
   loadApplicationBookmarks,
@@ -71,7 +72,10 @@ async function publishPage(input: {
   cursor?: Parameters<typeof queryMixedContentPage>[0]["cursor"];
   limit: number;
 }) {
-  const page = await queryMixedContentPage(input);
+  const page = await queryMixedContentPage({
+    ...input,
+    contentStatus: contentStatusFromVisibilityFilter(input.visibility),
+  });
   await publisher.publish(getClientChannel(input.userId, input.clientId), {
     source: "mixed",
     chunk: {
@@ -124,8 +128,7 @@ export const getSavedSectionPage = protectedProcedure
       database: context.db,
       userId: context.user.id,
       scope: input.scope,
-      visibility: "later",
-      savedState: "archived",
+      contentStatus: { saveStatus: "saved", archiveStatus: "archived" },
       sectionPlacement: input.sectionPlacement,
       cursor: input.cursor,
       limit: input.limit ?? ITEMS_PER_PAGE,

@@ -165,41 +165,46 @@ describe("navigation snapshot", () => {
       unread: true,
       read: true,
       later: false,
+      savedArchived: false,
     });
     expect(snapshot.views[22]).toEqual({
       unread: false,
       read: false,
       later: false,
+      savedArchived: false,
     });
     expect(snapshot.views[INBOX_VIEW_ID]).toEqual({
       unread: true,
       read: false,
       later: true,
+      savedArchived: false,
     });
     expect(snapshot.tags[11]).toEqual({
       unread: true,
       read: true,
       later: false,
+      savedArchived: false,
     });
     expect(snapshot.tags[12]).toEqual({
       unread: false,
       read: false,
       later: false,
+      savedArchived: false,
     });
     expect(snapshot.feeds).toEqual({
-      1: { unread: true, read: false, later: false },
-      2: { unread: false, read: true, later: false },
-      3: { unread: false, read: false, later: true },
-      4: { unread: false, read: false, later: false },
+      1: { unread: true, read: false, later: false, savedArchived: false },
+      2: { unread: false, read: true, later: false, savedArchived: false },
+      3: { unread: false, read: false, later: true, savedArchived: false },
+      4: { unread: false, read: false, later: false, savedArchived: false },
     });
     expect(snapshot.viewFeeds[21]).toEqual({
-      2: { unread: false, read: true, later: false },
-      4: { unread: false, read: false, later: false },
+      2: { unread: false, read: true, later: false, savedArchived: false },
+      4: { unread: false, read: false, later: false, savedArchived: false },
     });
     expect(snapshot.viewFeeds[22]).toEqual({});
     expect(snapshot.viewFeeds[INBOX_VIEW_ID]).toEqual({
-      1: { unread: true, read: false, later: false },
-      3: { unread: false, read: false, later: true },
+      1: { unread: true, read: false, later: false, savedArchived: false },
+      3: { unread: false, read: false, later: true, savedArchived: false },
     });
   });
 
@@ -310,7 +315,19 @@ describe("navigation snapshot", () => {
       seedFeedItem({ id: "direct-unread", feedId: 40 }),
       seedFeedItem({ id: "direct-read", feedId: 40, isWatched: true }),
       seedFeedItem({ id: "direct-later", feedId: 40, isWatchLater: true }),
+      seedFeedItem({
+        id: "direct-saved-archived",
+        feedId: 40,
+        isWatchLater: true,
+        isWatched: true,
+      }),
       seedFeedItem({ id: "tag-unread", feedId: 41 }),
+      seedFeedItem({
+        id: "tag-saved-archived",
+        feedId: 41,
+        isWatchLater: true,
+        isWatched: true,
+      }),
       seedFeedItem({ id: "overlap-unread", feedId: 42 }),
       seedFeedItem({
         id: "canonical-collision",
@@ -406,30 +423,35 @@ describe("navigation snapshot", () => {
       unread: true,
       read: true,
       later: true,
+      savedArchived: true,
     });
     expect(snapshot.views[41]).toEqual({
       unread: true,
       read: false,
       later: false,
+      savedArchived: true,
     });
     expect(snapshot.views[42]).toEqual({
       unread: true,
       read: false,
       later: false,
+      savedArchived: true,
     });
     expect(snapshot.views[43]).toEqual({
       unread: false,
       read: false,
       later: false,
+      savedArchived: false,
     });
     expect(snapshot.views[44]).toEqual({
       unread: false,
       read: false,
       later: false,
+      savedArchived: false,
     });
   });
 
-  it("reports Saved View availability only when unread saved content remains", async () => {
+  it("reports Saved availability independently for unread and archived content", async () => {
     await seedFeed(1);
     await database.insert(views).values({
       id: 31,
@@ -473,7 +495,9 @@ describe("navigation snapshot", () => {
     });
 
     expect(snapshot.views[31]?.later).toBe(false);
+    expect(snapshot.views[31]?.savedArchived).toBe(true);
     expect(snapshot.viewFeeds[31]?.[1]?.later).toBe(false);
+    expect(snapshot.viewFeeds[31]?.[1]?.savedArchived).toBe(true);
 
     await database
       .update(feedItems)
@@ -487,7 +511,9 @@ describe("navigation snapshot", () => {
     });
 
     expect(snapshot.views[31]?.later).toBe(true);
+    expect(snapshot.views[31]?.savedArchived).toBe(true);
     expect(snapshot.viewFeeds[31]?.[1]?.later).toBe(true);
+    expect(snapshot.viewFeeds[31]?.[1]?.savedArchived).toBe(false);
 
     await database
       .update(feedItems)
@@ -505,6 +531,8 @@ describe("navigation snapshot", () => {
     });
 
     expect(snapshot.views[31]?.later).toBe(true);
+    expect(snapshot.views[31]?.savedArchived).toBe(true);
     expect(snapshot.viewFeeds[31]?.[1]?.later).toBe(false);
+    expect(snapshot.viewFeeds[31]?.[1]?.savedArchived).toBe(true);
   });
 });

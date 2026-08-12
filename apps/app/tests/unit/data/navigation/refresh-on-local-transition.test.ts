@@ -57,7 +57,12 @@ beforeEach(() => {
   const view = makeView();
   viewsStore.getState().set([view]);
   viewsStore.getState().setViewAvailability({
-    [VIEW_ID]: { unread: true, read: false, later: false },
+    [VIEW_ID]: {
+      unread: true,
+      read: false,
+      later: false,
+      savedArchived: false,
+    },
   });
   feedItemsStore.getState().reset();
 });
@@ -87,7 +92,12 @@ describe("navigation refresh transitions", () => {
     const previousItem = makeItem(true);
     const nextItem = makeItem(false);
     viewsStore.getState().setViewAvailability({
-      [VIEW_ID]: { unread: false, read: true, later: false },
+      [VIEW_ID]: {
+        unread: false,
+        read: true,
+        later: false,
+        savedArchived: false,
+      },
     });
     feedItemsStore.getState().setFeedItems([nextItem]);
     feedItemsStore.setState({
@@ -106,7 +116,12 @@ describe("navigation refresh transitions", () => {
     const previousItem = makeItem(false);
     const nextItem = makeItem(true);
     viewsStore.getState().setViewAvailability({
-      [VIEW_ID]: { unread: true, read: true, later: false },
+      [VIEW_ID]: {
+        unread: true,
+        read: true,
+        later: false,
+        savedArchived: false,
+      },
     });
     feedItemsStore.getState().setFeedItems([nextItem]);
     feedItemsStore.setState({
@@ -129,7 +144,12 @@ describe("navigation refresh transitions", () => {
     };
     const nextItem = { ...previousItem, isWatchLater: false };
     viewsStore.getState().setViewAvailability({
-      [VIEW_ID]: { unread: true, read: false, later: true },
+      [VIEW_ID]: {
+        unread: true,
+        read: false,
+        later: true,
+        savedArchived: false,
+      },
     });
     feedItemsStore.getState().setFeedItems([nextItem]);
     feedItemsStore.setState({

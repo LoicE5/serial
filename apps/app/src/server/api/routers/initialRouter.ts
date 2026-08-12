@@ -7,7 +7,6 @@ import {
   getTableColumns,
   gt,
   inArray,
-  isNull,
   lt,
   not,
   or,
@@ -24,7 +23,7 @@ import { publisher, trackChannelConnection } from "../publisher";
 import { getClientChannel, getUserChannel } from "../channels";
 import { insertFeedWithCategories } from "./feed-router/utils";
 import type { SQL } from "drizzle-orm";
-import type { VisibilityFilter } from "~/lib/data/atoms";
+import type { ContentStatusFilter } from "~/lib/content-status";
 import type {
   ApplicationFeed,
   ApplicationFeedItem,
@@ -49,12 +48,16 @@ import {
   checkUserRefreshEligibility,
   getFeedsActivationBudget,
 } from "~/server/subscriptions/helpers";
+import {
+  contentStatusFromVisibilityFilter,
+  DEFAULT_CONTENT_STATUS_FILTER,
+} from "~/lib/content-status";
 import { visibilityFilterSchema } from "~/lib/data/atoms";
 import {
   buildContentFilter,
+  buildContentStatusFilter,
   buildTimeWindowFilter,
   buildViewCategoryFilter,
-  buildVisibilityFilter,
   isFeedCompatibleWithContentFilter,
   VIDEO_PLATFORMS,
 } from "~/lib/data/feed-items/filters";
@@ -855,11 +858,11 @@ type PaginatedFeedItemScope =
 
 function buildPaginatedFeedItemQuery({
   scope,
-  visibilityFilter,
+  contentStatusFilter,
   cursor,
 }: {
   scope: PaginatedFeedItemScope;
-  visibilityFilter: VisibilityFilter;
+  contentStatusFilter: ContentStatusFilter;
   cursor: PaginationCursor | null;
 }) {
   const hasSections =
@@ -895,33 +898,22 @@ function buildPaginatedFeedItemQuery({
 
   const filterConditions = [
     ...scopeFilterConditions,
-    buildVisibilityFilter(visibilityFilter),
-    buildCursorCondition(cursor, visibilityFilter, placementExpr),
+    buildContentStatusFilter(contentStatusFilter),
+    buildCursorCondition(cursor, contentStatusFilter, placementExpr),
   ].filter((f): f is NonNullable<typeof f> => f !== undefined);
 
   return {
     filter: filterConditions.length > 0 ? and(...filterConditions) : undefined,
     orderBy: placementExpr
-      ? visibilityFilter === "later"
-        ? [
-            asc(placementExpr),
-            desc(feedItems.isWatchLaterUpdatedAt),
-            desc(feedItems.postedAt),
-            desc(feedItems.id),
-          ]
-        : [asc(placementExpr), desc(feedItems.postedAt), desc(feedItems.id)]
-      : buildFlatItemsOrderBy(visibilityFilter),
+      ? [asc(placementExpr), ...buildFlatItemsOrderBy(contentStatusFilter)]
+      : buildFlatItemsOrderBy(contentStatusFilter),
     placementExpr,
   };
 }
 
 /**
  * Shared helper to query feed items for a view with correct ordering based on
- * visibility filter and section configuration.
- *
- * - "read" visibility: orders by isWatchedUpdatedAt (ignores sections)
- * - Non-sectioned views: orders by postedAt
- * - Sectioned views: orders by section placement, then postedAt
+ * content status and section configuration.
  *
  * Queries limit + 1 to determine hasMore, then slices.
  */
@@ -929,7 +921,7 @@ async function queryFeedItemsForView(
   context: ORPCContext,
   view: ApplicationView,
   params: {
-    visibilityFilter: VisibilityFilter;
+    contentStatusFilter: ContentStatusFilter;
     feedIds: number[];
     cursor: PaginationCursor | null;
     limit: number;
@@ -947,7 +939,7 @@ async function queryFeedItemsForView(
   nextCursor: PaginationCursor;
 }> {
   const {
-    visibilityFilter,
+    contentStatusFilter,
     feedIds,
     cursor,
     limit,
@@ -973,7 +965,7 @@ async function queryFeedItemsForView(
       customViewFeedIds,
       membershipResolved,
     },
-    visibilityFilter,
+    contentStatusFilter,
     cursor,
   });
 
@@ -2127,91 +2119,58 @@ function buildCursorCondition(
     isWatchedUpdatedAt?: Date | null;
     isWatchLaterUpdatedAt?: Date | null;
   } | null,
-  visibilityFilter: VisibilityFilter,
+  contentStatusFilter: ContentStatusFilter,
   placementColumn?: SQL<number>,
 ) {
   if (!cursor) return undefined;
 
-  if (visibilityFilter === "later") {
-    const savedAt = cursor.isWatchLaterUpdatedAt ?? null;
-    const postedAtCondition = or(
-      lt(feedItems.postedAt, cursor.postedAt),
-      and(eq(feedItems.postedAt, cursor.postedAt), lt(feedItems.id, cursor.id)),
-    );
-    const timeCondition = savedAt
-      ? or(
-          lt(feedItems.isWatchLaterUpdatedAt, savedAt),
-          isNull(feedItems.isWatchLaterUpdatedAt),
-          and(eq(feedItems.isWatchLaterUpdatedAt, savedAt), postedAtCondition),
-        )
-      : and(isNull(feedItems.isWatchLaterUpdatedAt), postedAtCondition);
-    if (!placementColumn || cursor.placement === undefined)
-      return timeCondition;
-    return or(
-      gt(placementColumn, cursor.placement),
-      and(eq(placementColumn, cursor.placement), timeCondition),
-    );
-  }
-
-  // isWatchedUpdatedAt-based cursor for read visibility filter
-  if (cursor.isWatchedUpdatedAt) {
-    return or(
-      lt(feedItems.isWatchedUpdatedAt, cursor.isWatchedUpdatedAt),
-      and(
-        eq(feedItems.isWatchedUpdatedAt, cursor.isWatchedUpdatedAt),
-        lt(feedItems.postedAt, cursor.postedAt),
-      ),
-      and(
-        eq(feedItems.isWatchedUpdatedAt, cursor.isWatchedUpdatedAt),
-        eq(feedItems.postedAt, cursor.postedAt),
-        lt(feedItems.id, cursor.id),
-      ),
-    );
-  }
-
-  // Date-only cursor (legacy or non-sectioned views)
-  if (!placementColumn || cursor.placement === undefined) {
-    return or(
-      lt(feedItems.postedAt, cursor.postedAt),
-      and(eq(feedItems.postedAt, cursor.postedAt), lt(feedItems.id, cursor.id)),
-    );
-  }
-
-  // Section-aware cursor: (placement > cursor.placement)
-  //   OR (placement = cursor.placement AND postedAt < cursor.postedAt)
-  //   OR (placement = cursor.placement AND postedAt = cursor.postedAt AND id < cursor.id)
-  return or(
-    gt(placementColumn, cursor.placement),
+  const orderCoordinate = contentStatusOrderExpression(contentStatusFilter);
+  const cursorCoordinate =
+    contentStatusFilter.archiveStatus === "archived"
+      ? (cursor.isWatchedUpdatedAt ?? cursor.postedAt)
+      : contentStatusFilter.saveStatus === "saved"
+        ? (cursor.isWatchLaterUpdatedAt ?? cursor.postedAt)
+        : cursor.postedAt;
+  // SQLite timestamp columns persist epoch seconds. The composite expression
+  // has no encoder, so bind the persisted representation explicitly.
+  const cursorCoordinateSeconds = Math.floor(cursorCoordinate.getTime() / 1000);
+  const coordinateCondition = or(
+    sql`${orderCoordinate} < ${cursorCoordinateSeconds}`,
     and(
-      eq(placementColumn, cursor.placement),
+      sql`${orderCoordinate} = ${cursorCoordinateSeconds}`,
       lt(feedItems.postedAt, cursor.postedAt),
     ),
     and(
-      eq(placementColumn, cursor.placement),
+      sql`${orderCoordinate} = ${cursorCoordinateSeconds}`,
       eq(feedItems.postedAt, cursor.postedAt),
       lt(feedItems.id, cursor.id),
     ),
   );
+  if (!placementColumn || cursor.placement === undefined) {
+    return coordinateCondition;
+  }
+  return or(
+    gt(placementColumn, cursor.placement),
+    and(eq(placementColumn, cursor.placement), coordinateCondition),
+  );
 }
 
-function buildFlatItemsOrderBy(visibilityFilter: VisibilityFilter) {
-  if (visibilityFilter === "read") {
-    return [
-      desc(feedItems.isWatchedUpdatedAt),
-      desc(feedItems.postedAt),
-      desc(feedItems.id),
-    ];
+function contentStatusOrderExpression(contentStatus: ContentStatusFilter) {
+  if (contentStatus.archiveStatus === "archived") {
+    return sql<Date>`COALESCE(${feedItems.isWatchedUpdatedAt}, ${feedItems.postedAt})`;
   }
-
-  if (visibilityFilter === "later") {
-    return [
-      desc(feedItems.isWatchLaterUpdatedAt),
-      desc(feedItems.postedAt),
-      desc(feedItems.id),
-    ];
+  if (contentStatus.saveStatus === "saved") {
+    return sql<Date>`COALESCE(${feedItems.isWatchLaterUpdatedAt}, ${feedItems.postedAt})`;
   }
+  return sql<Date>`${feedItems.postedAt}`;
+}
 
-  return [desc(feedItems.postedAt), desc(feedItems.id)];
+function buildFlatItemsOrderBy(contentStatusFilter: ContentStatusFilter) {
+  return [
+    desc(contentStatusOrderExpression(contentStatusFilter)),
+    desc(feedItems.postedAt),
+    desc(feedItems.id),
+  ];
 }
 
 /**
@@ -2339,7 +2298,9 @@ export const requestItemsByVisibility = protectedProcedure
         context,
         targetView,
         {
-          visibilityFilter: input.visibilityFilter,
+          contentStatusFilter: contentStatusFromVisibilityFilter(
+            input.visibilityFilter,
+          ),
           feedIds,
           cursor: input.cursor ?? null,
           limit,
@@ -2424,7 +2385,9 @@ export const requestItemsByFeed = protectedProcedure
     try {
       const queryParts = buildPaginatedFeedItemQuery({
         scope: { type: "feed", feedId: input.feedId },
-        visibilityFilter: input.visibilityFilter,
+        contentStatusFilter: contentStatusFromVisibilityFilter(
+          input.visibilityFilter,
+        ),
         cursor: input.cursor ?? null,
       });
 
@@ -2577,7 +2540,9 @@ export const requestItemsByCategoryId = protectedProcedure
     try {
       const queryParts = buildPaginatedFeedItemQuery({
         scope: { type: "category", feedIds: feedIdsInCategory },
-        visibilityFilter: input.visibilityFilter,
+        contentStatusFilter: contentStatusFromVisibilityFilter(
+          input.visibilityFilter,
+        ),
         cursor: input.cursor ?? null,
       });
 
@@ -2698,7 +2663,7 @@ export const revalidateView = protectedProcedure
 
       try {
         const { items } = await queryFeedItemsForView(context, view, {
-          visibilityFilter: "unread",
+          contentStatusFilter: DEFAULT_CONTENT_STATUS_FILTER,
           feedIds,
           cursor: null,
           limit: REVALIDATE_VIEW_CHUNK_SIZE,
@@ -2873,7 +2838,9 @@ export const getItemsByVisibility = protectedProcedure
         customViews: [],
         applicationFeeds,
         membershipResolved: true,
-        visibilityFilter: input.visibilityFilter,
+        contentStatusFilter: contentStatusFromVisibilityFilter(
+          input.visibilityFilter,
+        ),
         cursor: input.cursor ?? null,
         limit,
       });

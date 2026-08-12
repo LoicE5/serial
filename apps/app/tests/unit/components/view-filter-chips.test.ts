@@ -97,8 +97,8 @@ describe("View filter loading", () => {
   it("keeps cached View chips and their previous dimming while revalidating", () => {
     navigationSnapshotStore.getState().set({
       views: {
-        1: { unread: true, read: false, later: false },
-        2: { unread: false, read: false, later: false },
+        1: { unread: true, read: false, later: false, savedArchived: false },
+        2: { unread: false, read: false, later: false, savedArchived: false },
       },
       tags: {},
       feeds: {},
@@ -142,8 +142,8 @@ describe("View filter loading", () => {
   it("applies fresh View dimming after successful revalidation", () => {
     navigationSnapshotStore.getState().set({
       views: {
-        1: { unread: true, read: false, later: false },
-        2: { unread: false, read: false, later: false },
+        1: { unread: true, read: false, later: false, savedArchived: false },
+        2: { unread: false, read: false, later: false, savedArchived: false },
       },
       tags: {},
       feeds: {},
@@ -151,8 +151,8 @@ describe("View filter loading", () => {
     });
     navigationSnapshotStore.getState().set({
       views: {
-        1: { unread: false, read: false, later: false },
-        2: { unread: true, read: false, later: false },
+        1: { unread: false, read: false, later: false, savedArchived: false },
+        2: { unread: true, read: false, later: false, savedArchived: false },
       },
       tags: {},
       feeds: {},
@@ -170,8 +170,8 @@ describe("View filter loading", () => {
   it("retains previous View dimming after failed revalidation", () => {
     navigationSnapshotStore.getState().set({
       views: {
-        1: { unread: true, read: false, later: false },
-        2: { unread: false, read: false, later: false },
+        1: { unread: true, read: false, later: false, savedArchived: false },
+        2: { unread: false, read: false, later: false, savedArchived: false },
       },
       tags: {},
       feeds: {},
