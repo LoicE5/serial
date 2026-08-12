@@ -31,6 +31,7 @@ import {
   useSaveToInstapaperMutation,
   useShowInstapaperAction,
 } from "~/lib/data/instapaper";
+import { getNextRootItemId } from "~/lib/root-scroll-restoration";
 
 interface SectionInfo {
   size: number;
@@ -198,9 +199,10 @@ export function useFeedItemNavigation(
       const selectItemForTiming = options.deferScroll
         ? selectItemAfterRender
         : selectItem;
-      const nextIndex = currentIndex + 1;
-      if (nextIndex < items.length) {
-        selectItemForTiming(items[nextIndex]!);
+      const currentItemId = items[currentIndex] ?? null;
+      const nextItemId = getNextRootItemId(items, currentItemId);
+      if (nextItemId) {
+        selectItemForTiming(nextItemId);
       } else if (currentIndex > 0) {
         selectItemForTiming(items[currentIndex - 1]!);
       } else {
@@ -212,9 +214,10 @@ export function useFeedItemNavigation(
 
   const selectItemAfterCurrentItemLeavesView = useCallback(
     (currentIndex: number) => {
-      const isCurrentItemLastVisibleItem = currentIndex === items.length - 1;
+      const currentItemId = items[currentIndex] ?? null;
+      const nextItemId = getNextRootItemId(items, currentItemId);
 
-      if (isCurrentItemLastVisibleItem) {
+      if (!nextItemId) {
         setSelectedItemId(null);
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
@@ -224,9 +227,9 @@ export function useFeedItemNavigation(
         return;
       }
 
-      selectNextItem(currentIndex, { deferScroll: true });
+      selectItemAfterRender(nextItemId);
     },
-    [items.length, selectNextItem, setSelectedItemId],
+    [items, selectItemAfterRender, setSelectedItemId],
   );
 
   useEffect(() => {

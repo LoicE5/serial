@@ -69,7 +69,9 @@ vi.mock("~/lib/data/clientChannel", () => ({
 vi.mock("~/lib/data/subscriptionConnection", () => ({
   isDataSubscriptionConnected: mocks.isDataSubscriptionConnected,
 }));
-vi.mock("~/lib/scroll", () => ({ saveHomeScrollPosition: vi.fn() }));
+vi.mock("~/lib/root-scroll-restoration", () => ({
+  captureRootScrollRestoration: vi.fn(),
+}));
 
 beforeEach(() => {
   vi.clearAllMocks();

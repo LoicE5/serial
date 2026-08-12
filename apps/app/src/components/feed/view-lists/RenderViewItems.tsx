@@ -1,6 +1,6 @@
 "use client";
 
-import { useAtomValue } from "jotai";
+import { useAtomValue, useSetAtom } from "jotai";
 import { CheckIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EmptyState, FeedEmptyState } from "./EmptyStates";
@@ -47,6 +47,7 @@ import { useValidateViewItems } from "~/lib/hooks/useValidateViewItems";
 import { REMOTE_IMAGE_PROPS } from "~/lib/remoteMedia";
 import { showUndoToast } from "~/lib/undo";
 import { VIEW_LAYOUT } from "~/server/db/constants";
+import { useRootItemScrollRestoration } from "~/lib/root-scroll-restoration";
 
 function getNextAvailableItemAfterSection(
   sectionIndex: number,
@@ -354,6 +355,24 @@ export function RenderViewItems() {
     visibleFilteredFeedItemsOrder,
   );
   const contentStatusFilter = useAtomValue(contentStatusFilterAtom);
+  const selectedItemId = useAtomValue(selectedItemIdAtom);
+  const setSelectedItemId = useSetAtom(selectedItemIdAtom);
+  const navigationItems = useMemo(
+    () => fullComputedSections.flatMap((section) => section.items),
+    [fullComputedSections],
+  );
+  const rootListReady =
+    hasInitialData &&
+    (navigationItems.length > 0 ||
+      (hasFetchedFeeds &&
+        hasFetchedFeedCategories &&
+        (feedItemsLastFetchedAt !== null || feeds.length === 0)));
+  useRootItemScrollRestoration({
+    activeItemIds: navigationItems,
+    selectedItemId,
+    setSelectedItemId,
+    ready: rootListReady,
+  });
   const contentStatusKey = buildContentStatusKey(contentStatusFilter);
   const viewListKey = `view-${currentView?.id ?? "none"}-${contentStatusKey}`;
   const contentStatusContextKey = `${viewListKey}-feed-${feedFilter}-tag-${categoryFilter}`;

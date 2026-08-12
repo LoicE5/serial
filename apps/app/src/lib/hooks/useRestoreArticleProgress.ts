@@ -4,8 +4,11 @@ import { useLayoutEffect, useRef } from "react";
 import { getElements } from "./useArticleNavigation";
 import { getShortcutKeys, SHORTCUT_KEYS } from "~/lib/constants/shortcuts";
 import { getScrollContainer } from "~/lib/scroll";
+import {
+  scrollArticleBlockToTarget,
+  setArticleRestorationVisibility,
+} from "~/lib/article-block-scroll";
 
-const TARGET_VIEWPORT_POSITION = 1 / 3;
 const READER_SCROLL_KEYS = new Set([
   ...getShortcutKeys(SHORTCUT_KEYS.ARROW_UP),
   ...getShortcutKeys(SHORTCUT_KEYS.ARROW_DOWN),
@@ -35,6 +38,7 @@ export function useRestoreArticleProgress({
     const container = getScrollContainer();
     const markUserInteraction = () => {
       hasUserInteractedRef.current = true;
+      if (articleElement) setArticleRestorationVisibility(articleElement, true);
     };
     const handleKeydown = (event: KeyboardEvent) => {
       if (READER_SCROLL_KEYS.has(event.key)) markUserInteraction();
@@ -55,20 +59,33 @@ export function useRestoreArticleProgress({
       container.removeEventListener("touchstart", markUserInteraction);
       window.removeEventListener("keydown", handleKeydown);
     };
-  }, [contentId]);
+  }, [articleElement, contentId]);
 
   useLayoutEffect(() => {
+    if (!articleElement) {
+      return;
+    }
     if (
-      !ready ||
-      !articleElement ||
-      progress === undefined ||
       restoredContentIdRef.current === contentId ||
       hasUserInteractedRef.current
     ) {
+      setArticleRestorationVisibility(articleElement, true);
       return;
     }
+
+    setArticleRestorationVisibility(articleElement, false);
+    if (!ready || progress === undefined) {
+      return () => {
+        setArticleRestorationVisibility(articleElement, true);
+      };
+    }
+
     const savedProgress = progress;
     const contentElement = articleElement;
+
+    function revealContent() {
+      setArticleRestorationVisibility(contentElement, true);
+    }
 
     let firstFrame = 0;
     let secondFrame = 0;
@@ -94,6 +111,7 @@ export function useRestoreArticleProgress({
         restoredContentIdRef.current = contentId;
         observer.disconnect();
         getScrollContainer().scrollTo({ top: 0, behavior: "instant" });
+        revealContent();
         return;
       }
 
@@ -112,19 +130,12 @@ export function useRestoreArticleProgress({
 
           restoredContentIdRef.current = contentId;
           observer.disconnect();
-          const container = getScrollContainer();
           const element =
             renderedElements[
               Math.min(savedProgress, renderedElements.length - 1)
             ]!;
-          const containerRect = container.getBoundingClientRect();
-          const elementRect = element.getBoundingClientRect();
-          const scrollTop =
-            container.scrollTop +
-            (elementRect.top - containerRect.top) -
-            containerRect.height * TARGET_VIEWPORT_POSITION +
-            elementRect.height / 2;
-          container.scrollTo({ top: scrollTop, behavior: "instant" });
+          scrollArticleBlockToTarget(element, "instant");
+          revealContent();
         });
       });
     }
@@ -136,6 +147,7 @@ export function useRestoreArticleProgress({
       observer.disconnect();
       cancelAnimationFrame(firstFrame);
       cancelAnimationFrame(secondFrame);
+      revealContent();
     };
   }, [articleElement, contentId, progress, ready]);
 }

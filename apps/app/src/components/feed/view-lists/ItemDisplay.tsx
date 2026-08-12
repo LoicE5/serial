@@ -29,7 +29,7 @@ import { timeAgo } from "~/lib/utils";
 import { SHORTCUT_KEYS } from "~/lib/constants/shortcuts";
 import { useFeedItemActions } from "~/lib/hooks/useFeedItemActions";
 import { useShowShortcuts } from "~/lib/hooks/useShowShortcuts";
-import { saveHomeScrollPosition } from "~/lib/scroll";
+import { captureRootScrollRestoration } from "~/lib/root-scroll-restoration";
 import { useBookmarkValue } from "~/lib/data/bookmarks";
 import {
   useDeleteBookmarkMutation,
@@ -666,7 +666,11 @@ function BookmarkItemDisplay({
           to={href}
           target={destination.external ? "_blank" : undefined}
           rel={destination.external ? "noopener noreferrer" : undefined}
-          onClick={destination.external ? undefined : saveHomeScrollPosition}
+          onClick={
+            destination.external
+              ? undefined
+              : () => captureRootScrollRestoration(bookmark.id)
+          }
           className={clsx(
             "flex h-full flex-1 flex-col rounded p-2 text-left",
             isSelected && "md:bg-muted",
@@ -713,7 +717,11 @@ function BookmarkItemDisplay({
         to={href}
         target={destination.external ? "_blank" : undefined}
         rel={destination.external ? "noopener noreferrer" : undefined}
-        onClick={destination.external ? undefined : saveHomeScrollPosition}
+        onClick={
+          destination.external
+            ? undefined
+            : () => captureRootScrollRestoration(bookmark.id)
+        }
         className={clsx(
           "flex w-full flex-1 flex-col gap-4 px-6 pt-4 text-left md:flex-row md:items-center md:rounded md:px-2 md:py-2",
           isLarge ? "pb-1 md:pb-2" : "pb-4 md:h-20 md:py-0",
@@ -808,7 +816,11 @@ function FeedItemDisplay({
         target={target}
         rel={rel}
         preload={shouldOpenInSerial ? "intent" : undefined}
-        onClick={shouldOpenInSerial ? saveHomeScrollPosition : undefined}
+        onClick={
+          shouldOpenInSerial
+            ? () => captureRootScrollRestoration(contentId)
+            : undefined
+        }
         className={clsx(
           "flex w-full flex-1 flex-col gap-4 px-6 pt-4 text-left md:flex-row md:items-center md:rounded md:px-2 md:py-2",
           isLarge ? "pb-1 md:pb-2" : "pb-4 md:h-20 md:py-0",
@@ -921,7 +933,11 @@ function FeedGridItemDisplay({
         target={target}
         rel={rel}
         preload={shouldOpenInSerial ? "intent" : undefined}
-        onClick={shouldOpenInSerial ? saveHomeScrollPosition : undefined}
+        onClick={
+          shouldOpenInSerial
+            ? () => captureRootScrollRestoration(contentId)
+            : undefined
+        }
         className={clsx(
           "flex h-full flex-1 flex-col rounded p-2 text-left",
           isSelected && "md:bg-muted",

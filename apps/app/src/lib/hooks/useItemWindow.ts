@@ -8,12 +8,12 @@ import {
   getBoundedItemWindow,
   setRetainedEntityPins,
 } from "~/lib/data/page-retention";
-import { getSavedHomeRenderedItemCount } from "~/lib/scroll";
+import { getSavedRootRenderedItemCount } from "~/lib/root-scroll-restoration";
 import { ITEMS_PER_PAGE } from "~/server/api/constants";
 import { bookmarksStore } from "~/lib/data/bookmarks/store";
 
 function getInitialRenderCount(itemIds: string[], listKey: string) {
-  const savedRenderedItemCount = getSavedHomeRenderedItemCount(listKey);
+  const savedRenderedItemCount = getSavedRootRenderedItemCount(listKey);
   const renderCount = savedRenderedItemCount ?? ITEMS_PER_PAGE;
 
   return Math.min(renderCount, itemIds.length || renderCount);
@@ -47,7 +47,7 @@ export function useItemWindow(itemIds: string[], listKey: string) {
     }
 
     const renderBudget =
-      getSavedHomeRenderedItemCount(listKey) ?? ITEMS_PER_PAGE;
+      getSavedRootRenderedItemCount(listKey) ?? ITEMS_PER_PAGE;
     setRenderCount((currentRenderCount) =>
       reconcileRenderCountForItems({
         currentRenderCount,
