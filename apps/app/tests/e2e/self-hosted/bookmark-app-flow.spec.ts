@@ -11,6 +11,7 @@ import {
   seedExtensionSession,
 } from "../fixtures/seed-db";
 import { signIn } from "../fixtures/auth";
+import { selectSaveStatus } from "../fixtures/content-status";
 
 test.describe("Bookmark Serial-app flow", () => {
   test.use({ viewport: { width: 1280, height: 900 } });
@@ -40,7 +41,7 @@ test.describe("Bookmark Serial-app flow", () => {
       route.abort(),
     );
     await signIn({ page, email, password });
-    await page.getByRole("tab", { name: /Saved/ }).click();
+    await selectSaveStatus(page, "saved");
 
     const bookmarkCard = page.locator(
       `article[data-item-id="${bookmarkId}"][data-entity-kind="bookmark"]`,
@@ -139,7 +140,7 @@ test.describe("Bookmark Serial-app flow", () => {
     expect(savedBookmarkProgress).toBeGreaterThan(5);
 
     await page.goto("/");
-    await page.getByRole("tab", { name: /Saved/ }).click();
+    await selectSaveStatus(page, "saved");
     await expect(bookmarkCard).toBeVisible({ timeout: 15_000 });
     await bookmarkCard.getByRole("link").click();
     await expect(
@@ -225,7 +226,7 @@ test.describe("Bookmark Serial-app flow", () => {
     await page
       .getByRole("radio", { name: "Uncategorized", exact: true })
       .click();
-    await page.getByRole("tab", { name: /Saved/ }).click();
+    await selectSaveStatus(page, "saved");
     const bookmarkCard = page.locator(
       `article[data-item-id="${saved.bookmark.id}"][data-entity-kind="bookmark"]`,
     );
@@ -251,7 +252,7 @@ test.describe("Bookmark Serial-app flow", () => {
       feedItemId,
     );
     await signIn({ page, email, password });
-    await page.getByRole("tab", { name: /Saved/ }).click();
+    await selectSaveStatus(page, "saved");
     const bookmarkCard = page.locator(
       `article[data-item-id="${bookmarkId}"][data-entity-kind="bookmark"]`,
     );

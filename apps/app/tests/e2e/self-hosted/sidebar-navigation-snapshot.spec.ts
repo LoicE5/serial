@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { signIn } from "../fixtures/auth";
+import { selectSaveStatus } from "../fixtures/content-status";
 import {
   SELF_HOSTED_APP_PORT,
   SELF_HOSTED_TURSO_PORT,
@@ -149,7 +150,7 @@ test.describe("authoritative sidebar navigation", () => {
 
     await expect(viewButton.locator(".bg-sidebar-accent")).toHaveCount(0);
     await expect(tagButton.locator(".bg-sidebar-accent")).toHaveCount(0);
-    await page.getByRole("tab", { name: /Saved/ }).click();
+    await selectSaveStatus(page, "saved");
     await expect(viewButton.locator(".bg-sidebar-accent")).toHaveCount(1);
     await expect(tagButton.locator(".bg-sidebar-accent")).toHaveCount(1);
   });
@@ -192,7 +193,7 @@ test.describe("authoritative sidebar navigation", () => {
     await item.getByRole("link").hover();
     await page.keyboard.press("s");
 
-    await page.getByRole("tab", { name: /Saved/ }).click();
+    await selectSaveStatus(page, "saved");
     await expect(viewButton.locator(".bg-sidebar-accent")).toHaveCount(1);
     await expect(item).toBeVisible();
 

@@ -11,6 +11,7 @@ import {
   seedBookmarkViewFilterData,
 } from "../fixtures/seed-db";
 import { signIn } from "../fixtures/auth";
+import { selectSaveStatus } from "../fixtures/content-status";
 import type { Page } from "@playwright/test";
 
 async function persistedValue(page: Page, key: string) {
@@ -119,7 +120,7 @@ test.describe("Bookmark mixed-content synchronization", () => {
     );
 
     await signIn({ page, email, password });
-    await page.getByRole("tab", { name: /Saved/ }).click();
+    await selectSaveStatus(page, "saved");
     const bookmarkCard = page.locator(
       `article[data-item-id="${bookmarkId}"][data-entity-kind="bookmark"]`,
     );
@@ -208,7 +209,7 @@ test.describe("Bookmark mixed-content synchronization", () => {
     );
 
     await signIn({ page, email, password });
-    await page.getByRole("tab", { name: /Saved/ }).click();
+    await selectSaveStatus(page, "saved");
 
     const feedMain = page
       .locator("main")

@@ -2,12 +2,14 @@
 
 import { useAtom } from "jotai";
 import { ArchiveIcon, InboxIcon } from "lucide-react";
+import * as SwitchPrimitive from "@radix-ui/react-switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@serial/ui";
 import type { ArchiveStatus, SaveStatus } from "~/lib/content-status";
 import { Tabs, TabsList, TabsTrigger } from "~/components/ui/tabs";
 import { contentStatusFilterAtom } from "~/lib/data/atoms";
 import { KeyboardShortcutDisplay } from "~/components/ButtonWithShortcut";
 import { SHORTCUT_KEYS } from "~/lib/constants/shortcuts";
+import { cn } from "~/lib/utils";
 
 const SAVE_STATUS_OPTIONS: Array<{
   value: SaveStatus;
@@ -40,32 +42,43 @@ const ARCHIVE_STATUS_OPTIONS: Array<{
 
 export function ContentStatusControls() {
   const [contentStatus, setContentStatus] = useAtom(contentStatusFilterAtom);
+  const isSaved = contentStatus.saveStatus === "saved";
 
   return (
     <div className="flex gap-1">
-      <Tabs
-        value={contentStatus.saveStatus}
-        onValueChange={(saveStatus) => {
-          if (!saveStatus) return;
+      <SwitchPrimitive.Root
+        checked={isSaved}
+        onCheckedChange={(checked) => {
           setContentStatus((current) => ({
             ...current,
-            saveStatus: saveStatus as SaveStatus,
+            saveStatus: checked ? "saved" : "inbox",
           }));
         }}
+        aria-label="Inbox or Saved"
+        className="group/save-switch focus-visible:border-ring focus-visible:ring-ring/50 bg-muted/30 text-foreground/60 dark:text-muted-foreground relative grid h-9 cursor-pointer grid-cols-2 items-center rounded-lg p-[3px] text-sm font-medium transition-colors focus-visible:ring-[3px] focus-visible:outline-none"
       >
-        <TabsList>
-          {SAVE_STATUS_OPTIONS.map((option) => (
-            <TabsTrigger
-              className="relative"
+        {SAVE_STATUS_OPTIONS.map((option) => {
+          const isSelected = contentStatus.saveStatus === option.value;
+
+          return (
+            <span
+              aria-hidden="true"
+              className={cn(
+                "relative z-10 flex h-[calc(100%-1px)] items-center justify-center gap-1.5 rounded-md px-2 py-1 whitespace-nowrap transition-colors",
+                isSelected && "text-foreground",
+              )}
               key={option.value}
-              value={option.value}
             >
               {option.label}
               <KeyboardShortcutDisplay shortcut={option.shortcut} />
-            </TabsTrigger>
-          ))}
-        </TabsList>
-      </Tabs>
+            </span>
+          );
+        })}
+        <SwitchPrimitive.Thumb
+          className="bg-background dark:border-input dark:bg-input/30 pointer-events-none absolute top-[3px] z-0 h-[calc(100%-6px)] w-[calc(50%-3px)] rounded-md border border-transparent shadow-sm transition-[left] duration-200"
+          style={{ left: isSaved ? "50%" : "3px" }}
+        />
+      </SwitchPrimitive.Root>
 
       <Tabs
         value={contentStatus.archiveStatus}
