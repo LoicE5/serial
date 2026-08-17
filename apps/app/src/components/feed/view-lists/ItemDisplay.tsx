@@ -12,6 +12,7 @@ import {
   Trash2Icon,
 } from "lucide-react";
 import type { ApplicationBookmark } from "~/server/mixed-content/projection";
+import type { ContentStatusFilter } from "~/lib/content-status";
 import { CONTENT_TYPE } from "~/lib/content/descriptor";
 import { KeyboardShortcutDisplay } from "~/components/ButtonWithShortcut";
 import { Button } from "~/components/ui/button";
@@ -28,7 +29,7 @@ import { timeAgo } from "~/lib/utils";
 import { SHORTCUT_KEYS } from "~/lib/constants/shortcuts";
 import { useFeedItemActions } from "~/lib/hooks/useFeedItemActions";
 import { useShowShortcuts } from "~/lib/hooks/useShowShortcuts";
-import { saveHomeScrollPosition } from "~/lib/scroll";
+import { captureRootScrollRestoration } from "~/lib/root-scroll-restoration";
 import { useBookmarkValue } from "~/lib/data/bookmarks";
 import {
   useDeleteBookmarkMutation,
@@ -37,9 +38,30 @@ import {
 import { useDialogStore } from "~/components/feed/dialogStore";
 import { contentDestination } from "~/lib/data/content-items/resolver";
 import { REMOTE_IMAGE_PROPS } from "~/lib/remoteMedia";
+import {
+  contentStatusOrderDimension,
+  selectContentStatusOrderValue,
+} from "~/lib/content-status";
 
 export type ItemSize = "standard" | "large";
 type WatchedDatePrefix = "read" | "watched";
+
+function feedItemDatePresentation(
+  item: {
+    postedAt: Date;
+    isWatchLaterUpdatedAt?: Date | null;
+  },
+  contentStatus: ContentStatusFilter,
+) {
+  const orderDimension = contentStatusOrderDimension(contentStatus);
+  return {
+    displayDate:
+      orderDimension === "saved"
+        ? (item.isWatchLaterUpdatedAt ?? item.postedAt)
+        : item.postedAt,
+    shouldShowWatchedDate: orderDimension === "archived",
+  };
+}
 
 // Typography components for consistent styling across layouts
 
@@ -626,12 +648,11 @@ function BookmarkItemDisplay({
   });
   const href = destination.href;
   const isLarge = size === "large";
-  const date =
-    contentStatusFilter.archiveStatus === "archived"
-      ? bookmark.readUpdatedAt
-      : contentStatusFilter.saveStatus === "saved"
-        ? bookmark.savedUpdatedAt
-        : bookmark.publishedAt || bookmark.createdAt;
+  const date = selectContentStatusOrderValue(contentStatusFilter, {
+    published: bookmark.publishedAt || bookmark.createdAt,
+    saved: bookmark.savedUpdatedAt,
+    archived: bookmark.readUpdatedAt,
+  });
 
   if (grid) {
     return (
@@ -645,7 +666,11 @@ function BookmarkItemDisplay({
           to={href}
           target={destination.external ? "_blank" : undefined}
           rel={destination.external ? "noopener noreferrer" : undefined}
-          onClick={destination.external ? undefined : saveHomeScrollPosition}
+          onClick={
+            destination.external
+              ? undefined
+              : () => captureRootScrollRestoration(bookmark.id)
+          }
           className={clsx(
             "flex h-full flex-1 flex-col rounded p-2 text-left",
             isSelected && "md:bg-muted",
@@ -692,7 +717,11 @@ function BookmarkItemDisplay({
         to={href}
         target={destination.external ? "_blank" : undefined}
         rel={destination.external ? "noopener noreferrer" : undefined}
-        onClick={destination.external ? undefined : saveHomeScrollPosition}
+        onClick={
+          destination.external
+            ? undefined
+            : () => captureRootScrollRestoration(bookmark.id)
+        }
         className={clsx(
           "flex w-full flex-1 flex-col gap-4 px-6 pt-4 text-left md:flex-row md:items-center md:rounded md:px-2 md:py-2",
           isLarge ? "pb-1 md:pb-2" : "pb-4 md:h-20 md:py-0",
@@ -765,12 +794,10 @@ function FeedItemDisplay({
   const rel = shouldOpenInSerial ? undefined : "noopener noreferrer";
 
   const isLarge = size === "large";
-  const shouldShowWatchedDate =
-    contentStatusFilter.archiveStatus === "archived";
-  const displayDate =
-    contentStatusFilter.saveStatus === "saved"
-      ? (item.isWatchLaterUpdatedAt ?? item.postedAt)
-      : item.postedAt;
+  const { displayDate, shouldShowWatchedDate } = feedItemDatePresentation(
+    item,
+    contentStatusFilter,
+  );
   const watchedDatePrefix = getWatchedDatePrefix(item);
 
   return (
@@ -789,7 +816,11 @@ function FeedItemDisplay({
         target={target}
         rel={rel}
         preload={shouldOpenInSerial ? "intent" : undefined}
-        onClick={shouldOpenInSerial ? saveHomeScrollPosition : undefined}
+        onClick={
+          shouldOpenInSerial
+            ? () => captureRootScrollRestoration(contentId)
+            : undefined
+        }
         className={clsx(
           "flex w-full flex-1 flex-col gap-4 px-6 pt-4 text-left md:flex-row md:items-center md:rounded md:px-2 md:py-2",
           isLarge ? "pb-1 md:pb-2" : "pb-4 md:h-20 md:py-0",
@@ -885,12 +916,10 @@ function FeedGridItemDisplay({
   const rel = shouldOpenInSerial ? undefined : "noopener noreferrer";
 
   const isLarge = size === "large";
-  const shouldShowWatchedDate =
-    contentStatusFilter.archiveStatus === "archived";
-  const displayDate =
-    contentStatusFilter.saveStatus === "saved"
-      ? (item.isWatchLaterUpdatedAt ?? item.postedAt)
-      : item.postedAt;
+  const { displayDate, shouldShowWatchedDate } = feedItemDatePresentation(
+    item,
+    contentStatusFilter,
+  );
   const watchedDatePrefix = getWatchedDatePrefix(item);
 
   return (
@@ -904,7 +933,11 @@ function FeedGridItemDisplay({
         target={target}
         rel={rel}
         preload={shouldOpenInSerial ? "intent" : undefined}
-        onClick={shouldOpenInSerial ? saveHomeScrollPosition : undefined}
+        onClick={
+          shouldOpenInSerial
+            ? () => captureRootScrollRestoration(contentId)
+            : undefined
+        }
         className={clsx(
           "flex h-full flex-1 flex-col rounded p-2 text-left",
           isSelected && "md:bg-muted",

@@ -2,23 +2,29 @@ import { describe, expect, it } from "vitest";
 import { shouldAdvanceAfterToggleRead } from "~/lib/hooks/readAdvance";
 
 describe("read navigation advance", () => {
-  it("advances in global Unread", () => {
+  it("advances in Inbox Unread", () => {
     expect(
       shouldAdvanceAfterToggleRead({
-        contentStatusFilter: { saveStatus: "inbox", archiveStatus: "unread" },
+        contentStatusFilter: {
+          saveStatus: "inbox",
+          archiveStatus: "unread",
+        },
       }),
     ).toBe(true);
   });
 
-  it("advances in Saved + Unread", () => {
+  it("advances in Saved Unread", () => {
     expect(
       shouldAdvanceAfterToggleRead({
-        contentStatusFilter: { saveStatus: "saved", archiveStatus: "unread" },
+        contentStatusFilter: {
+          saveStatus: "saved",
+          archiveStatus: "unread",
+        },
       }),
     ).toBe(true);
   });
 
-  it("stays selected in Saved + Archived", () => {
+  it("stays selected in Saved Archived", () => {
     expect(
       shouldAdvanceAfterToggleRead({
         contentStatusFilter: {

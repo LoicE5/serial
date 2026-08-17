@@ -7,6 +7,7 @@ import { createStore, Provider } from "jotai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ApplicationView } from "~/server/db/schema";
+import type { ContentStatusFilter } from "~/lib/content-status";
 import { ViewFilterChips } from "~/components/feed/ViewFilterChips";
 import {
   contentStatusFilterAtom,
@@ -47,6 +48,7 @@ function renderViewFilterChips(
   input: {
     cachedViews?: ApplicationView[];
     hasFetchedViews?: boolean;
+    contentStatus?: ContentStatusFilter;
   } = {},
 ) {
   const cachedViews = input.cachedViews ?? [
@@ -60,10 +62,13 @@ function renderViewFilterChips(
   const jotaiStore = createStore();
   jotaiStore.set(viewsAtom, cachedViews);
   jotaiStore.set(viewFilterIdAtom, 1);
-  jotaiStore.set(contentStatusFilterAtom, {
-    saveStatus: "inbox",
-    archiveStatus: "unread",
-  });
+  jotaiStore.set(
+    contentStatusFilterAtom,
+    input.contentStatus ?? {
+      saveStatus: "inbox",
+      archiveStatus: "unread",
+    },
+  );
 
   const container = document.createElement("div");
   const root = createRoot(container);
@@ -181,6 +186,33 @@ describe("View filter loading", () => {
     });
 
     const markup = renderViewFilterChips();
+
+    expect(chipFromMarkup(markup, "Reading").classList).toContain("opacity-50");
+    expect(chipFromMarkup(markup, "Research").classList).not.toContain(
+      "opacity-50",
+    );
+  });
+
+  it("maps Saved + Archived to nested availability", () => {
+    navigationSnapshotStore.getState().set({
+      views: {
+        1: {
+          inbox: { unread: true, archived: false },
+          saved: { unread: true, archived: false },
+        },
+        2: {
+          inbox: { unread: false, archived: true },
+          saved: { unread: false, archived: true },
+        },
+      },
+      tags: {},
+      feeds: {},
+      viewFeeds: {},
+    });
+
+    const markup = renderViewFilterChips({
+      contentStatus: { saveStatus: "saved", archiveStatus: "archived" },
+    });
 
     expect(chipFromMarkup(markup, "Reading").classList).toContain("opacity-50");
     expect(chipFromMarkup(markup, "Research").classList).not.toContain(

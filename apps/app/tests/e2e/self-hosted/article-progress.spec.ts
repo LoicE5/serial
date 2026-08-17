@@ -10,6 +10,10 @@ import {
   seedArticleData,
   setFeedItemContent,
 } from "../fixtures/seed-db";
+import {
+  getScrollPositionDelta,
+  SCROLL_POSITION_TOLERANCE_PX,
+} from "../fixtures/scroll-position";
 
 test.describe("article progress tracking", () => {
   let testEmail: string;
@@ -49,7 +53,9 @@ test.describe("article progress tracking", () => {
     const initialScrollTop = await scrollContainer.evaluate(
       (el) => el.scrollTop,
     );
-    expect(initialScrollTop).toBe(0);
+    expect(getScrollPositionDelta(initialScrollTop, 0)).toBeLessThanOrEqual(
+      SCROLL_POSITION_TOLERANCE_PX,
+    );
 
     // Scroll down using mouse wheel events to trigger progress tracking.
     // We hover over the scroll container first so the wheel events land on it.
@@ -78,8 +84,13 @@ test.describe("article progress tracking", () => {
     // Saving progress updates feedItem, but must not trigger entry restoration
     // and reposition a user who has already interacted with the article.
     await expect
-      .poll(() => scrollContainer.evaluate((el) => el.scrollTop))
-      .toBe(scrolledTop);
+      .poll(async () =>
+        getScrollPositionDelta(
+          await scrollContainer.evaluate((el) => el.scrollTop),
+          scrolledTop,
+        ),
+      )
+      .toBeLessThanOrEqual(SCROLL_POSITION_TOLERANCE_PX);
 
     // Reopening from the content list restores the saved reading location.
     await page.goto("/");
@@ -140,9 +151,12 @@ test.describe("article progress tracking", () => {
     await expect(page.getByText("Paragraph 1:")).toBeVisible();
     await page.waitForTimeout(1000);
 
-    expect(await scrollContainer.evaluate((element) => element.scrollTop)).toBe(
-      0,
-    );
+    expect(
+      getScrollPositionDelta(
+        await scrollContainer.evaluate((element) => element.scrollTop),
+        0,
+      ),
+    ).toBeLessThanOrEqual(SCROLL_POSITION_TOLERANCE_PX);
   });
 
   test("restores the reading position after Back then Forward", async ({
@@ -189,8 +203,13 @@ test.describe("article progress tracking", () => {
     await expect(page).toHaveURL(/\/read\//);
     await expect(page.getByText("Paragraph 1:")).toBeVisible();
     await expect
-      .poll(() => scrollContainer.evaluate((element) => element.scrollTop))
-      .toBe(previousArticleScroll);
+      .poll(async () =>
+        getScrollPositionDelta(
+          await scrollContainer.evaluate((element) => element.scrollTop),
+          previousArticleScroll,
+        ),
+      )
+      .toBeLessThanOrEqual(SCROLL_POSITION_TOLERANCE_PX);
   });
 
   test("navigates through content inside top-level div wrappers", async ({

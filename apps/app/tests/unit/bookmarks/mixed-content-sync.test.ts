@@ -196,7 +196,7 @@ describe("Bookmark synchronization and local mixed reprojection", () => {
     ).toEqual(["unassigned"]);
   });
 
-  it("keeps local mixed Archived projections ordered by View section", () => {
+  it("orders a page-plus local archived View globally across sections", () => {
     const sectionedView: ApplicationView = {
       ...view(),
       categoryIds: [100],
@@ -224,46 +224,44 @@ describe("Bookmark synchronization and local mixed reprojection", () => {
         },
       ],
     };
-    const feedSectionItem = {
-      ...feedItem("feed-section", "https://example.com/feed-section"),
+    const earlierItems = Array.from({ length: 30 }, (_, index) => ({
+      ...feedItem(
+        `earlier-${index.toString().padStart(2, "0")}`,
+        `https://example.com/earlier-${index}`,
+      ),
       feedId: 1,
       isWatched: true,
-      isWatchedUpdatedAt: new Date("2026-07-30T08:00:00.000Z"),
-    };
-    const tagSectionItem = {
-      ...feedItem("tag-section", "https://example.com/tag-section"),
+      isWatchedUpdatedAt: new Date(NOW.getTime() - index * 1_000),
+    }));
+    const equalFeedItem = {
+      ...feedItem("z-equal-feed", "https://example.com/z-equal-feed"),
       feedId: 2,
       isWatched: true,
-      isWatchedUpdatedAt: new Date("2026-07-30T10:00:00.000Z"),
+      isWatchedUpdatedAt: new Date("2026-07-30T13:00:00.000Z"),
     };
-    const uncategorizedBookmark = bookmark({
-      id: "uncategorized-bookmark",
+    const equalBookmark = bookmark({
+      id: "a-equal-bookmark",
       isSaved: false,
       isRead: true,
-      readUpdatedAt: new Date("2026-07-30T11:00:00.000Z"),
+      readUpdatedAt: new Date("2026-07-30T13:00:00.000Z"),
       viewIds: [10],
     });
 
-    expect(
-      projectLocalMixedContentOrder({
-        feedItemIds: [tagSectionItem.id, feedSectionItem.id],
-        feedItems: {
-          [feedSectionItem.id]: feedSectionItem,
-          [tagSectionItem.id]: tagSectionItem,
-        },
-        bookmarks: {
-          [uncategorizedBookmark.id]: uncategorizedBookmark,
-        },
-        scope: { type: "view", viewId: 10 },
-        views: [sectionedView],
-        contentStatus: { saveStatus: "inbox", archiveStatus: "archived" },
-        feedCategories: [{ feedId: 2, categoryId: 100 }],
-      }),
-    ).toEqual([
-      feedSectionItem.id,
-      tagSectionItem.id,
-      uncategorizedBookmark.id,
-    ]);
+    const ordered = projectLocalMixedContentOrder({
+      feedItemIds: [...earlierItems.map(({ id }) => id), equalFeedItem.id],
+      feedItems: Object.fromEntries(
+        [...earlierItems, equalFeedItem].map((item) => [item.id, item]),
+      ),
+      bookmarks: { [equalBookmark.id]: equalBookmark },
+      scope: { type: "view", viewId: 10 },
+      views: [sectionedView],
+      contentStatus: { saveStatus: "inbox", archiveStatus: "archived" },
+      feedCategories: [{ feedId: 2, categoryId: 100 }],
+    });
+
+    expect(ordered).toHaveLength(32);
+    expect(ordered.slice(0, 2)).toEqual([equalFeedItem.id, equalBookmark.id]);
+    expect(new Set(ordered).size).toBe(32);
   });
 
   it("hydrates Bookmark and Feed-item entities into separate caches from a discriminated page", () => {

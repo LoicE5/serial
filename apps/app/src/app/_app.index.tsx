@@ -15,15 +15,13 @@ import { useShortcut } from "~/lib/hooks/useShortcut";
 import { SHORTCUT_KEYS } from "~/lib/constants/shortcuts";
 import { useHasInitialData } from "~/lib/data/store";
 import FeedLoading from "~/components/loading";
-import { useHomeScrollRestoration } from "~/lib/scroll";
+import { useRootScrollResetBeforePaint } from "~/lib/root-scroll-restoration";
 
 export const Route = createFileRoute("/_app/")({
   component: Home,
 });
 
 function Home() {
-  useHomeScrollRestoration();
-
   const views = useAtomValue(viewsAtom);
   const viewFilterId = useAtomValue(viewFilterIdAtom);
   const updateViewFilter = useUpdateViewFilter();
@@ -101,6 +99,7 @@ function Home() {
   });
 
   const hasInitialData = useHasInitialData();
+  useRootScrollResetBeforePaint(!hasInitialData);
 
   if (!hasInitialData) {
     return <FeedLoading />;

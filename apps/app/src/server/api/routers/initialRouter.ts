@@ -42,7 +42,9 @@ import type { NavigationSnapshot } from "~/server/navigation/snapshot";
 import type { ContentStatusFilter } from "~/lib/content-status";
 import {
   contentStatusFilterSchema,
+  contentStatusUsesSectionOrder,
   DEFAULT_CONTENT_STATUS_FILTER,
+  selectContentStatusOrderValue,
 } from "~/lib/content-status";
 import { captureException, logDebug } from "~/server/logger";
 import {
@@ -884,6 +886,7 @@ function buildPaginatedFeedItemQuery({
 }) {
   const hasSections =
     scope.type === "view" &&
+    contentStatusUsesSectionOrder(contentStatusFilter) &&
     scope.view.viewSections &&
     scope.view.viewSections.length > 0;
   const placementExpr =
@@ -2144,16 +2147,23 @@ function buildCursorCondition(
   if (!cursor) return undefined;
 
   const orderCoordinate = contentStatusOrderExpression(contentStatusFilter);
-  const cursorCoordinate =
-    contentStatusFilter.archiveStatus === "archived"
-      ? (cursor.isWatchedUpdatedAt ?? cursor.postedAt)
-      : contentStatusFilter.saveStatus === "saved"
-        ? (cursor.isWatchLaterUpdatedAt ?? cursor.postedAt)
-        : cursor.postedAt;
-  // Drizzle's SQLite `timestamp` mode persists whole epoch seconds. The
-  // composite SQL expression has no column encoder, so bind that representation
-  // explicitly instead of passing a JavaScript Date through an untyped SQL param.
+  const cursorCoordinate = selectContentStatusOrderValue(contentStatusFilter, {
+    published: cursor.postedAt,
+    saved: cursor.isWatchLaterUpdatedAt ?? cursor.postedAt,
+    archived: cursor.isWatchedUpdatedAt ?? cursor.postedAt,
+  });
+  // SQLite timestamp columns persist epoch seconds. The composite expression
+  // has no encoder, so bind the persisted representation explicitly.
   const cursorCoordinateSeconds = Math.floor(cursorCoordinate.getTime() / 1000);
+  if (!contentStatusUsesSectionOrder(contentStatusFilter)) {
+    return or(
+      sql`${orderCoordinate} < ${cursorCoordinateSeconds}`,
+      and(
+        sql`${orderCoordinate} = ${cursorCoordinateSeconds}`,
+        lt(feedItems.id, cursor.id),
+      ),
+    );
+  }
   const coordinateCondition = or(
     sql`${orderCoordinate} < ${cursorCoordinateSeconds}`,
     and(
@@ -2176,16 +2186,20 @@ function buildCursorCondition(
 }
 
 function contentStatusOrderExpression(contentStatus: ContentStatusFilter) {
-  if (contentStatus.archiveStatus === "archived") {
-    return sql<Date>`COALESCE(${feedItems.isWatchedUpdatedAt}, ${feedItems.postedAt})`;
-  }
-  if (contentStatus.saveStatus === "saved") {
-    return sql<Date>`COALESCE(${feedItems.isWatchLaterUpdatedAt}, ${feedItems.postedAt})`;
-  }
-  return sql<Date>`${feedItems.postedAt}`;
+  return selectContentStatusOrderValue(contentStatus, {
+    published: sql<Date>`${feedItems.postedAt}`,
+    saved: sql<Date>`COALESCE(${feedItems.isWatchLaterUpdatedAt}, ${feedItems.postedAt})`,
+    archived: sql<Date>`COALESCE(${feedItems.isWatchedUpdatedAt}, ${feedItems.postedAt})`,
+  });
 }
 
 function buildFlatItemsOrderBy(contentStatusFilter: ContentStatusFilter) {
+  if (!contentStatusUsesSectionOrder(contentStatusFilter)) {
+    return [
+      desc(contentStatusOrderExpression(contentStatusFilter)),
+      desc(feedItems.id),
+    ];
+  }
   return [
     desc(contentStatusOrderExpression(contentStatusFilter)),
     desc(feedItems.postedAt),

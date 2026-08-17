@@ -1672,7 +1672,7 @@ const vanillaApplicationStore = createStore<ApplicationStore>()(
               break;
             }
 
-            // Legacy: chunk.type is "feed-items"
+            // chunk.type is "feed-items"
             if (chunk.type === "feed-items") {
               mergeFeedItems(chunk.feedItems);
 

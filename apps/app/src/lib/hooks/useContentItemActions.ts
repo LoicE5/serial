@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { useFeedItemActions } from "./useFeedItemActions";
 import { useBookmarkValue } from "~/lib/data/bookmarks";
 import { useUpdateBookmarkStateMutation } from "~/lib/data/bookmarks/mutations";
-import { saveHomeScrollPosition } from "~/lib/scroll";
+import { captureRootScrollRestoration } from "~/lib/root-scroll-restoration";
 import { contentDestination } from "~/lib/data/content-items/resolver";
 
 export function useContentItemActions(itemId: string) {
@@ -46,12 +46,12 @@ export function useContentItemActions(itemId: string) {
       entity: bookmark,
     });
     if (!destination.external) {
-      saveHomeScrollPosition();
+      captureRootScrollRestoration(itemId);
       void router.navigate({ to: destination.href });
       return;
     }
     window.open(destination.href, "_blank", "noopener,noreferrer");
-  }, [bookmark, feedItemActions, router]);
+  }, [bookmark, feedItemActions, itemId, router]);
 
   const openOriginal = useCallback(() => {
     if (!bookmark) return feedItemActions.openOriginal();

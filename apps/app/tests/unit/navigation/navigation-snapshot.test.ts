@@ -30,10 +30,14 @@ const NOW = new Date("2026-08-01T12:00:00.000Z");
 let database: TestDatabase;
 let cleanup: Cleanup;
 
-async function seedFeed(id: number, isActive = true) {
+async function seedFeed(
+  id: number,
+  isActive = true,
+  userId = "navigation-user",
+) {
   await database.insert(feeds).values({
     id,
-    userId: "navigation-user",
+    userId,
     name: `Feed ${id}`,
     url: `https://feeds.example/${id}.xml`,
     platform: "website",
@@ -47,15 +51,19 @@ async function seedFeedItem(input: {
   isWatched?: boolean;
   isWatchLater?: boolean;
   postedAt?: Date;
+  contentType?: "text" | "video";
+  orientation?: "horizontal" | "vertical";
+  url?: string;
 }) {
   await database.insert(feedItems).values({
     id: input.id,
     feedId: input.feedId,
     contentId: input.id,
-    contentType: "text",
+    contentType: input.contentType ?? "text",
+    orientation: input.orientation,
     title: input.id,
     author: "Author",
-    url: `https://items.example/${input.id}`,
+    url: input.url ?? `https://items.example/${input.id}`,
     postedAt: input.postedAt ?? NOW,
     createdAt: input.postedAt ?? NOW,
     updatedAt: NOW,
@@ -295,16 +303,51 @@ describe("navigation snapshot", () => {
         createdAt: NOW,
         updatedAt: NOW,
       },
+      {
+        id: "current-short",
+        feedId: 1,
+        contentId: "current-short",
+        contentType: "video",
+        orientation: "vertical",
+        title: "Current short",
+        author: "Author",
+        url: "https://items.example/current-short",
+        postedAt: NOW,
+        createdAt: NOW,
+        updatedAt: NOW,
+      },
     ]);
-    await database.insert(views).values({
-      id: 30,
-      userId: "navigation-user",
-      name: "Recent text",
-      contentFilter: 1,
-      daysWindow: 7,
-      layout: "list",
-    });
-    await database.insert(viewFeeds).values({ viewId: 30, feedId: 1 });
+    await database.insert(views).values([
+      {
+        id: 30,
+        userId: "navigation-user",
+        name: "Recent text",
+        contentFilter: 1,
+        daysWindow: 7,
+        layout: "list",
+      },
+      {
+        id: 32,
+        userId: "navigation-user",
+        name: "Current videos",
+        contentFilter: 2,
+        daysWindow: 7,
+        layout: "list",
+      },
+      {
+        id: 33,
+        userId: "navigation-user",
+        name: "Current shorts",
+        contentFilter: 4,
+        daysWindow: 7,
+        layout: "list",
+      },
+    ]);
+    await database.insert(viewFeeds).values([
+      { viewId: 30, feedId: 1 },
+      { viewId: 32, feedId: 1 },
+      { viewId: 33, feedId: 1 },
+    ]);
 
     const snapshot = await queryNavigationSnapshot({
       database,
@@ -313,7 +356,155 @@ describe("navigation snapshot", () => {
     });
 
     expect(snapshot.views[30]?.inbox.unread).toBe(false);
+    expect(snapshot.views[32]?.inbox.unread).toBe(true);
+    expect(snapshot.views[33]?.inbox.unread).toBe(true);
     expect(snapshot.feeds[1]?.inbox.unread).toBe(true);
+  });
+
+  it("derives View availability from memberships without ownership leaks or canonical suppression", async () => {
+    await database.insert(user).values({
+      id: "other-user",
+      name: "Other User",
+      email: "other-navigation@example.com",
+      emailVerified: true,
+      createdAt: NOW,
+      updatedAt: NOW,
+    });
+    await Promise.all([
+      seedFeed(40),
+      seedFeed(41),
+      seedFeed(42),
+      seedFeed(43),
+      seedFeed(44, true, "other-user"),
+    ]);
+    await Promise.all([
+      seedFeedItem({ id: "direct-unread", feedId: 40 }),
+      seedFeedItem({ id: "direct-read", feedId: 40, isWatched: true }),
+      seedFeedItem({ id: "direct-later", feedId: 40, isWatchLater: true }),
+      seedFeedItem({
+        id: "direct-saved-archived",
+        feedId: 40,
+        isWatchLater: true,
+        isWatched: true,
+      }),
+      seedFeedItem({ id: "tag-unread", feedId: 41 }),
+      seedFeedItem({
+        id: "tag-saved-archived",
+        feedId: 41,
+        isWatchLater: true,
+        isWatched: true,
+      }),
+      seedFeedItem({ id: "overlap-unread", feedId: 42 }),
+      seedFeedItem({
+        id: "canonical-collision",
+        feedId: 43,
+        url: "https://items.example/canonical-collision",
+      }),
+      seedFeedItem({ id: "other-user-unread", feedId: 44 }),
+    ]);
+    await database.insert(contentCategories).values({
+      id: 40,
+      userId: "navigation-user",
+      name: "Membership Tag",
+    });
+    await database.insert(feedCategories).values([
+      { feedId: 41, categoryId: 40 },
+      { feedId: 42, categoryId: 40 },
+    ]);
+    await database.insert(views).values([
+      {
+        id: 40,
+        userId: "navigation-user",
+        name: "Direct",
+        contentFilter: 3,
+        daysWindow: 0,
+        layout: "list",
+      },
+      {
+        id: 41,
+        userId: "navigation-user",
+        name: "Tag",
+        contentFilter: 3,
+        daysWindow: 0,
+        layout: "list",
+      },
+      {
+        id: 42,
+        userId: "navigation-user",
+        name: "Overlap",
+        contentFilter: 3,
+        daysWindow: 0,
+        layout: "list",
+      },
+      {
+        id: 43,
+        userId: "navigation-user",
+        name: "Canonical collision",
+        contentFilter: 3,
+        daysWindow: 0,
+        layout: "list",
+      },
+      {
+        id: 44,
+        userId: "navigation-user",
+        name: "Foreign Feed",
+        contentFilter: 3,
+        daysWindow: 0,
+        layout: "list",
+      },
+    ]);
+    await database.insert(viewFeeds).values([
+      { viewId: 40, feedId: 40 },
+      { viewId: 42, feedId: 42 },
+      { viewId: 43, feedId: 43 },
+      { viewId: 44, feedId: 44 },
+    ]);
+    await database.insert(viewCategories).values([
+      { viewId: 41, categoryId: 40 },
+      { viewId: 42, categoryId: 40 },
+    ]);
+    await database.insert(bookmarks).values({
+      id: "canonical-collision-bookmark",
+      userId: "navigation-user",
+      sourceUrl: "https://items.example/canonical-collision",
+      canonicalUrl: "https://items.example/canonical-collision",
+      title: "Canonical collision",
+      contentType: "text",
+      isSaved: false,
+      isRead: false,
+      createdAt: NOW,
+      savedUpdatedAt: NOW,
+      readUpdatedAt: NOW,
+      progressUpdatedAt: NOW,
+      updatedAt: NOW,
+    });
+
+    const snapshot = await queryNavigationSnapshot({
+      database,
+      userId: "navigation-user",
+      now: NOW,
+    });
+
+    expect(snapshot.views[40]).toEqual({
+      inbox: { unread: true, archived: true },
+      saved: { unread: true, archived: true },
+    });
+    expect(snapshot.views[41]).toEqual({
+      inbox: { unread: true, archived: false },
+      saved: { unread: false, archived: true },
+    });
+    expect(snapshot.views[42]).toEqual({
+      inbox: { unread: true, archived: false },
+      saved: { unread: false, archived: true },
+    });
+    expect(snapshot.views[43]).toEqual({
+      inbox: { unread: true, archived: false },
+      saved: { unread: false, archived: false },
+    });
+    expect(snapshot.views[44]).toEqual({
+      inbox: { unread: false, archived: false },
+      saved: { unread: false, archived: false },
+    });
   });
 
   it("reports Saved availability independently for unread and archived content", async () => {
