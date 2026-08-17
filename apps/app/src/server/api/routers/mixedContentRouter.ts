@@ -1,6 +1,6 @@
 import { z } from "zod";
-import type { MixedContentScope } from "~/server/mixed-content/projection";
 import type { ContentStatusFilter } from "~/lib/content-status";
+import type { MixedContentScope } from "~/server/mixed-content/projection";
 import { getClientChannel } from "~/server/api/channels";
 import { ITEMS_PER_PAGE } from "~/server/api/constants";
 import { publisher } from "~/server/api/publisher";
@@ -73,7 +73,10 @@ async function publishPage(input: {
   cursor?: Parameters<typeof queryMixedContentPage>[0]["cursor"];
   limit: number;
 }) {
-  const page = await queryMixedContentPage(input);
+  const page = await queryMixedContentPage({
+    ...input,
+    contentStatus: input.contentStatus,
+  });
   await publisher.publish(getClientChannel(input.userId, input.clientId), {
     source: "mixed",
     chunk: {

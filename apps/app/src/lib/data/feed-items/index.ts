@@ -25,7 +25,10 @@ import type { ApplicationFeedItem, ApplicationView } from "~/server/db/schema";
 import type { FeedItemFilterIndex } from "./listProjection";
 import type { PaginationCursor } from "~/server/api/routers/initialRouter";
 import type { ContentStatusFilter } from "~/lib/content-status";
-import { buildContentStatusKey } from "~/lib/content-status";
+import {
+  buildContentStatusKey,
+  contentStatusOrderDimension,
+} from "~/lib/content-status";
 import {
   compareSavedOrderCoordinates,
   sortFeedItemsOrderByDate,
@@ -52,8 +55,14 @@ function isItemOlderThanCursor(
 ): boolean {
   if (!cursor) return false;
 
+  const orderDimension = contentStatusOrderDimension(contentStatusFilter);
+
   // Sectioned views are ordered by placement asc, then postedAt/id desc.
-  if (cursor.placement !== undefined && sectionPlacement !== undefined) {
+  if (
+    orderDimension !== "archived" &&
+    cursor.placement !== undefined &&
+    sectionPlacement !== undefined
+  ) {
     if (sectionPlacement > cursor.placement) {
       return true;
     }
@@ -63,7 +72,7 @@ function isItemOlderThanCursor(
   }
 
   // Archived ordering takes precedence over save status.
-  if (contentStatusFilter.archiveStatus === "archived") {
+  if (orderDimension === "archived") {
     const itemWatchedTime =
       item.isWatchedUpdatedAt?.getTime() ?? item.postedAt.getTime();
     const cursorWatchedTime =
@@ -73,20 +82,12 @@ function isItemOlderThanCursor(
       return true;
     }
     if (itemWatchedTime === cursorWatchedTime) {
-      const itemTime = item.postedAt.getTime();
-      const cursorTime = cursor.postedAt.getTime();
-
-      if (itemTime < cursorTime) {
-        return true;
-      }
-      if (itemTime === cursorTime && item.id < cursor.id) {
-        return true;
-      }
+      return item.id < cursor.id;
     }
     return false;
   }
 
-  if (contentStatusFilter.saveStatus === "saved") {
+  if (orderDimension === "saved") {
     return compareSavedOrderCoordinates(item, cursor) > 0;
   }
 
@@ -117,18 +118,19 @@ function getActiveFeedItemsSort({
   viewFilter: ApplicationView | null;
   filterIndex: FeedItemFilterIndex;
 }) {
-  if (contentStatusFilter.archiveStatus === "archived") {
+  const orderDimension = contentStatusOrderDimension(contentStatusFilter);
+  if (orderDimension === "archived") {
     return sortFeedItemsOrderByWatchedAt(feedItemsDict);
   }
 
   const isFeedOrCategoryScoped = feedFilter >= 0 || categoryFilter >= 0;
   if (isFeedOrCategoryScoped || !viewFilter?.viewSections?.length) {
-    return contentStatusFilter.saveStatus === "saved"
+    return orderDimension === "saved"
       ? sortFeedItemsOrderBySavedAt(feedItemsDict)
       : sortFeedItemsOrderByDate(feedItemsDict);
   }
 
-  return contentStatusFilter.saveStatus === "saved"
+  return orderDimension === "saved"
     ? sortFeedItemsOrderBySectionThenSavedAt(
         feedItemsDict,
         viewFilter.viewSections,

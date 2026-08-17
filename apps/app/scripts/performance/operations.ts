@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
-import type { ContentStatusFilter } from "~/lib/content-status";
 import type { db as applicationDatabase } from "~/server/db";
+import type { ContentStatusFilter } from "~/lib/content-status";
+import { selectContentStatusOrderValue } from "~/lib/content-status";
 import { buildContentStatusFilter } from "~/lib/data/feed-items/filters";
 import {
   contentCategories,
@@ -115,20 +116,19 @@ export async function queryFeedViewPage(input: {
   const feedIds = feedRows.map((feed) => feed.id);
   const contentStatusPredicate = buildContentStatusFilter(contentStatus);
   const where = and(inArray(feedItems.feedId, feedIds), contentStatusPredicate);
-  const orderBy =
-    contentStatus.archiveStatus === "archived"
-      ? [
-          desc(feedItems.isWatchedUpdatedAt),
-          desc(feedItems.postedAt),
-          desc(feedItems.id),
-        ]
-      : contentStatus.saveStatus === "saved"
-        ? [
-            desc(feedItems.isWatchLaterUpdatedAt),
-            desc(feedItems.postedAt),
-            desc(feedItems.id),
-          ]
-        : [desc(feedItems.postedAt), desc(feedItems.id)];
+  const orderBy = selectContentStatusOrderValue(contentStatus, {
+    published: [desc(feedItems.postedAt), desc(feedItems.id)],
+    saved: [
+      desc(feedItems.isWatchLaterUpdatedAt),
+      desc(feedItems.postedAt),
+      desc(feedItems.id),
+    ],
+    archived: [
+      desc(feedItems.isWatchedUpdatedAt),
+      desc(feedItems.postedAt),
+      desc(feedItems.id),
+    ],
+  });
   const rows = await database
     .select(feedItemColumns)
     .from(feedItems)

@@ -138,6 +138,107 @@ beforeEach(async () => {
 afterEach(() => cleanup());
 
 describe("mixed-content projection", () => {
+  it("selects each save/archive cell for direct View and Tag-derived membership", async () => {
+    await seedFeed(1);
+    await seedView(10, "Status matrix");
+    await database.insert(contentCategories).values({
+      id: 1,
+      userId: "user-one",
+      name: "Matrix",
+    });
+    await database.insert(feedCategories).values({ feedId: 1, categoryId: 1 });
+    await database.insert(viewCategories).values({ viewId: 10, categoryId: 1 });
+
+    const cells = [
+      {
+        saveStatus: "inbox" as const,
+        archiveStatus: "unread" as const,
+        feedId: "feed-inbox-unread",
+        bookmarkId: "bookmark-inbox-unread",
+        saved: false,
+        archived: false,
+      },
+      {
+        saveStatus: "inbox" as const,
+        archiveStatus: "archived" as const,
+        feedId: "feed-inbox-archived",
+        bookmarkId: "bookmark-inbox-archived",
+        saved: false,
+        archived: true,
+      },
+      {
+        saveStatus: "saved" as const,
+        archiveStatus: "unread" as const,
+        feedId: "feed-saved-unread",
+        bookmarkId: "bookmark-saved-unread",
+        saved: true,
+        archived: false,
+      },
+      {
+        saveStatus: "saved" as const,
+        archiveStatus: "archived" as const,
+        feedId: "feed-saved-archived",
+        bookmarkId: "bookmark-saved-archived",
+        saved: true,
+        archived: true,
+      },
+    ];
+
+    for (const cell of cells) {
+      // oxlint-disable-next-line react-doctor/async-await-in-loop
+      await seedFeedItem({
+        id: cell.feedId,
+        feedId: 1,
+        url: `https://items.example/${cell.feedId}`,
+        isWatchLater: cell.saved,
+        isWatched: cell.archived,
+        isWatchLaterUpdatedAt: cell.saved ? NOW : null,
+        isWatchedUpdatedAt: cell.archived ? NOW : null,
+      });
+      // oxlint-disable-next-line react-doctor/async-await-in-loop
+      await seedBookmark({
+        id: cell.bookmarkId,
+        isSaved: cell.saved,
+        isRead: cell.archived,
+      });
+      // oxlint-disable-next-line react-doctor/async-await-in-loop
+      await database.insert(bookmarkTags).values({
+        bookmarkId: cell.bookmarkId,
+        tagId: 1,
+      });
+    }
+
+    for (const cell of cells) {
+      const contentStatus = {
+        saveStatus: cell.saveStatus,
+        archiveStatus: cell.archiveStatus,
+      };
+      // oxlint-disable-next-line react-doctor/async-await-in-loop
+      const viewPage = await queryMixedContentPage({
+        database,
+        userId: "user-one",
+        scope: { type: "view", viewId: 10 },
+        contentStatus,
+        limit: 20,
+      });
+      // oxlint-disable-next-line react-doctor/async-await-in-loop
+      const tagPage = await queryMixedContentPage({
+        database,
+        userId: "user-one",
+        scope: { type: "tag", tagId: 1 },
+        contentStatus,
+        limit: 20,
+      });
+      const expected = [cell.bookmarkId, cell.feedId].sort();
+      expect(
+        viewPage.references.map(({ entityId }) => entityId).sort(),
+      ).toEqual(expected);
+      expect(tagPage.references.map(({ entityId }) => entityId).sort()).toEqual(
+        expected,
+      );
+    }
+  });
+
   it("includes Feed items only through explicit View or Tag membership, including unfiltered Views", async () => {
     await seedFeed(1);
     await seedFeed(2);
@@ -422,9 +523,9 @@ describe("mixed-content projection", () => {
         sectionPlacement,
       })),
     ).toEqual([
-      { entityId: "both-tags", sectionPlacement: 1 },
-      { entityId: "tagged-feed", sectionPlacement: 2 },
-      { entityId: "direct-only", sectionPlacement: 999_999 },
+      { entityId: "tagged-feed", sectionPlacement: null },
+      { entityId: "direct-only", sectionPlacement: null },
+      { entityId: "both-tags", sectionPlacement: null },
     ]);
   });
 
@@ -479,7 +580,7 @@ describe("mixed-content projection", () => {
     ]);
   });
 
-  it("applies archive-then-save ordering to both entity kinds", async () => {
+  it("orders unread Saved by save time and archived cells by archive time", async () => {
     await seedView(10, "Everything");
     await seedFeed(1);
     await database.insert(viewFeeds).values({ viewId: 10, feedId: 1 });
@@ -498,6 +599,16 @@ describe("mixed-content projection", () => {
       postedAt: new Date("2026-07-30T11:59:00Z"),
       isWatchLater: true,
       isWatchLaterUpdatedAt: new Date("2026-07-30T09:00:00Z"),
+    });
+    await seedFeedItem({
+      id: "recently-archived-old-feed",
+      feedId: 1,
+      url: "https://example.com/recently-archived",
+      postedAt: new Date("2020-01-01T00:00:00Z"),
+      isWatchLater: true,
+      isWatched: true,
+      isWatchLaterUpdatedAt: new Date("2026-07-30T08:00:00Z"),
+      isWatchedUpdatedAt: new Date("2026-07-30T11:30:00Z"),
     });
     await seedBookmark({
       id: "saved-and-read",
@@ -539,7 +650,7 @@ describe("mixed-content projection", () => {
     });
     expect(
       archivedSaved.references.map((reference) => reference.entityId),
-    ).toEqual(["saved-and-read"]);
+    ).toEqual(["saved-and-read", "recently-archived-old-feed"]);
 
     const unread = await queryMixedContentPage({
       database,
@@ -567,7 +678,7 @@ describe("mixed-content projection", () => {
     ]);
   });
 
-  it("applies Saved + Archived within an ordinary View section page", async () => {
+  it("ignores a requested View section for archived Saved content", async () => {
     await seedView(10, "Sectioned Saved");
     await database.insert(contentCategories).values([
       { id: 1, userId: "user-one", name: "First" },
@@ -611,7 +722,7 @@ describe("mixed-content projection", () => {
     });
     expect(
       firstSectionArchived.references.map((reference) => reference.entityId),
-    ).toEqual(["first-archived"]);
+    ).toEqual(["second-archived", "first-archived"]);
   });
 
   it("paginates without duplicates or gaps across section, timestamp, kind, and id boundaries", async () => {
@@ -684,6 +795,141 @@ describe("mixed-content projection", () => {
     expect(pagedIds).toEqual(expectedIds);
     expect(new Set(pagedIds).size).toBe(pagedIds.length);
     expect(pagedIds).toHaveLength(5);
+  });
+
+  it("paginates archived Views globally across sections with stable mixed ID ties", async () => {
+    await seedView(10, "Archived timeline");
+    await database.insert(contentCategories).values([
+      { id: 1, userId: "user-one", name: "Earlier section" },
+      { id: 2, userId: "user-one", name: "Later section" },
+    ]);
+    await database.insert(viewCategories).values([
+      { viewId: 10, categoryId: 1 },
+      { viewId: 10, categoryId: 2 },
+    ]);
+    await database.insert(viewSections).values([
+      { viewId: 10, placement: 1, itemType: "tag", itemId: 1 },
+      { viewId: 10, placement: 2, itemType: "tag", itemId: 2 },
+    ]);
+    await seedFeed(1);
+    await database.insert(feedCategories).values({ feedId: 1, categoryId: 2 });
+
+    const equalTimestamp = new Date("2026-07-30T13:00:00.000Z");
+    await seedFeedItem({
+      id: "z-equal-feed",
+      feedId: 1,
+      url: "https://example.com/z-equal-feed",
+      isWatched: true,
+      isWatchedUpdatedAt: equalTimestamp,
+    });
+    await seedBookmark({
+      id: "a-equal-bookmark",
+      isSaved: false,
+      isRead: true,
+      readUpdatedAt: equalTimestamp,
+    });
+    await database.insert(bookmarkTags).values({
+      bookmarkId: "a-equal-bookmark",
+      tagId: 2,
+    });
+
+    const earlierIds = Array.from(
+      { length: 30 },
+      (_, index) => `earlier-${index.toString().padStart(2, "0")}`,
+    );
+    for (const [index, id] of earlierIds.entries()) {
+      await seedBookmark({
+        id,
+        isSaved: false,
+        isRead: true,
+        readUpdatedAt: new Date(NOW.getTime() - index * 1_000),
+      });
+      await database.insert(bookmarkTags).values({ bookmarkId: id, tagId: 1 });
+    }
+
+    const contentStatus = {
+      saveStatus: "inbox" as const,
+      archiveStatus: "archived" as const,
+    };
+    const firstPage = await queryMixedContentPage({
+      database,
+      userId: "user-one",
+      scope: { type: "view", viewId: 10 },
+      contentStatus,
+      limit: 30,
+    });
+    expect(
+      firstPage.references.slice(0, 2).map(({ entityId }) => entityId),
+    ).toEqual(["z-equal-feed", "a-equal-bookmark"]);
+    expect(firstPage.hasMore).toBe(true);
+
+    const secondPage = await queryMixedContentPage({
+      database,
+      userId: "user-one",
+      scope: { type: "view", viewId: 10 },
+      contentStatus,
+      cursor: firstPage.cursor,
+      limit: 30,
+    });
+    const pagedIds = [...firstPage.references, ...secondPage.references].map(
+      ({ entityId }) => entityId,
+    );
+    expect(pagedIds).toHaveLength(32);
+    expect(new Set(pagedIds).size).toBe(32);
+  });
+
+  it("paginates archived mixed entities with the same timestamp and ID exactly once", async () => {
+    await seedView(10, "Archived timeline");
+    await seedFeed(1);
+    await database.insert(viewFeeds).values({ viewId: 10, feedId: 1 });
+
+    const sharedId = "shared-entity-id";
+    const sharedTimestamp = new Date("2026-07-30T13:00:00.000Z");
+    await seedFeedItem({
+      id: sharedId,
+      feedId: 1,
+      url: "https://example.com/shared-feed-item",
+      isWatched: true,
+      isWatchLater: true,
+      isWatchedUpdatedAt: sharedTimestamp,
+    });
+    await seedBookmark({
+      id: sharedId,
+      isSaved: true,
+      isRead: true,
+      readUpdatedAt: sharedTimestamp,
+    });
+    await database
+      .insert(bookmarkViews)
+      .values({ bookmarkId: sharedId, viewId: 10 });
+
+    const contentStatus = {
+      saveStatus: "saved" as const,
+      archiveStatus: "archived" as const,
+    };
+    const references: string[] = [];
+    let cursor: MixedContentCursor = null;
+    do {
+      const page = await queryMixedContentPage({
+        database,
+        userId: "user-one",
+        scope: { type: "view", viewId: 10 },
+        contentStatus,
+        cursor,
+        limit: 1,
+      });
+      references.push(
+        ...page.references.map(
+          (reference) => `${reference.entityKind}:${reference.entityId}`,
+        ),
+      );
+      cursor = page.cursor;
+    } while (cursor);
+
+    expect(references).toEqual([
+      "bookmark:shared-entity-id",
+      "feed-item:shared-entity-id",
+    ]);
   });
 
   it("synchronizes capture metadata and isolates another user's canonical Bookmark", async () => {

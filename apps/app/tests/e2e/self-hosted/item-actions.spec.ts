@@ -4,6 +4,10 @@ import {
   SELF_HOSTED_TURSO_PORT,
 } from "../fixtures/ports";
 import {
+  getScrollPositionDelta,
+  SCROLL_POSITION_TOLERANCE_PX,
+} from "../fixtures/scroll-position";
+import {
   cleanupUser,
   seedArticleData,
   seedMultipleArticleData,
@@ -55,7 +59,7 @@ test.describe("feed item actions", () => {
     await page.waitForTimeout(500);
     await expect(page).toHaveURL("/", { timeout: 10000 });
 
-    // Switch to "read" filter with the "i" shortcut
+    // Switch to archived content with the "y" shortcut.
     await page.keyboard.press("y");
     await page.waitForTimeout(500);
 
@@ -64,6 +68,89 @@ test.describe("feed item actions", () => {
       .locator(`article[data-item-id="${feedItemId}"]`)
       .first();
     await expect(readArticle).toBeVisible({ timeout: 10000 });
+  });
+
+  test("restores the selected root item or its successor without animation", async ({
+    page,
+  }) => {
+    const { email, password, feedItemIds } = await seedMultipleArticleData(
+      SELF_HOSTED_TURSO_PORT,
+      SELF_HOSTED_APP_PORT,
+      20,
+    );
+    testEmail = email;
+
+    await signIn({ page, email, password });
+    const selectedItemId = feedItemIds[10]!;
+    const successorItemId = feedItemIds[11]!;
+    const selectedItem = page.locator(
+      `article[data-item-id="${selectedItemId}"]`,
+    );
+    await selectedItem.scrollIntoViewIfNeeded();
+    await selectedItem.getByRole("link").click();
+    await expect(page).toHaveURL(`/read/${selectedItemId}`);
+    await expect(
+      page.getByRole("heading", { name: "Test Article 11" }),
+    ).toBeVisible();
+
+    await page.getByRole("button", { name: "Archive" }).click();
+    await expect(page.getByRole("button", { name: "Unarchive" })).toBeVisible();
+    await page.getByRole("button", { name: "Home" }).click();
+    await expect(page).toHaveURL("/");
+    await expect(selectedItem).toHaveCount(0);
+
+    const successorItem = page.locator(
+      `article[data-item-id="${successorItemId}"]`,
+    );
+    await expect(successorItem.getByRole("link")).toHaveClass(/md:bg-muted/);
+    await expect
+      .poll(async () => {
+        const [containerBox, itemBox] = await Promise.all([
+          page.locator('[data-slot="sidebar-inset"]').boundingBox(),
+          successorItem.boundingBox(),
+        ]);
+        if (!containerBox || !itemBox) return Number.POSITIVE_INFINITY;
+
+        const itemCenter = itemBox.y + itemBox.height / 2;
+        const target = containerBox.y + containerBox.height / 3;
+        return getScrollPositionDelta(itemCenter, target);
+      })
+      .toBeLessThanOrEqual(SCROLL_POSITION_TOLERANCE_PX);
+  });
+
+  test("restores the root to the top when there is no selected item", async ({
+    page,
+  }) => {
+    const { email, password, feedItemIds } = await seedMultipleArticleData(
+      SELF_HOSTED_TURSO_PORT,
+      SELF_HOSTED_APP_PORT,
+      20,
+    );
+    testEmail = email;
+
+    await signIn({ page, email, password });
+    await page.goto(`/read/${feedItemIds[0]!}`);
+    await expect(
+      page.getByRole("heading", { name: "Test Article 1" }),
+    ).toBeVisible();
+    const scrollContainer = page.locator('[data-slot="sidebar-inset"]');
+    await scrollContainer.evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+    });
+    expect(
+      await scrollContainer.evaluate((element) => element.scrollTop),
+    ).toBeGreaterThan(0);
+
+    await page.getByRole("button", { name: "Home" }).click();
+    await expect(page).toHaveURL("/");
+    await expect
+      .poll(async () =>
+        getScrollPositionDelta(
+          await scrollContainer.evaluate((element) => element.scrollTop),
+          0,
+        ),
+      )
+      .toBeLessThanOrEqual(SCROLL_POSITION_TOLERANCE_PX);
   });
 
   test("does not show a copy-link action on feed items", async ({ page }) => {

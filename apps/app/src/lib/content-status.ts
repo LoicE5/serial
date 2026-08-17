@@ -48,6 +48,31 @@ export const CONTENT_STATUS_FILTERS = [
   SAVED_ARCHIVED_CONTENT_STATUS,
 ] as const satisfies readonly ContentStatusFilter[];
 
+export type ContentStatusOrderDimension = "published" | "saved" | "archived";
+
+/**
+ * Select the timestamp dimension used to order a content-status cell.
+ * Archive time takes precedence over save time for Saved + Archived.
+ */
+export function contentStatusOrderDimension(
+  filter: ContentStatusFilter,
+): ContentStatusOrderDimension {
+  if (filter.archiveStatus === "archived") return "archived";
+  if (filter.saveStatus === "saved") return "saved";
+  return "published";
+}
+
+export function selectContentStatusOrderValue<T>(
+  filter: ContentStatusFilter,
+  values: Record<ContentStatusOrderDimension, T>,
+): T {
+  return values[contentStatusOrderDimension(filter)];
+}
+
+export function contentStatusUsesSectionOrder(filter: ContentStatusFilter) {
+  return contentStatusOrderDimension(filter) !== "archived";
+}
+
 export function buildContentStatusKey(
   filter: ContentStatusFilter,
 ): ContentStatusKey {

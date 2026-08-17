@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useInfiniteScroll } from "~/lib/hooks/useInfiniteScroll";
 import { useItemWindow } from "~/lib/hooks/useItemWindow";
 import { useLoadMoreItems } from "~/lib/hooks/useLoadMoreItems";
-import { updateCurrentHomeRenderedItemCount } from "~/lib/scroll";
+import { updateCurrentRootRenderedItemCount } from "~/lib/root-scroll-restoration";
 
 type PendingServerExpansion = {
   id: number;
@@ -25,7 +25,7 @@ export function useViewListScroll(itemIds: string[]) {
   const hasUserScrolledCurrentList = scrolledListKey === currentListKey;
 
   useEffect(() => {
-    updateCurrentHomeRenderedItemCount(currentListKey, renderCount);
+    updateCurrentRootRenderedItemCount(currentListKey, renderCount);
   }, [currentListKey, renderCount]);
 
   useEffect(() => {

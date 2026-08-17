@@ -12,6 +12,7 @@ import {
   getMixedScopeKey,
   mixedContentStore,
 } from "~/lib/data/mixed-content/store";
+import { CONTENT_STATUS_FILTERS } from "~/lib/content-status";
 
 const SCOPE = { type: "view" as const, viewId: 7 };
 
@@ -56,6 +57,30 @@ afterEach(() => {
 });
 
 describe("mixed-content page retention", () => {
+  it("keeps four status pages distinct for one View", () => {
+    for (const [index, contentStatus] of CONTENT_STATUS_FILTERS.entries()) {
+      mixedContentStore.getState().applyPage({
+        scope: SCOPE,
+        contentStatus,
+        page: {
+          references: references(index).slice(0, 1),
+          bookmarks: [],
+          feedItems: [],
+          cursor: cursor(index),
+          hasMore: false,
+        },
+        replacesScope: true,
+      });
+    }
+
+    expect(Object.keys(mixedContentStore.getState().scopes).sort()).toEqual([
+      "view:7:inbox:archived",
+      "view:7:inbox:unread",
+      "view:7:saved:archived",
+      "view:7:saved:unread",
+    ]);
+  });
+
   it("plateaus cursor pages and scope references during repeated pagination", () => {
     applyPages(12);
 

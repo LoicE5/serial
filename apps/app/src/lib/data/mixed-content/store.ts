@@ -20,6 +20,7 @@ import {
   referencesEqual,
   replaceScopeInIndexes,
   uniqueReferences,
+  usesGlobalArchivedViewOrder,
 } from "./bookmarkProjection";
 import {
   getMixedRetentionPins,
@@ -47,7 +48,10 @@ import type {
   MixedContentScope,
 } from "~/server/mixed-content/projection";
 import type { ContentStatusFilter } from "~/lib/content-status";
-import { buildContentStatusKey } from "~/lib/content-status";
+import {
+  buildContentStatusKey,
+  selectContentStatusOrderValue,
+} from "~/lib/content-status";
 
 export { getMixedScopeKey } from "./bookmarkProjection";
 export type { LoadedMixedScope } from "./page-retention";
@@ -92,16 +96,22 @@ function feedItemReference(input: {
   filterIndex: ReturnType<typeof createFeedItemFilterIndex>;
 }): MixedContentReference {
   const { item, contentStatus, view, filterIndex } = input;
-  const normalizedAt =
-    contentStatus.archiveStatus === "archived"
-      ? (item.isWatchedUpdatedAt ?? item.postedAt)
-      : contentStatus.saveStatus === "saved"
-        ? (item.isWatchLaterUpdatedAt ?? item.postedAt)
-        : item.postedAt;
+  const normalizedAt = selectContentStatusOrderValue(contentStatus, {
+    published: item.postedAt,
+    saved: item.isWatchLaterUpdatedAt ?? item.postedAt,
+    archived: item.isWatchedUpdatedAt ?? item.postedAt,
+  });
   return {
     entityKind: "feed-item",
     entityId: item.id,
-    sectionPlacement: getItemSectionPlacement(item, view, filterIndex) ?? null,
+    sectionPlacement:
+      view &&
+      usesGlobalArchivedViewOrder(
+        { type: "view", viewId: view.id },
+        contentStatus,
+      )
+        ? null
+        : (getItemSectionPlacement(item, view, filterIndex) ?? null),
     normalizedAt,
   };
 }
@@ -147,6 +157,12 @@ const vanillaMixedContentStore = createStore<MixedContentStore>()(
             replacesScope
               ? page.references
               : [...(existing?.references ?? []), ...page.references],
+            {
+              usesGlobalEntityIdTieBreak: usesGlobalArchivedViewOrder(
+                scope,
+                contentStatus,
+              ),
+            },
           ).filter(
             (reference) =>
               retainedKeys.has(mixedReferenceKey(reference)) ||
@@ -255,7 +271,12 @@ const vanillaMixedContentStore = createStore<MixedContentStore>()(
               bookmarkReference(bookmark, scopeState, views),
             ];
           }
-          references = uniqueReferences(references);
+          references = uniqueReferences(references, {
+            usesGlobalEntityIdTieBreak: usesGlobalArchivedViewOrder(
+              scopeState.scope,
+              scopeState.contentStatus,
+            ),
+          });
           if (referencesEqual(scopeState.references, references)) continue;
 
           const nextScope = {
@@ -408,7 +429,12 @@ const vanillaMixedContentStore = createStore<MixedContentStore>()(
             }
           }
 
-          references = uniqueReferences(references);
+          references = uniqueReferences(references, {
+            usesGlobalEntityIdTieBreak: usesGlobalArchivedViewOrder(
+              scopeState.scope,
+              scopeState.contentStatus,
+            ),
+          });
           if (
             referencesEqual(scopeState.references, references) &&
             pages === scopeState.pages

@@ -7,7 +7,7 @@ import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "./ui/dialog";
 import { useDialogStore } from "~/components/feed/dialogStore";
-import { saveHomeScrollPosition } from "~/lib/scroll";
+import { captureRootScrollRestoration } from "~/lib/root-scroll-restoration";
 
 function getYouTubeVideoIdFromUrl(url: string) {
   const match = new RegExp(
@@ -57,7 +57,7 @@ export function CustomVideoDialog() {
               className="w-full"
               onClick={() => {
                 if (pathname === "/") {
-                  saveHomeScrollPosition();
+                  captureRootScrollRestoration();
                 }
                 setVideoUrl("");
                 onOpenChange(false);

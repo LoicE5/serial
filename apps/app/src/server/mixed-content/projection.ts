@@ -13,6 +13,7 @@ import type { ContentStatusFilter } from "~/lib/content-status";
 import type { db as defaultDatabase } from "~/server/db";
 import type { ApplicationFeedItem, DatabaseBookmark } from "~/server/db/schema";
 import { UNCATEGORIZED_VIEW_ID } from "~/lib/data/views/constants";
+import { contentStatusUsesSectionOrder } from "~/lib/content-status";
 
 type MixedContentDatabase = typeof defaultDatabase;
 
@@ -90,16 +91,32 @@ export async function queryResolvedMixedContentPage(input: {
       hasMore: false,
     };
   }
-  const hasSections =
+  const hasConfiguredSections =
     input.scope.type === "view" &&
     input.scope.viewId !== UNCATEGORIZED_VIEW_ID &&
     scopeData.sections.length > 0;
+  const usesSectionOrder =
+    hasConfiguredSections && contentStatusUsesSectionOrder(input.contentStatus);
+  const usesGlobalEntityIdTieBreak =
+    input.scope.type === "view" &&
+    !contentStatusUsesSectionOrder(input.contentStatus);
   const [bookmarkCandidates, feedCandidates] = await Promise.all([
-    queryBookmarkCandidates({ ...input, scopeData, hasSections }),
-    queryFeedCandidates({ ...input, scopeData, hasSections }),
+    queryBookmarkCandidates({
+      ...input,
+      scopeData,
+      usesSectionOrder,
+      usesGlobalEntityIdTieBreak,
+    }),
+    queryFeedCandidates({
+      ...input,
+      scopeData,
+      usesSectionOrder,
+      usesGlobalEntityIdTieBreak,
+    }),
   ]);
   const candidates = [...bookmarkCandidates, ...feedCandidates].sort(
-    compareCandidates,
+    (left, right) =>
+      compareCandidates(left, right, { usesGlobalEntityIdTieBreak }),
   );
   const hasMore = candidates.length > input.limit;
   const pageCandidates = candidates.slice(0, input.limit);

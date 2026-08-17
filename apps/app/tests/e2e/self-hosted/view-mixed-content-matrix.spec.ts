@@ -25,15 +25,17 @@ if (
   throw new Error("Mixed View section matrix must contain 32 unique cases");
 }
 
+async function renderedItemIdsInOrder(locator: Locator) {
+  return locator.evaluateAll((elements) =>
+    elements.flatMap((element) => {
+      const itemId = element.getAttribute("data-item-id");
+      return itemId ? [itemId] : [];
+    }),
+  );
+}
+
 async function renderedItemIds(locator: Locator) {
-  return (
-    await locator.evaluateAll((elements) =>
-      elements.flatMap((element) => {
-        const itemId = element.getAttribute("data-item-id");
-        return itemId ? [itemId] : [];
-      }),
-    )
-  ).sort();
+  return (await renderedItemIdsInOrder(locator)).sort();
 }
 
 function contentStatusTab(page: Page, name: string) {
@@ -284,6 +286,28 @@ test.describe("exhaustive mixed-content View section matrix", () => {
         },
       ];
 
+      if (contentStatus.archiveStatus === "archived") {
+        const section = feedMain.locator("#section-0");
+        await expect(section).toBeVisible({ timeout: 30_000 });
+        await expect(feedMain.locator('[id^="section-"]')).toHaveCount(1);
+        await expect(
+          section.getByRole("heading", {
+            name: fixture.viewName,
+            exact: true,
+          }),
+        ).toBeVisible();
+        await expect
+          .poll(() => renderedItemIdsInOrder(section.locator("[data-item-id]")))
+          .toEqual([
+            fixture.items.feedSectionFeedItem,
+            fixture.items.uncategorizedBookmark,
+            fixture.items.tagSectionFeedItem,
+            fixture.items.tagSectionBookmark,
+            fixture.items.uncategorizedFeedItem,
+          ]);
+        return;
+      }
+
       for (const [
         sectionIndex,
         expectedSection,
@@ -358,9 +382,7 @@ test.describe("exhaustive mixed-content View section matrix", () => {
     await expect(feedItem).toBeVisible();
   });
 
-  test("loads Saved Archived as one ordinary page across sections", async ({
-    page,
-  }) => {
+  test("collapses Saved Archived into one View section", async ({ page }) => {
     test.setTimeout(45_000);
     const fixture = await seedMixedViewSectionCase(
       SELF_HOSTED_TURSO_PORT,
@@ -398,16 +420,20 @@ test.describe("exhaustive mixed-content View section matrix", () => {
       .getByRole("radio", { name: fixture.viewName, exact: true })
       .click();
 
-    const feedSection = feedMain.locator("#section-0");
-    const tagSection = feedMain.locator("#section-1");
-    const archivedFeedItem = feedSection.locator(
-      `article[data-item-id="${fixture.items.feedSectionFeedItem}"]`,
-    );
-    const archivedBookmark = tagSection.locator(
-      `article[data-item-id="${fixture.items.tagSectionBookmark}"]`,
-    );
-    await expect(archivedFeedItem).toBeVisible({ timeout: 10_000 });
-    await expect(archivedBookmark).toBeVisible({ timeout: 10_000 });
+    const section = feedMain.locator("#section-0");
+    await expect(section).toBeVisible({ timeout: 10_000 });
+    await expect(feedMain.locator('[id^="section-"]')).toHaveCount(1);
+    await expect(
+      section.getByRole("heading", { name: fixture.viewName, exact: true }),
+    ).toBeVisible();
+    await expect
+      .poll(() => renderedItemIdsInOrder(section.locator("[data-item-id]")))
+      .toEqual(
+        [
+          fixture.items.feedSectionFeedItem,
+          fixture.items.tagSectionBookmark,
+        ].sort((leftId, rightId) => rightId.localeCompare(leftId)),
+      );
   });
 
   test("shows a feed item immediately after saving it and entering its View", async ({
@@ -515,7 +541,7 @@ test.describe("exhaustive mixed-content View section matrix", () => {
     await expect(targetItem).toBeVisible({ timeout: 5_000 });
   });
 
-  test("renders mixed Feed items and Bookmarks in configured sections in Archived", async ({
+  test("renders mixed Feed items and Bookmarks in one View section in Archived", async ({
     page,
   }) => {
     test.setTimeout(45_000);
@@ -551,24 +577,21 @@ test.describe("exhaustive mixed-content View section matrix", () => {
       .getByRole("radio", { name: fixture.viewName, exact: true })
       .click();
 
-    const expectedSectionItemIds = [
-      [fixture.items.feedSectionFeedItem],
-      [fixture.items.tagSectionFeedItem, fixture.items.tagSectionBookmark],
-      [
-        fixture.items.uncategorizedFeedItem,
+    const section = feedMain.locator("#section-0");
+    await expect(section).toBeVisible({ timeout: 30_000 });
+    await expect(feedMain.locator('[id^="section-"]')).toHaveCount(1);
+    await expect(
+      section.getByRole("heading", { name: fixture.viewName, exact: true }),
+    ).toBeVisible();
+    await expect
+      .poll(() => renderedItemIdsInOrder(section.locator("[data-item-id]")))
+      .toEqual([
+        fixture.items.feedSectionFeedItem,
         fixture.items.uncategorizedBookmark,
-      ],
-    ].map((ids) => ids.sort());
-    const sections = [0, 1, 2].map((sectionIndex) =>
-      feedMain.locator(`#section-${sectionIndex}`),
-    );
-
-    await expect(feedMain.locator('[id^="section-"]')).toHaveCount(3);
-    for (const [sectionIndex, section] of sections.entries()) {
-      await expect
-        .poll(() => renderedItemIds(section.locator("[data-item-id]")))
-        .toEqual(expectedSectionItemIds[sectionIndex]);
-    }
+        fixture.items.tagSectionFeedItem,
+        fixture.items.tagSectionBookmark,
+        fixture.items.uncategorizedFeedItem,
+      ]);
     await expect(
       feedMain.locator(`[data-item-id="${fixture.items.outsideFeedItem}"]`),
     ).toHaveCount(0);

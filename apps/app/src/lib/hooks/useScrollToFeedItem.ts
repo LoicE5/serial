@@ -26,11 +26,11 @@ export function getFirstRenderedFeedItemId() {
   );
 }
 
-function scrollFeedItemElementToTarget(
+export function scrollRootItemToTarget(
   element: Element,
   behavior: ScrollBehavior,
+  container: HTMLElement = getScrollContainer(),
 ) {
-  const container = getScrollContainer();
   const containerRect = container.getBoundingClientRect();
   const rect = element.getBoundingClientRect();
   const targetPosition =
@@ -57,7 +57,7 @@ export function useScrollToFeedItem() {
     lastScrollTimeRef.current = now;
 
     const behavior = forceInstant || isRapid ? "instant" : "smooth";
-    scrollFeedItemElementToTarget(element, behavior);
+    scrollRootItemToTarget(element, behavior);
     return true;
   }, []);
 }
