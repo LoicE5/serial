@@ -28,14 +28,17 @@ describe("Archived View section arrangement", () => {
           feedItemsById: {
             "feed-fallback": {
               isWatchedUpdatedAt: null,
+              isWatchLaterUpdatedAt: null,
               postedAt: time(2),
             },
             "feed-watched": {
               isWatchedUpdatedAt: time(3),
+              isWatchLaterUpdatedAt: null,
               postedAt: time(59),
             },
             "tie-a": {
               isWatchedUpdatedAt: time(1),
+              isWatchLaterUpdatedAt: null,
               postedAt: time(58),
             },
           },

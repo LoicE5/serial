@@ -17,6 +17,7 @@ import {
   contentStatusUsesSectionOrder,
   selectContentStatusOrderValue,
 } from "~/lib/content-status";
+import { selectFeedItemOrderCoordinate } from "~/lib/data/feed-items/orderCoordinate";
 import { contentFilterAllowsDescriptor } from "~/lib/views/contentFilter";
 import {
   compareDescendingIds,
@@ -360,17 +361,6 @@ export function matchesScope(
   );
 }
 
-function feedItemNormalizedAt(
-  item: ApplicationFeedItem,
-  contentStatus: ContentStatusFilter,
-) {
-  return selectContentStatusOrderValue(contentStatus, {
-    published: item.postedAt,
-    saved: item.isWatchLaterUpdatedAt ?? item.postedAt,
-    archived: item.isWatchedUpdatedAt ?? item.postedAt,
-  });
-}
-
 function bookmarkNormalizedAt(
   bookmark: ApplicationBookmark,
   contentStatus: ContentStatusFilter,
@@ -468,7 +458,7 @@ export function projectLocalMixedContentOrder(input: {
     entries.push({
       id,
       entityKind: "feed-item",
-      normalizedAt: feedItemNormalizedAt(item, contentStatus),
+      normalizedAt: selectFeedItemOrderCoordinate(contentStatus, item),
       sectionPlacement: usesGlobalEntityIdTieBreak
         ? 0
         : localSectionPlacement({

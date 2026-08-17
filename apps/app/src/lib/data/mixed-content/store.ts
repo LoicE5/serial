@@ -48,10 +48,8 @@ import type {
   MixedContentScope,
 } from "~/server/mixed-content/projection";
 import type { ContentStatusFilter } from "~/lib/content-status";
-import {
-  buildContentStatusKey,
-  selectContentStatusOrderValue,
-} from "~/lib/content-status";
+import { buildContentStatusKey } from "~/lib/content-status";
+import { selectFeedItemOrderCoordinate } from "~/lib/data/feed-items/orderCoordinate";
 
 export { getMixedScopeKey } from "./bookmarkProjection";
 export type { LoadedMixedScope } from "./page-retention";
@@ -96,11 +94,6 @@ function feedItemReference(input: {
   filterIndex: ReturnType<typeof createFeedItemFilterIndex>;
 }): MixedContentReference {
   const { item, contentStatus, view, filterIndex } = input;
-  const normalizedAt = selectContentStatusOrderValue(contentStatus, {
-    published: item.postedAt,
-    saved: item.isWatchLaterUpdatedAt ?? item.postedAt,
-    archived: item.isWatchedUpdatedAt ?? item.postedAt,
-  });
   return {
     entityKind: "feed-item",
     entityId: item.id,
@@ -112,7 +105,7 @@ function feedItemReference(input: {
       )
         ? null
         : (getItemSectionPlacement(item, view, filterIndex) ?? null),
-    normalizedAt,
+    normalizedAt: selectFeedItemOrderCoordinate(contentStatus, item),
   };
 }
 
