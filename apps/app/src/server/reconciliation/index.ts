@@ -478,15 +478,17 @@ async function* reconcileTargeted(input: {
       }),
     );
     if (!page.ok) {
+      const isViewCell = target.target.scope.type === "view";
       yield event(
         request.reconciliationId,
         failure({
-          phase: "load-active-scope",
+          phase: isViewCell ? "load-view-page" : "load-active-scope",
           domain: "active-scope",
           target: target.target,
           message: message(page.error),
         }),
       );
+      if (isViewCell) continue;
       return;
     }
     yield event(request.reconciliationId, {

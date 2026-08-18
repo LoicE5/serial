@@ -14,6 +14,7 @@ import { applyPublishedChunks } from "./subscriptionCoordinator";
 import { feedItemsStore } from "./store";
 import { viewFeedsStore } from "./view-feeds/store";
 import { viewsStore } from "./views/store";
+import { applyReconciliationFirstPage } from "./reconciliationPage";
 import {
   categoryFilterAtom,
   contentStatusFilterAtom,
@@ -23,7 +24,6 @@ import {
   viewFilterIdAtom,
 } from "./atoms";
 import type {
-  ActiveFirstPageResult,
   ReconciliationEntityManifestEntry,
   ReconciliationHydrationDomain,
   ReconciliationInput,
@@ -33,7 +33,6 @@ import type {
   ReconciliationTarget,
 } from "~/lib/reconciliation";
 import type { PublishedChunk } from "~/server/api/publisher";
-import type { ApplicationFeedItem } from "~/server/db/schema";
 import type { RssAttemptSummary, RssTrigger } from "~/lib/rss";
 import { orpcRouterClient } from "~/lib/orpc";
 import {
@@ -181,86 +180,6 @@ function buildInput(
         : { target: { type: "navigation" as const } };
     }),
   };
-}
-
-function removeFeedItem(id: string) {
-  const state = feedItemsStore.getState();
-  if (!state.feedItemsDict[id]) return;
-  const feedItemsDict = { ...state.feedItemsDict };
-  delete feedItemsDict[id];
-  feedItemsStore.setState({
-    feedItemsDict,
-    feedItemsOrder: state.feedItemsOrder.filter(
-      (candidate) => candidate !== id,
-    ),
-    scopeFeedItemIds: Object.fromEntries(
-      Object.entries(state.scopeFeedItemIds).map(([scopeKey, ids]) => [
-        scopeKey,
-        ids.filter((candidate) => candidate !== id),
-      ]),
-    ),
-    feedItemProjectionRevision: state.feedItemProjectionRevision + 1,
-  });
-}
-
-function applyActiveFirstPage(page: ActiveFirstPageResult) {
-  if (page.membershipRevision !== getFeedItemMembershipRevision()) return false;
-
-  const feedItemUpserts: ApplicationFeedItem[] = [];
-  for (const diff of page.feedItemDiffs) {
-    if (diff.status === "upsert") feedItemUpserts.push(diff.entity);
-    if (diff.status === "delete") removeFeedItem(diff.id);
-  }
-  const bookmarkUpserts = page.bookmarkDiffs.flatMap((diff) =>
-    diff.status === "upsert" ? [diff.entity] : [],
-  );
-  for (const diff of page.bookmarkDiffs) {
-    if (diff.status === "delete") bookmarksStore.getState().remove(diff.id);
-  }
-  feedItemsStore.getState().setFeedItems(feedItemUpserts);
-  bookmarksStore.getState().upsertMany(bookmarkUpserts);
-
-  const pageResult = mixedContentStore.getState().reconcileFirstPage({
-    scope: page.target.scope,
-    contentStatus: page.target.contentStatus,
-    page: {
-      references: page.orderedRefs,
-      feedItems: feedItemUpserts,
-      bookmarks: bookmarkUpserts,
-      cursor: page.cursor,
-      hasMore: page.hasMore,
-    },
-  });
-  if (pageResult.firstPageChanged) {
-    feedItemsStore.getState().retainFeedItemPage({
-      scopeKey: `mixed:${getMixedScopeKey(
-        page.target.scope,
-        page.target.contentStatus,
-      )}`,
-      itemIds: page.orderedRefs.flatMap((reference) =>
-        reference.entityKind === "feed-item" ? [reference.entityId] : [],
-      ),
-      requestCursor: null,
-      nextCursor: page.cursor,
-      replacesScope: true,
-    });
-  }
-  feedItemsStore.setState({ fetchFeedItemsLastFetchedAt: Date.now() });
-
-  const atoms = getDefaultStore();
-  if (
-    atoms.get(viewFilterIdAtom) === UNSELECTED_VIEW_ID &&
-    atoms.get(feedFilterAtom) < 0 &&
-    atoms.get(categoryFilterAtom) < 0 &&
-    page.target.scope.type === "view"
-  ) {
-    const view = viewsStore.getState().viewsDict[page.target.scope.viewId];
-    atoms.set(feedFilterAtom, -1);
-    atoms.set(categoryFilterAtom, -1);
-    if (view) atoms.set(dateFilterAtom, view.daysWindow);
-    atoms.set(viewFilterIdAtom, page.target.scope.viewId);
-  }
-  return true;
 }
 
 function performanceMark(name: string, reconciliationId?: string) {
@@ -437,7 +356,7 @@ const runtime = createReconciliationRuntime<PublishedChunk[]>({
         performanceMark("serial:reconciliation-organization-applied");
         return true;
       case "active-scope": {
-        const applied = applyActiveFirstPage(payload.page);
+        const applied = applyReconciliationFirstPage(payload.page);
         if (applied) {
           performanceMark("serial:reconciliation-active-scope-applied");
         }

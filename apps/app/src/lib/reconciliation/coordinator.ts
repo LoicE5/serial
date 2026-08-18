@@ -3,6 +3,7 @@ import {
   getReconciliationTargetKey,
   getRequiredTargetsForFullReconciliation,
   getTargetDomain,
+  MAX_TARGETED_RECONCILIATION_TARGETS,
   RECONCILIATION_HYDRATION_DOMAINS,
   REQUIRED_RECONCILIATION_DOMAINS,
 } from "./contracts";
@@ -14,6 +15,7 @@ import type {
   ReconciliationTarget,
   RequiredReconciliationDomain,
 } from "./contracts";
+import { DEFAULT_CONTENT_STATUS_FILTER } from "~/lib/content-status";
 
 export type ReconciliationTargetStatus =
   "unverified" | "syncing" | "verified" | "dirty";
@@ -243,17 +245,38 @@ function uniqueTargets(targets: readonly ReconciliationTarget[]) {
   ];
 }
 
-function mergeRequestIntents(
+function fullIntentFor<TAuthoritative, TLiveEvent>(
+  state: ReconciliationCoordinatorState<TAuthoritative, TLiveEvent>,
+): Extract<ReconciliationRequestIntent, { type: "full" }> {
+  return state.activeScope
+    ? { type: "full", selectedScope: state.activeScope }
+    : { type: "full", coldContentStatus: DEFAULT_CONTENT_STATUS_FILTER };
+}
+
+function boundedIntent<TAuthoritative, TLiveEvent>(
+  state: ReconciliationCoordinatorState<TAuthoritative, TLiveEvent>,
+  intent: ReconciliationRequestIntent,
+): ReconciliationRequestIntent {
+  if (intent.type === "full") return intent;
+  const targets = uniqueTargets(intent.targets);
+  return targets.length > MAX_TARGETED_RECONCILIATION_TARGETS
+    ? fullIntentFor(state)
+    : { type: "targeted", targets };
+}
+
+function mergeRequestIntents<TAuthoritative, TLiveEvent>(
+  state: ReconciliationCoordinatorState<TAuthoritative, TLiveEvent>,
   current: ReconciliationRequestIntent | null,
   incoming: ReconciliationRequestIntent,
 ): ReconciliationRequestIntent {
+  incoming = boundedIntent(state, incoming);
   if (!current) return incoming;
   if (incoming.type === "full") return incoming;
   if (current.type === "full") return current;
-  return {
+  return boundedIntent(state, {
     type: "targeted",
     targets: uniqueTargets([...current.targets, ...incoming.targets]),
-  };
+  });
 }
 
 function targetState(
@@ -361,11 +384,11 @@ function enqueueRequest<TAuthoritative, TLiveEvent>(
   state: ReconciliationCoordinatorState<TAuthoritative, TLiveEvent>,
   intent: ReconciliationRequestIntent,
 ): ReconciliationCoordinatorTransition<TAuthoritative, TLiveEvent> {
-  if (!state.inFlight) return startRequest(state, intent);
+  if (!state.inFlight) return startRequest(state, boundedIntent(state, intent));
   return {
     state: withDerivedTrust({
       ...state,
-      trailingIntent: mergeRequestIntents(state.trailingIntent, intent),
+      trailingIntent: mergeRequestIntents(state, state.trailingIntent, intent),
     }),
     commands: [],
   };

@@ -58,6 +58,21 @@ pnpm benchmark:app:gate
 `benchmark:app:gate` exits nonzero for any latency or structural failure. The
 same calculation is used for local, scheduled, and production-like artifacts.
 
+For the startup View first-page matrix, run the dedicated stress gate:
+
+```sh
+pnpm benchmark:view-matrix:gate
+```
+
+It pairs the resolved page builder used by reconciliation with ordinary
+`queryMixedContentPage` calls for per-page latency, and separately interleaves
+the end-to-end reconciliation stream with the ordinary 26-View/104-cell matrix.
+Both comparisons enforce the 1.5× median and p95 limits. The gate then applies
+the emitted chunks through the production client page reducer and enforces a
+50 ms maximum incremental task, 32 MiB startup heap growth, and 32 MiB
+serialized normalized persisted state. Its generated JSON is written under the
+ignored `benchmarks/results/` directory.
+
 ## Fixtures and paired method
 
 The generator is deterministic apart from its isolated user ID. Every profile

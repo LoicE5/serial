@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createBookmarkTestDatabase } from "../bookmarks/database";
 import type { ReconciliationInput } from "~/lib/reconciliation";
 import { getFeedItemReconciliationVersion } from "~/lib/reconciliation";
@@ -12,6 +12,17 @@ import {
   views,
 } from "~/server/db/schema";
 import { reconcileApplicationState } from "~/server/reconciliation";
+import * as mixedContentProjection from "~/server/mixed-content/projection";
+
+type MixedContentProjectionModule = typeof mixedContentProjection;
+
+vi.mock("~/server/mixed-content/projection", async (importOriginal) => {
+  const original = await importOriginal<MixedContentProjectionModule>();
+  return {
+    ...original,
+    queryMixedContentPage: vi.fn(original.queryMixedContentPage),
+  };
+});
 
 type TestDatabase = Awaited<
   ReturnType<typeof createBookmarkTestDatabase>
@@ -26,6 +37,12 @@ let database: TestDatabase;
 let cleanup: Cleanup;
 
 beforeEach(async () => {
+  const original = await vi.importActual<MixedContentProjectionModule>(
+    "~/server/mixed-content/projection",
+  );
+  vi.mocked(mixedContentProjection.queryMixedContentPage).mockImplementation(
+    original.queryMixedContentPage,
+  );
   ({ database, cleanup } = await createBookmarkTestDatabase());
   await database.insert(user).values({
     id: "reconciliation-user",
@@ -52,6 +69,71 @@ async function collect(request: ReconciliationInput) {
 }
 
 describe("server reconciliation", () => {
+  it("continues targeted View repairs after one page fails", async () => {
+    await database.insert(views).values(
+      [10, 11, 12].map((id, placement) => ({
+        id,
+        userId: "reconciliation-user",
+        name: `View ${id}`,
+        contentFilter: 3,
+        placement,
+      })),
+    );
+    const original = await vi.importActual<MixedContentProjectionModule>(
+      "~/server/mixed-content/projection",
+    );
+    vi.mocked(mixedContentProjection.queryMixedContentPage).mockImplementation(
+      async (input) => {
+        if (input.scope.type === "view" && input.scope.viewId === 11) {
+          throw new Error("temporary View 11 failure");
+        }
+        return original.queryMixedContentPage(input);
+      },
+    );
+
+    const targets = [10, 11, 12].map((viewId) => ({
+      target: {
+        type: "scope" as const,
+        scope: { type: "view" as const, viewId },
+        contentStatus: {
+          saveStatus: "inbox" as const,
+          archiveStatus: "unread" as const,
+        },
+      },
+      pageManifest: { feedItems: [], bookmarks: [] },
+      membershipRevision: 4,
+    }));
+    const events = await collect({
+      type: "targeted",
+      reconciliationId: "partial-targeted-repair",
+      targets,
+    });
+
+    expect(
+      events.flatMap(({ chunk }) =>
+        chunk.type === "active-first-page" &&
+        chunk.page.target.scope.type === "view"
+          ? [chunk.page.target.scope.viewId]
+          : [],
+      ),
+    ).toEqual([10, 12]);
+    expect(
+      events.find(({ chunk }) => chunk.type === "domain-error")?.chunk,
+    ).toEqual({
+      type: "domain-error",
+      failure: {
+        phase: "load-view-page",
+        domain: "active-scope",
+        target: targets[1]?.target,
+        message: "temporary View 11 failure",
+      },
+    });
+    expect(events.at(-1)?.chunk).toEqual({
+      type: "epoch-complete",
+      requiredDomains: ["active-scope"],
+    });
+  });
+
   it("returns authoritative membership while omitting an unchanged entity body", async () => {
     await database.insert(views).values({
       id: 10,
