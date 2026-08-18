@@ -5,6 +5,7 @@ import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { getDefaultStore } from "jotai";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ApplicationView } from "~/server/db/schema";
 import { InitialClientQueries } from "~/lib/data/InitialClientQueries";
 import { ViewFilterChips } from "~/components/feed/ViewFilterChips";
 import {
@@ -17,7 +18,6 @@ import {
 } from "~/lib/data/atoms";
 import { viewsStore } from "~/lib/data/views/store";
 import { mixedContentStore } from "~/lib/data/mixed-content/store";
-import type { ApplicationView } from "~/server/db/schema";
 
 const reconciliationMocks = vi.hoisted(() => ({
   activateScope: vi.fn(),
