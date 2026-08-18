@@ -32,22 +32,20 @@ export function useUpdateViewFilter() {
   const setDateFilter = useSetAtom(dateFilterAtom);
   const setCategoryFilter = useSetAtom(categoryFilterAtom);
 
-  const updateViewFilter = (
-    viewId: number,
-    updatedViews?: ApplicationView[],
-  ) => {
-    const _views = updatedViews ?? views;
-    const view = _views.find((v) => v.id === viewId);
+  return useCallback(
+    (viewId: number, updatedViews?: ApplicationView[]) => {
+      const _views = updatedViews ?? views;
+      const view = _views.find((v) => v.id === viewId);
 
-    if (!view) return;
+      if (!view) return;
 
-    setFeedFilter(-1);
-    setCategoryFilter(-1);
-    setDateFilter(view.daysWindow);
-    setViewFilter(view.id);
-  };
-
-  return updateViewFilter;
+      setFeedFilter(-1);
+      setCategoryFilter(-1);
+      setDateFilter(view.daysWindow);
+      setViewFilter(view.id);
+    },
+    [setCategoryFilter, setDateFilter, setFeedFilter, setViewFilter, views],
+  );
 }
 
 export function useViews() {

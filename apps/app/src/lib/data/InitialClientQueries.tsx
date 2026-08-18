@@ -12,6 +12,8 @@ import {
 
 import { useDataSubscription } from "./useDataSubscription";
 import { useViewsFetchStatus, useViews as useViewsStore } from "./views/store";
+import { useUpdateViewFilter } from "./views";
+import { resolveStartupViewSelection } from "./startupViewSelection";
 import {
   dataReconciliation,
   getCurrentReconciliationTarget,
@@ -30,6 +32,7 @@ export function InitialClientQueries({ children }: PropsWithChildren) {
   const feedFilter = useAtomValue(feedFilterAtom);
   const categoryFilter = useAtomValue(categoryFilterAtom);
   const contentStatusFilter = useAtomValue(contentStatusFilterAtom);
+  const updateViewFilter = useUpdateViewFilter();
 
   useEffect(() => {
     dataReconciliation.start();
@@ -40,8 +43,25 @@ export function InitialClientQueries({ children }: PropsWithChildren) {
   useEffect(() => {
     if (viewsFetchStatus === "success" && viewsFromStore.length > 0) {
       setViewsAtom(viewsFromStore);
+      const startupView = resolveStartupViewSelection({
+        views: viewsFromStore,
+        viewId: viewFilterId,
+        feedId: feedFilter,
+        tagId: categoryFilter,
+      });
+      if (startupView) {
+        updateViewFilter(startupView.id, viewsFromStore);
+      }
     }
-  }, [viewsFetchStatus, viewsFromStore, setViewsAtom]);
+  }, [
+    categoryFilter,
+    feedFilter,
+    setViewsAtom,
+    updateViewFilter,
+    viewFilterId,
+    viewsFetchStatus,
+    viewsFromStore,
+  ]);
 
   useEffect(() => {
     const target = getCurrentReconciliationTarget();
