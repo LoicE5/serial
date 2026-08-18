@@ -49,6 +49,7 @@ type FullEpoch = {
   intent: Extract<ReconciliationRequestIntent, { type: "full" }>;
   selectedScope: ReconciliationScopeTarget | null;
   requiredTargetKeys: string[];
+  failedTargetKeys: string[];
   completed: boolean;
   established: boolean;
 };
@@ -168,6 +169,7 @@ export type ReconciliationCoordinatorEvent<TAuthoritative, TLiveEvent> =
       at: number;
       failed?: boolean;
       failedTargets?: ReconciliationTarget[];
+      epochComplete?: boolean;
     }
   | {
       type: "automatic-rss-owner-resolved";
@@ -368,6 +370,7 @@ function startRequest<TAuthoritative, TLiveEvent>(
         intent,
         selectedScope: "selectedScope" in intent ? intent.selectedScope : null,
         requiredTargetKeys: targets.map(getReconciliationTargetKey),
+        failedTargetKeys: [],
         completed: false,
         established: false,
       },
@@ -576,7 +579,9 @@ function fullEpochIsApplied<TAuthoritative, TLiveEvent>(
   state: ReconciliationCoordinatorState<TAuthoritative, TLiveEvent>,
 ) {
   const fullEpoch = state.latestFullEpoch;
-  if (!fullEpoch?.completed) return false;
+  if (!fullEpoch?.completed || fullEpoch.failedTargetKeys.length > 0) {
+    return false;
+  }
   return (
     REQUIRED_RECONCILIATION_DOMAINS.every(
       (domain) => state.domains[domain].status === "verified",
@@ -828,6 +833,10 @@ export function transitionReconciliation<TAuthoritative, TLiveEvent>(
     }
     case "request-settled": {
       let nextState = state;
+      let mayEstablishFullParity = false;
+      const failedTargetKeys = new Set(
+        event.failedTargets?.map(getReconciliationTargetKey) ?? [],
+      );
       if (event.failedTargets && event.failedTargets.length > 0) {
         for (const target of event.failedTargets) {
           nextState = bindFullScopeTarget(
@@ -841,19 +850,49 @@ export function transitionReconciliation<TAuthoritative, TLiveEvent>(
       if (
         nextState.latestFullEpoch?.reconciliationId ===
           event.reconciliationId &&
-        event.failed !== true &&
-        (!event.failedTargets || event.failedTargets.length === 0)
+        event.epochComplete === true
       ) {
-        nextState = withEstablishedFullParity(
-          {
-            ...nextState,
-            latestFullEpoch: {
-              ...nextState.latestFullEpoch,
-              completed: true,
-            },
+        nextState = {
+          ...nextState,
+          latestFullEpoch: {
+            ...nextState.latestFullEpoch,
+            failedTargetKeys: [...failedTargetKeys],
+            completed: true,
           },
-          event.at,
+        };
+        mayEstablishFullParity = true;
+      } else if (
+        event.epochComplete === true &&
+        nextState.latestFullEpoch?.completed &&
+        nextState.latestFullEpoch.failedTargetKeys.length > 0
+      ) {
+        const request = nextState.requests[event.reconciliationId];
+        const repairedTargetKeys = new Set(
+          request?.targets
+            .filter((target) => {
+              const targetKey = getReconciliationTargetKey(target);
+              const current = nextState.targets[targetKey];
+              return (
+                !failedTargetKeys.has(targetKey) &&
+                current?.status === "verified" &&
+                current.appliedReconciliationId === event.reconciliationId
+              );
+            })
+            .map(getReconciliationTargetKey) ?? [],
         );
+        nextState = {
+          ...nextState,
+          latestFullEpoch: {
+            ...nextState.latestFullEpoch,
+            failedTargetKeys: nextState.latestFullEpoch.failedTargetKeys.filter(
+              (targetKey) => !repairedTargetKeys.has(targetKey),
+            ),
+          },
+        };
+        mayEstablishFullParity = repairedTargetKeys.size > 0;
+      }
+      if (mayEstablishFullParity) {
+        nextState = withEstablishedFullParity(nextState, event.at);
       }
       if (nextState.inFlight?.reconciliationId !== event.reconciliationId) {
         return { state: withDerivedTrust(nextState), commands: [] };

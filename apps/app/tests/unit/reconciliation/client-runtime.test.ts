@@ -94,18 +94,22 @@ function completeEpoch(reconciliationId: string): ReconciliationStreamEvent[] {
 
 function completeTargetedScope(
   reconciliationId: string,
+  target: ReconciliationScopeTarget = ACTIVE_SCOPE,
 ): ReconciliationStreamEvent[] {
   return [
     {
       reconciliationId,
-      chunk: { type: "active-first-page", page: PAGE },
+      chunk: {
+        type: "active-first-page",
+        page: { ...PAGE, target },
+      },
     },
     {
       reconciliationId,
       chunk: {
         type: "domain-complete",
         domain: "active-scope",
-        target: ACTIVE_SCOPE,
+        target,
       },
     },
     {
@@ -346,6 +350,59 @@ describe("client reconciliation runtime", () => {
 
     test.runtime.stop();
     vi.useRealTimers();
+  });
+
+  it("restores full parity after a failed View cell succeeds on retry", async () => {
+    vi.useFakeTimers();
+    const test = harness((request) => {
+      if (request.intent.type === "targeted") {
+        return completeTargetedScope(
+          request.reconciliationId,
+          INACTIVE_VIEW_SCOPE,
+        );
+      }
+      const events = completeEpoch(request.reconciliationId);
+      events.splice(4, 0, {
+        reconciliationId: request.reconciliationId,
+        chunk: {
+          type: "domain-error",
+          failure: {
+            phase: "load-view-page",
+            domain: "active-scope",
+            target: INACTIVE_VIEW_SCOPE,
+            message: "temporary View page failure",
+          },
+        },
+      });
+      return events;
+    });
+    try {
+      hydrate(test.runtime);
+      test.runtime.cacheUsable();
+      test.runtime.sseConnectionChanged(true);
+      test.runtime.start();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(test.runtime.getState().serverParityAppliedAt).toBeNull();
+      expect(test.runtime.getState().retryPending).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(test.requests).toHaveLength(2);
+      expect(test.requests[1]?.intent).toEqual({
+        type: "targeted",
+        targets: [INACTIVE_VIEW_SCOPE],
+      });
+      expect(
+        test.runtime.getState().targets[
+          getReconciliationTargetKey(INACTIVE_VIEW_SCOPE)
+        ]?.status,
+      ).toBe("verified");
+      expect(test.runtime.getState().serverParityAppliedAt).not.toBeNull();
+    } finally {
+      test.runtime.stop();
+      vi.useRealTimers();
+    }
   });
 
   it("runs one follow-up full request when the first SSE connection is late", async () => {

@@ -453,6 +453,7 @@ export function createReconciliationRuntime<TLiveEvent>(
               failed: failedTargets.length > 0,
               failedTargets:
                 failedTargets.length > 0 ? failedTargets : undefined,
+              epochComplete: true,
             });
             if (failedTargets.length > 0) {
               scheduleRetry(retryIntentForFailure(failedTargets));

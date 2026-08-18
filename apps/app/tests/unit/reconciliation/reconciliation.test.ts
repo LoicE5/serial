@@ -255,6 +255,7 @@ describe("reconciliation coordinator", () => {
       type: "request-settled",
       reconciliationId: request.reconciliationId,
       at: 6,
+      epochComplete: true,
     });
     expect(harness.state.serverParityAppliedAt).toBe(6);
     expect(harness.state.trustedUpToDate).toBe(false);
@@ -303,6 +304,7 @@ describe("reconciliation coordinator", () => {
       reconciliationId: request.reconciliationId,
       at: 3,
       failedTargets: [NAVIGATION],
+      epochComplete: true,
     });
 
     expect(commands).toEqual([]);
