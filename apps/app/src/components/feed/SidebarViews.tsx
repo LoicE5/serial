@@ -46,14 +46,13 @@ import {
   calculateViewsPlacement,
   useUpdateViewsPlacementMutation,
 } from "~/lib/data/views/mutations";
-import {
-  getNavigationAvailability,
-  useNavigationSnapshot,
-  useNavigationSnapshotStatus,
-} from "~/lib/data/navigation/store";
+import { useNavigationSnapshotStatus } from "~/lib/data/navigation/store";
 import { Skeleton } from "~/components/ui/skeleton";
 import { useSetViews } from "~/lib/data/views/store";
-import { isContentStatusAvailable } from "~/lib/content-status";
+import {
+  getViewContentAvailability,
+  mixedContentStore,
+} from "~/lib/data/mixed-content/store";
 
 type ViewOption = ApplicationView & { hasEntries: boolean };
 
@@ -135,21 +134,22 @@ export function SidebarViews() {
 
   const launchDialog = useDialogStore((store) => store.launchDialog);
   const { views } = useViews();
-  const navigationSnapshot = useNavigationSnapshot();
   const navigationSnapshotStatus = useNavigationSnapshotStatus();
+  const mixedScopes = mixedContentStore.useScopes();
   const contentStatusFilter = useAtomValue(contentStatusFilterAtom);
   const setViews = useSetViews();
 
   const { mutateAsync: updateViewsPlacement } =
     useUpdateViewsPlacementMutation();
 
-  const viewOptions = views.map((view) => ({
+  const availability = views.map((view) =>
+    getViewContentAvailability(mixedScopes, view.id, contentStatusFilter),
+  );
+  const viewOptions = views.map((view, index) => ({
     ...view,
-    hasEntries: isContentStatusAvailable(
-      getNavigationAvailability(navigationSnapshot.views, view.id),
-      contentStatusFilter,
-    ),
+    hasEntries: availability[index] ?? false,
   }));
+  const viewPagesReady = availability.every((value) => value !== undefined);
 
   function handleDragEnd(event: DragEndEvent) {
     const { active, over } = event;
@@ -189,7 +189,7 @@ export function SidebarViews() {
           </div>
         </SidebarGroupLabel>
         <SidebarMenu>
-          {navigationSnapshotStatus !== "success" ? (
+          {navigationSnapshotStatus !== "success" || !viewPagesReady ? (
             <div className="flex flex-col items-center gap-4 px-2 py-2">
               {Array.from({ length: 5 }, (_, index) => (
                 <Skeleton className="h-8 w-full" key={index} />

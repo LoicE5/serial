@@ -4,14 +4,12 @@ import { createSelectorHooks } from "../createSelectorHooks";
 import { createIDBStorage } from "../idb-storage";
 import { sortViewsByPlacement } from "./utils";
 import type { ApplicationView } from "~/server/db/schema";
-import type { NavigationAvailability } from "~/server/navigation/snapshot";
 import { orpcRouterClient } from "~/lib/orpc";
 
 export type ViewsStore = {
   reset: () => void;
   views: ApplicationView[];
   viewsDict: Record<number, ApplicationView>;
-  viewAvailability: Record<number, NavigationAvailability>;
   fetchStatus: "idle" | "fetching" | "success";
   fetch: () => Promise<void>;
   set: (views: ApplicationView[]) => void;
@@ -19,15 +17,9 @@ export type ViewsStore = {
   update: (id: number, view: Partial<ApplicationView>) => void;
   remove: (id: number) => void;
   removeFeedReferences: (feedIds: number[]) => void;
-  setViewAvailability: (
-    availability: Record<number, NavigationAvailability>,
-  ) => void;
 };
 
-export type PersistedViewsState = Pick<
-  ViewsStore,
-  "views" | "viewsDict" | "viewAvailability"
->;
+export type PersistedViewsState = Pick<ViewsStore, "views" | "viewsDict">;
 
 export function removeFeedReferencesFromViews(
   views: ApplicationView[],
@@ -49,12 +41,10 @@ export const viewsStoreApi = createStore<ViewsStore>()(
         set({
           views: [],
           viewsDict: {},
-          viewAvailability: {},
           fetchStatus: "idle",
         }),
       views: [],
       viewsDict: {},
-      viewAvailability: {},
       fetchStatus: "idle",
 
       fetch: async () => {
@@ -145,18 +135,14 @@ export const viewsStoreApi = createStore<ViewsStore>()(
 
         set({ views: updatedViews, viewsDict });
       },
-      setViewAvailability: (viewAvailability) => {
-        set({ viewAvailability });
-      },
     }),
     {
       name: "serial-views-store",
       storage: createIDBStorage<PersistedViewsState>(),
-      version: 1,
+      version: 2,
       partialize: (state) => ({
         views: state.views,
         viewsDict: state.viewsDict,
-        viewAvailability: state.viewAvailability,
       }),
       merge: (persistedState, currentState) => {
         const merged = {
@@ -179,6 +165,5 @@ export const {
   useFetchStatus: useViewsFetchStatus,
   useFetch: useFetchViews,
   useSet: useSetViews,
-  useViewAvailability,
   useRemoveFeedReferences,
 } = viewsStore;

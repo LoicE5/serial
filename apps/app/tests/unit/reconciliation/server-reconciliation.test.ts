@@ -187,11 +187,11 @@ describe("server reconciliation", () => {
       },
     });
 
-    expect(events.map(({ chunk }) => chunk.type)).toEqual([
+    expect(events.slice(0, 2).map(({ chunk }) => chunk.type)).toEqual([
       "organization-snapshot",
       "domain-complete",
-      "active-first-page",
-      "domain-complete",
+    ]);
+    expect(events.slice(-4).map(({ chunk }) => chunk.type)).toEqual([
       "automatic-rss-owner",
       "navigation-snapshot",
       "domain-complete",
@@ -215,6 +215,18 @@ describe("server reconciliation", () => {
       feedIds: [20],
     });
 
+    const viewPages = events.flatMap(({ chunk }) =>
+      chunk.type === "active-first-page" ? [chunk.page] : [],
+    );
+    expect(viewPages).toHaveLength(8);
+    expect(
+      new Set(
+        viewPages.map(
+          ({ target }) =>
+            `${target.scope.type === "view" ? target.scope.viewId : "other"}:${target.contentStatus.saveStatus}:${target.contentStatus.archiveStatus}`,
+        ),
+      ).size,
+    ).toBe(8);
     const activePage = events.find(
       ({ chunk }) => chunk.type === "active-first-page",
     );

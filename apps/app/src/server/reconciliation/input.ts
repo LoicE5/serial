@@ -1,8 +1,8 @@
 import { z } from "zod";
 import { ITEMS_PER_PAGE } from "~/server/api/constants";
 import { contentStatusFilterSchema } from "~/lib/content-status";
+import { MAX_TARGETED_RECONCILIATION_TARGETS } from "~/lib/reconciliation";
 
-export const MAX_RECONCILIATION_TARGETS = 16;
 export const RECONCILIATION_REQUEST_BUDGET_BYTES = 128 * 1_024;
 
 const reconciliationIdSchema = z
@@ -76,7 +76,7 @@ export const reconciliationInputSchema = z
     z.object({
       type: z.literal("targeted"),
       reconciliationId: reconciliationIdSchema,
-      targets: z.array(targetSchema).max(MAX_RECONCILIATION_TARGETS),
+      targets: z.array(targetSchema).max(MAX_TARGETED_RECONCILIATION_TARGETS),
     }),
   ])
   .refine(

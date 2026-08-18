@@ -54,6 +54,16 @@ import { selectFeedItemOrderCoordinate } from "~/lib/data/feed-items/orderCoordi
 export { getMixedScopeKey } from "./bookmarkProjection";
 export type { LoadedMixedScope } from "./page-retention";
 
+export function getViewContentAvailability(
+  scopes: Record<string, LoadedMixedScope>,
+  viewId: number,
+  contentStatus: ContentStatusFilter,
+) {
+  const scope =
+    scopes[getMixedScopeKey({ type: "view", viewId }, contentStatus)];
+  return scope ? scope.references.length > 0 : undefined;
+}
+
 type MixedContentStore = {
   scopes: Record<string, LoadedMixedScope>;
   fetchingScopes: Record<string, boolean>;

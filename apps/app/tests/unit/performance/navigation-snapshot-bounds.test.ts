@@ -5,7 +5,6 @@ import {
   openBenchmarkDatabase,
 } from "../../../scripts/performance/database";
 import { seedBenchmarkFixture } from "../../../scripts/performance/fixtures";
-import { evaluateNavigationViewAvailabilityPlan } from "../../../scripts/performance/navigation-plan";
 import type { BenchmarkProfileName } from "../../../scripts/performance/model";
 import { queryNavigationSnapshot } from "~/server/navigation/snapshot";
 
@@ -21,7 +20,7 @@ afterEach(() => {
 });
 
 describe("navigation snapshot performance bounds", () => {
-  it("uses indexed membership-first plans for custom-View Feed availability", async () => {
+  it("does not materialize the removed View availability projection", async () => {
     const target = createLocalBenchmarkTarget();
     const session = openBenchmarkDatabase({ url: target.url });
     targets.push(target);
@@ -38,21 +37,14 @@ describe("navigation snapshot performance bounds", () => {
       database: session.database,
       userId: "navigation-plan",
     });
-    const viewAvailabilitySql =
-      session.instrumentation.snapshot().statements[0]!.sql;
-    const plan = await session.baseClient.execute({
-      sql: `EXPLAIN QUERY PLAN ${viewAvailabilitySql}`,
-      args: Array.from(
-        { length: viewAvailabilitySql.match(/\?/g)?.length ?? 0 },
-        () => null,
-      ),
-    });
-    const planDetails = plan.rows.map((row) => String(row.detail));
+    const evidence = session.instrumentation.snapshot();
 
-    expect(evaluateNavigationViewAvailabilityPlan(planDetails)).toEqual({
-      membershipFirst: true,
-      missingIndexScans: [],
-    });
+    expect(evidence.statementCount).toBe(5);
+    expect(
+      evidence.statements.some(({ sql }) =>
+        sql.includes("serial_bookmark_view"),
+      ),
+    ).toBe(false);
   });
 
   it.each<BenchmarkProfileName>(["small", "representative", "stress"])(
@@ -76,18 +68,20 @@ describe("navigation snapshot performance bounds", () => {
       });
       const evidence = session.instrumentation.snapshot();
       const navigationEntityCount =
-        Object.keys(snapshot.views).length +
-        Object.keys(snapshot.tags).length +
-        Object.keys(snapshot.feeds).length;
+        Object.keys(snapshot.tags).length + Object.keys(snapshot.feeds).length;
+      const customViewCount = Math.max(
+        0,
+        Object.keys(snapshot.viewFeeds).length - 1,
+      );
       const viewFeedMembershipCount = Object.values(snapshot.viewFeeds).reduce(
         (count, feedAvailability) =>
           count + Object.keys(feedAvailability).length,
         0,
       );
 
-      expect(evidence.statementCount).toBe(6);
+      expect(evidence.statementCount).toBe(5);
       expect(evidence.materializedRows).toBe(
-        navigationEntityCount + viewFeedMembershipCount,
+        navigationEntityCount + customViewCount + viewFeedMembershipCount,
       );
       expect(Buffer.byteLength(JSON.stringify(snapshot))).toBeLessThanOrEqual(
         (navigationEntityCount + viewFeedMembershipCount) * 128,
@@ -116,24 +110,8 @@ describe("navigation snapshot performance bounds", () => {
     });
     const evidence = session.instrumentation.snapshot();
 
-    expect(evidence.statementCount).toBe(6);
-    expect(Object.values(snapshot.views)).toEqual(
-      expect.arrayContaining([
-        {
-          inbox: { unread: true, archived: false },
-          saved: { unread: false, archived: false },
-        },
-      ]),
-    );
-    expect(Object.values(snapshot.views)).toHaveLength(26);
-    expect(
-      Object.values(snapshot.views).every(
-        (availability) =>
-          availability.inbox.unread &&
-          !availability.inbox.archived &&
-          !availability.saved.unread &&
-          !availability.saved.archived,
-      ),
-    ).toBe(true);
+    expect(evidence.statementCount).toBe(5);
+    expect(snapshot).not.toHaveProperty("views");
+    expect(Object.keys(snapshot.viewFeeds)).toHaveLength(26);
   }, 30_000);
 });

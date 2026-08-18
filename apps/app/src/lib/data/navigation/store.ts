@@ -1,6 +1,5 @@
 import { createStore } from "zustand";
 import { createSelectorHooks } from "../createSelectorHooks";
-import { viewsStore } from "../views/store";
 import type {
   NavigationAvailability,
   NavigationSnapshot,
@@ -14,7 +13,6 @@ const EMPTY_CONTENT_AVAILABILITY: ContentAvailability = {
 };
 
 const EMPTY_SNAPSHOT: NavigationSnapshot = {
-  views: {},
   tags: {},
   feeds: {},
   viewFeeds: {},
@@ -42,7 +40,6 @@ const vanillaNavigationSnapshotStore = createStore<NavigationSnapshotStore>()(
       set({ snapshot: EMPTY_SNAPSHOT, fetchStatus: "idle" });
     },
     set: (snapshot) => {
-      viewsStore.getState().setViewAvailability(snapshot.views);
       set({ snapshot, fetchStatus: "success" });
     },
     fetch: async () => {

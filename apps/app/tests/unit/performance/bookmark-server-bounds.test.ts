@@ -76,7 +76,7 @@ function bookmarkRows(count: number, userId = "bounds-user") {
 }
 
 describe("Bookmark server performance bounds", () => {
-  it("keeps a full reconciliation to one active page as content grows", async () => {
+  it("keeps the full View matrix bounded as content grows", async () => {
     await session.database.insert(views).values({
       id: 10,
       userId: "bounds-user",
@@ -146,7 +146,10 @@ describe("Bookmark server performance bounds", () => {
       active.chunk.page.feedItemDiffs.length +
         active.chunk.page.bookmarkDiffs.length,
     ).toBe(30);
-    expect(evidence.statementCount).toBeLessThanOrEqual(24);
+    expect(
+      events.filter(({ chunk }) => chunk.type === "active-first-page"),
+    ).toHaveLength(8);
+    expect(evidence.statementCount).toBeLessThanOrEqual(30);
     expect(evidence.materializedRows).toBeLessThanOrEqual(180);
     expect(Buffer.byteLength(JSON.stringify(events))).toBeLessThanOrEqual(
       256 * 1_024,

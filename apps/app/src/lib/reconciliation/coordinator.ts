@@ -378,7 +378,7 @@ function repairIntentFor<TAuthoritative, TLiveEvent>(
   return { type: "targeted", targets: uniqueTargets(targets) };
 }
 
-function bindColdFullScope<TAuthoritative, TLiveEvent>(
+function bindFullScopeTarget<TAuthoritative, TLiveEvent>(
   state: ReconciliationCoordinatorState<TAuthoritative, TLiveEvent>,
   reconciliationId: string,
   target: ReconciliationTarget,
@@ -387,7 +387,6 @@ function bindColdFullScope<TAuthoritative, TLiveEvent>(
   const request = state.requests[reconciliationId];
   if (
     request?.intent.type !== "full" ||
-    "selectedScope" in request.intent ||
     request.targets.some(
       (candidate) =>
         getReconciliationTargetKey(candidate) ===
@@ -407,9 +406,11 @@ function bindColdFullScope<TAuthoritative, TLiveEvent>(
       [targetKey]: currentTarget.revision,
     },
   };
+  const activatesColdSelection =
+    !("selectedScope" in request.intent) && state.activeScope === null;
   let nextState: ReconciliationCoordinatorState<TAuthoritative, TLiveEvent> = {
     ...state,
-    activeScope: target,
+    activeScope: activatesColdSelection ? target : state.activeScope,
   };
   nextState = withTargetState(nextState, {
     ...currentTarget,
@@ -423,7 +424,9 @@ function bindColdFullScope<TAuthoritative, TLiveEvent>(
       nextState.latestFullEpoch?.reconciliationId === reconciliationId
         ? {
             ...nextState.latestFullEpoch,
-            selectedScope: target,
+            selectedScope: activatesColdSelection
+              ? target
+              : nextState.latestFullEpoch.selectedScope,
             requiredTargetKeys: [
               ...nextState.latestFullEpoch.requiredTargetKeys,
               targetKey,
@@ -683,7 +686,7 @@ export function transitionReconciliation<TAuthoritative, TLiveEvent>(
         commands: [],
       };
     case "authoritative-received": {
-      state = bindColdFullScope(state, event.reconciliationId, event.target);
+      state = bindFullScopeTarget(state, event.reconciliationId, event.target);
       if (
         !requestRevisionIsCurrent(state, event.reconciliationId, event.target)
       ) {
@@ -804,7 +807,7 @@ export function transitionReconciliation<TAuthoritative, TLiveEvent>(
       let nextState = state;
       if (event.failedTargets && event.failedTargets.length > 0) {
         for (const target of event.failedTargets) {
-          nextState = bindColdFullScope(
+          nextState = bindFullScopeTarget(
             nextState,
             event.reconciliationId,
             target,

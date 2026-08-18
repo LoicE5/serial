@@ -60,7 +60,7 @@ test.describe("Bookmark mixed-content synchronization", () => {
     if (testEmail) await cleanupUser(SELF_HOSTED_TURSO_PORT, testEmail);
   });
 
-  test("hydrates only the first View's Inbox scope on cold startup", async ({
+  test("hydrates every View content-status scope on cold startup", async ({
     page,
   }) => {
     const { email, password, feedItemId } = await seedArticleData(
@@ -78,8 +78,19 @@ test.describe("Bookmark mixed-content synchronization", () => {
 
     const mixedScopePrefix =
       "serial-mixed-content-store-v2::normalized:v1::record:scopes:";
-    const initialScopeKey =
-      mixedScopePrefix + encodeURIComponent(`view:${viewId}:inbox:unread`);
+    const expectedScopeKeys = [-1, viewId]
+      .flatMap((candidateViewId) =>
+        ["inbox", "saved"].flatMap((collection) =>
+          ["unread", "archived"].map(
+            (readStatus) =>
+              mixedScopePrefix +
+              encodeURIComponent(
+                `view:${candidateViewId}:${collection}:${readStatus}`,
+              ),
+          ),
+        ),
+      )
+      .sort();
     await expect
       .poll(
         async () => {
@@ -87,17 +98,17 @@ test.describe("Bookmark mixed-content synchronization", () => {
             (key) =>
               typeof key === "string" && key.startsWith(mixedScopePrefix),
           );
-          return mixedScopeKeys;
+          return mixedScopeKeys.sort();
         },
         { timeout: 30_000 },
       )
-      .toEqual([initialScopeKey]);
+      .toEqual(expectedScopeKeys);
 
     const bookmarkCache = await persistedValue(
       page,
       `serial-bookmarks-store::normalized:v1::record:bookmarksDict:${encodeURIComponent(bookmarkId)}`,
     );
-    expect(bookmarkCache).toBeUndefined();
+    expect(bookmarkCache).toBeDefined();
     expect(viewId).toBeGreaterThan(0);
   });
 
@@ -154,6 +165,9 @@ test.describe("Bookmark mixed-content synchronization", () => {
         ),
       )
       .toBe(true);
+    await expect(page.locator(".animate-pulse")).toHaveCount(0, {
+      timeout: 30_000,
+    });
 
     await page.evaluate(() => {
       const state = window as typeof window & {

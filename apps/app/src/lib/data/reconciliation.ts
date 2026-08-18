@@ -42,6 +42,7 @@ import {
   getBookmarkReconciliationVersion,
   getFeedItemReconciliationVersion,
   getReconciliationTargetKey,
+  MAX_TARGETED_RECONCILIATION_TARGETS,
 } from "~/lib/reconciliation";
 import { DEFAULT_CONTENT_STATUS_FILTER } from "~/lib/content-status";
 
@@ -358,7 +359,10 @@ function mutationInvalidationEffects(
     unknown ||= expanded.scopeImpactUnknown;
     for (const target of expanded.scopes) {
       const key = getReconciliationTargetKey(target);
-      if (activeTarget && key === getReconciliationTargetKey(activeTarget)) {
+      if (
+        target.scope.type === "view" ||
+        (activeTarget && key === getReconciliationTargetKey(activeTarget))
+      ) {
         repairTargets.set(key, target);
       } else {
         dirtyTargets.set(key, target);
@@ -367,19 +371,22 @@ function mutationInvalidationEffects(
   }
 
   const eagerTargets = [...repairTargets.values()];
+  const fullIntent = activeTarget
+    ? ({ type: "full", selectedScope: activeTarget } as const)
+    : ({
+        type: "full",
+        coldContentStatus: DEFAULT_CONTENT_STATUS_FILTER,
+      } as const);
   return {
     repairTargets: eagerTargets,
     dirtyTargets: [...dirtyTargets.values()],
     repairIntent: unknown
-      ? activeTarget
-        ? ({ type: "full", selectedScope: activeTarget } as const)
-        : ({
-            type: "full",
-            coldContentStatus: DEFAULT_CONTENT_STATUS_FILTER,
-          } as const)
-      : eagerTargets.length > 0
-        ? ({ type: "targeted", targets: eagerTargets } as const)
-        : undefined,
+      ? fullIntent
+      : eagerTargets.length > MAX_TARGETED_RECONCILIATION_TARGETS
+        ? fullIntent
+        : eagerTargets.length > 0
+          ? ({ type: "targeted", targets: eagerTargets } as const)
+          : undefined,
   };
 }
 

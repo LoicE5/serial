@@ -159,6 +159,16 @@ test.describe("exhaustive mixed-content View section matrix", () => {
         )
         .toBe(expectedItemIds.length === 0);
 
+      const retainedScopeKey =
+        `serial-mixed-content-store-v2::normalized:v1::record:scopes:` +
+        encodeURIComponent(`view:${fixture.viewId}:saved:unread`);
+      await expect
+        .poll(
+          async () => (await indexedDbKeys(page)).includes(retainedScopeKey),
+          { timeout: 30_000 },
+        )
+        .toBe(true);
+
       await beginSkeletonObservation(feedMain);
       await viewChip.click();
 

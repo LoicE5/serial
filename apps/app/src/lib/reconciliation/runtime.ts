@@ -2,7 +2,10 @@ import {
   createReconciliationCoordinatorState,
   transitionReconciliation,
 } from "./coordinator";
-import { getReconciliationTargetKey } from "./contracts";
+import {
+  getReconciliationTargetKey,
+  MAX_TARGETED_RECONCILIATION_TARGETS,
+} from "./contracts";
 import type {
   ReconciliationCommand,
   ReconciliationCoordinatorEvent,
@@ -129,6 +132,33 @@ export function createReconciliationRuntime<TLiveEvent>(
     for (const listener of listeners) listener();
   };
 
+  const waitForHydration = (
+    domains: readonly ReconciliationHydrationDomain[],
+    signal: AbortSignal,
+  ) => {
+    if (domains.every((domain) => state.hydratedDomains[domain])) {
+      return Promise.resolve(true);
+    }
+    return new Promise<boolean>((resolve) => {
+      const cleanup = () => {
+        listeners.delete(check);
+        signal.removeEventListener("abort", aborted);
+      };
+      const check = () => {
+        if (!domains.every((domain) => state.hydratedDomains[domain])) return;
+        cleanup();
+        resolve(true);
+      };
+      const aborted = () => {
+        cleanup();
+        resolve(false);
+      };
+      listeners.add(check);
+      signal.addEventListener("abort", aborted, { once: true });
+      check();
+    });
+  };
+
   const mergeRetryIntent = (
     current: ReconciliationRequestIntent | null,
     incoming: ReconciliationRequestIntent,
@@ -203,7 +233,12 @@ export function createReconciliationRuntime<TLiveEvent>(
     failedTargets: ReconciliationTarget[] | undefined,
     forceFull = false,
   ): ReconciliationRequestIntent => {
-    if (forceFull || !failedTargets || failedTargets.length === 0) {
+    if (
+      forceFull ||
+      !failedTargets ||
+      failedTargets.length === 0 ||
+      failedTargets.length > MAX_TARGETED_RECONCILIATION_TARGETS
+    ) {
       const selectedScope = dependencies.getCurrentSelection();
       return selectedScope
         ? { type: "full", selectedScope }
@@ -294,16 +329,19 @@ export function createReconciliationRuntime<TLiveEvent>(
     execute(transition.commands);
   };
 
-  const applyCompletedDomain = (
+  const applyCompletedDomain = async (
     reconciliationId: string,
     domain: RequiredReconciliationDomain,
     pending: Partial<
       Record<RequiredReconciliationDomain, ReconciliationAuthoritativePayload>
     >,
+    signal: AbortSignal,
   ) => {
     const payload = pending[domain];
     if (!payload) return;
     delete pending[domain];
+    const requiresHydration = hydrationFor(payload);
+    if (!(await waitForHydration(requiresHydration, signal))) return;
     const target: ReconciliationTarget =
       payload.type === "active-scope"
         ? payload.page.target
@@ -316,7 +354,7 @@ export function createReconciliationRuntime<TLiveEvent>(
       type: "authoritative-received",
       reconciliationId,
       target,
-      requiresHydration: hydrationFor(payload),
+      requiresHydration,
       payload,
     });
   };
@@ -328,6 +366,7 @@ export function createReconciliationRuntime<TLiveEvent>(
     const pending: Partial<
       Record<RequiredReconciliationDomain, ReconciliationAuthoritativePayload>
     > = {};
+    const recoverableFailures = new Map<string, ReconciliationTarget>();
     let settled = false;
     try {
       const input = dependencies.buildInput(request);
@@ -356,10 +395,11 @@ export function createReconciliationRuntime<TLiveEvent>(
             };
             break;
           case "domain-complete":
-            applyCompletedDomain(
+            await applyCompletedDomain(
               request.reconciliationId,
               chunk.domain,
               pending,
+              signal,
             );
             break;
           case "automatic-rss-owner":
@@ -370,6 +410,13 @@ export function createReconciliationRuntime<TLiveEvent>(
             break;
           case "domain-error": {
             const target = failureTarget(chunk);
+            if (chunk.failure.phase === "load-view-page" && target) {
+              recoverableFailures.set(
+                getReconciliationTargetKey(target),
+                target,
+              );
+              continue;
+            }
             if (!state.sseConnected && !everConnected) {
               completedBeforeFirstConnection = true;
             }
@@ -394,18 +441,32 @@ export function createReconciliationRuntime<TLiveEvent>(
             settled = true;
             return;
           }
-          case "epoch-complete":
+          case "epoch-complete": {
             if (!state.sseConnected && !everConnected) {
               completedBeforeFirstConnection = true;
             }
+            const failedTargets = [...recoverableFailures.values()];
             send({
               type: "request-settled",
               reconciliationId: request.reconciliationId,
               at: dependencies.now(),
+              failed: failedTargets.length > 0,
+              failedTargets:
+                failedTargets.length > 0 ? failedTargets : undefined,
             });
-            clearCoveredRetry(request);
+            if (failedTargets.length > 0) {
+              scheduleRetry(retryIntentForFailure(failedTargets));
+              if (request.intent.type === "full") {
+                dependencies.onFullReconciliationFailed?.({
+                  reconciliationId: request.reconciliationId,
+                });
+              }
+            } else {
+              clearCoveredRetry(request);
+            }
             settled = true;
             return;
+          }
         }
       }
     } catch (error) {

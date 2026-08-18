@@ -4,7 +4,7 @@ import { createBookmarkTestDatabase } from "../bookmarks/database";
 import type { ORPCContext } from "~/server/orpc/base";
 import { user, views } from "~/server/db/schema";
 import { orpcRouter } from "~/server/orpc/router";
-import { MAX_RECONCILIATION_TARGETS } from "~/server/reconciliation/input";
+import { MAX_TARGETED_RECONCILIATION_TARGETS } from "~/lib/reconciliation";
 
 const testState = vi.hoisted((): { database: unknown } => ({
   database: undefined,
@@ -85,12 +85,15 @@ describe("reconciliation RPC", () => {
     const chunkTypes: string[] = [];
     for await (const event of stream) chunkTypes.push(event.chunk.type);
 
-    expect(chunkTypes).toEqual([
+    expect(chunkTypes.slice(0, 2)).toEqual([
       "organization-snapshot",
       "domain-complete",
-      "active-first-page",
-      "domain-complete",
-      "automatic-rss-owner",
+    ]);
+    expect(
+      chunkTypes.filter((type) => type === "active-first-page"),
+    ).toHaveLength(8);
+    expect(chunkTypes.at(-4)).toBe("automatic-rss-owner");
+    expect(chunkTypes.slice(-3)).toEqual([
       "navigation-snapshot",
       "domain-complete",
       "epoch-complete",
@@ -102,9 +105,10 @@ describe("reconciliation RPC", () => {
       api().initial.reconcileApplicationState({
         type: "targeted",
         reconciliationId: "too-many-targets",
-        targets: Array.from({ length: MAX_RECONCILIATION_TARGETS + 1 }, () => ({
-          target: { type: "navigation" as const },
-        })),
+        targets: Array.from(
+          { length: MAX_TARGETED_RECONCILIATION_TARGETS + 1 },
+          () => ({ target: { type: "navigation" as const } }),
+        ),
       }),
     ).rejects.toThrow();
   });

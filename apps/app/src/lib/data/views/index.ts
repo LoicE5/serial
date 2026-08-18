@@ -12,7 +12,7 @@ import {
   UNCATEGORIZED_VIEW_ID,
   UNCATEGORIZED_VIEW_PLACEMENT,
 } from "./constants";
-import { useViewAvailability, useViewsFetchStatus } from "./store";
+import { useViewsFetchStatus } from "./store";
 import type { ApplicationView } from "~/server/db/schema";
 
 export { UNCATEGORIZED_VIEW_ID, UNCATEGORIZED_VIEW_PLACEMENT };
@@ -53,11 +53,9 @@ export function useUpdateViewFilter() {
 export function useViews() {
   const views = useAtomValue(viewsAtom);
   const fetchStatus = useViewsFetchStatus();
-  const viewAvailability = useViewAvailability();
 
   return {
     views,
-    viewAvailability,
     hasFetchedViews: fetchStatus === "success",
   };
 }

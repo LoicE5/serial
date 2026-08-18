@@ -22,6 +22,10 @@ import type {
   MixedContentPage,
 } from "~/server/mixed-content/projection";
 import {
+  buildContentStatusKey,
+  CONTENT_STATUS_FILTERS,
+} from "~/lib/content-status";
+import {
   getBookmarkReconciliationVersion,
   getFeedItemReconciliationVersion,
   REQUIRED_RECONCILIATION_DOMAINS,
@@ -36,6 +40,7 @@ import { ITEMS_PER_PAGE } from "~/server/api/constants";
 import { UNCATEGORIZED_VIEW_ID } from "~/lib/data/views/constants";
 
 type ReconciliationDatabase = typeof defaultDatabase;
+const VIEW_PAGE_BUILD_CONCURRENCY = 4;
 
 type Outcome<T> = { ok: true; value: T } | { ok: false; error: unknown };
 
@@ -107,21 +112,35 @@ function scopeDataFromOrganization(
 function entityDiffs<TEntity extends { id: string }>(input: {
   entities: TEntity[];
   manifest: ReconciliationEntityManifestEntry[];
+  streamedVersions: Map<string, string>;
   version: (entity: TEntity) => string;
 }): Array<EntityDiff<TEntity>> {
-  const clientVersions = new Map(
-    input.manifest.map(({ id, version }) => [id, version]),
-  );
-  return input.entities.map((entity) =>
-    clientVersions.get(entity.id) === input.version(entity)
+  const clientVersions = new Map([
+    ...input.manifest.map(({ id, version }) => [id, version] as const),
+    ...input.streamedVersions,
+  ]);
+  return input.entities.map((entity) => {
+    const version = input.version(entity);
+    input.streamedVersions.set(entity.id, version);
+    return clientVersions.get(entity.id) === version
       ? { status: "unchanged", id: entity.id }
-      : { status: "upsert", entity },
-  );
+      : { status: "upsert", entity };
+  });
+}
+
+type StreamedEntityVersions = {
+  feedItems: Map<string, string>;
+  bookmarks: Map<string, string>;
+};
+
+function emptyStreamedEntityVersions(): StreamedEntityVersions {
+  return { feedItems: new Map(), bookmarks: new Map() };
 }
 
 function activeFirstPage(input: {
   scopeInput: ReconciliationScopeInput;
   page: MixedContentPage;
+  streamedVersions: StreamedEntityVersions;
 }): ActiveFirstPageResult {
   return {
     target: input.scopeInput.target,
@@ -130,15 +149,53 @@ function activeFirstPage(input: {
     feedItemDiffs: entityDiffs<ApplicationFeedItem>({
       entities: input.page.feedItems,
       manifest: input.scopeInput.pageManifest.feedItems,
+      streamedVersions: input.streamedVersions.feedItems,
       version: getFeedItemReconciliationVersion,
     }),
     bookmarkDiffs: entityDiffs<ApplicationBookmark>({
       entities: input.page.bookmarks,
       manifest: input.scopeInput.pageManifest.bookmarks,
+      streamedVersions: input.streamedVersions.bookmarks,
       version: getBookmarkReconciliationVersion,
     }),
     cursor: input.page.cursor,
     hasMore: input.page.hasMore,
+  };
+}
+
+function viewPageTargets(
+  organization: OrganizationSnapshot,
+  activeTarget: ReconciliationScopeTarget,
+) {
+  const targets = organization.views.flatMap((view) =>
+    CONTENT_STATUS_FILTERS.map(
+      (contentStatus) =>
+        ({
+          type: "scope",
+          scope: { type: "view", viewId: view.id },
+          contentStatus,
+        }) satisfies ReconciliationScopeTarget,
+    ),
+  );
+  if (activeTarget.scope.type !== "view") return targets;
+  const activeKey = `${activeTarget.scope.viewId}:${buildContentStatusKey(
+    activeTarget.contentStatus,
+  )}`;
+  return targets.filter(
+    (target) =>
+      `${target.scope.viewId}:${buildContentStatusKey(target.contentStatus)}` !==
+      activeKey,
+  );
+}
+
+function viewPageInput(
+  target: ReconciliationScopeTarget,
+  membershipRevision: number,
+): ReconciliationScopeInput {
+  return {
+    target,
+    pageManifest: emptyPageManifest(),
+    membershipRevision,
   };
 }
 
@@ -237,6 +294,7 @@ async function* reconcileFull(input: {
     return;
   }
 
+  const streamedVersions = emptyStreamedEntityVersions();
   const page = await outcome(
     queryResolvedMixedContentPage({
       database,
@@ -264,13 +322,77 @@ async function* reconcileFull(input: {
   }
   yield event(request.reconciliationId, {
     type: "active-first-page",
-    page: activeFirstPage({ scopeInput, page: page.value }),
+    page: activeFirstPage({
+      scopeInput,
+      page: page.value,
+      streamedVersions,
+    }),
   });
   yield event(request.reconciliationId, {
     type: "domain-complete",
     domain: "active-scope",
     target: scopeInput.target,
   });
+
+  const matrixTargets = viewPageTargets(organization.value, scopeInput.target);
+  for (
+    let start = 0;
+    start < matrixTargets.length;
+    start += VIEW_PAGE_BUILD_CONCURRENCY
+  ) {
+    const batch = matrixTargets.slice(
+      start,
+      start + VIEW_PAGE_BUILD_CONCURRENCY,
+    );
+    const pages = await Promise.all(
+      batch.map(async (target) => ({
+        target,
+        result: await outcome(
+          queryResolvedMixedContentPage({
+            database,
+            userId,
+            scope: target.scope,
+            scopeData: scopeDataFromOrganization(
+              organization.value,
+              target.scope,
+            ),
+            contentStatus: target.contentStatus,
+            limit: ITEMS_PER_PAGE,
+          }),
+        ),
+      })),
+    );
+    for (const { target, result } of pages) {
+      if (!result.ok) {
+        yield event(
+          request.reconciliationId,
+          failure({
+            phase: "load-view-page",
+            domain: "active-scope",
+            target,
+            message: message(result.error),
+          }),
+        );
+        continue;
+      }
+      yield event(request.reconciliationId, {
+        type: "active-first-page",
+        page: activeFirstPage({
+          scopeInput: viewPageInput(
+            target,
+            request.selection.membershipRevision,
+          ),
+          page: result.value,
+          streamedVersions,
+        }),
+      });
+      yield event(request.reconciliationId, {
+        type: "domain-complete",
+        domain: "active-scope",
+        target,
+      });
+    }
+  }
 
   const owner = await ownerPromise;
   yield event(request.reconciliationId, {
@@ -314,6 +436,7 @@ async function* reconcileTargeted(input: {
     ({ target }) => target.type === "navigation",
   );
   const completedDomains = new Set<RequiredReconciliationDomain>();
+  const streamedVersions = emptyStreamedEntityVersions();
 
   for (const target of request.targets) {
     if (target.target.type === "navigation") continue;
@@ -368,7 +491,11 @@ async function* reconcileTargeted(input: {
     }
     yield event(request.reconciliationId, {
       type: "active-first-page",
-      page: activeFirstPage({ scopeInput: target, page: page.value }),
+      page: activeFirstPage({
+        scopeInput: target,
+        page: page.value,
+        streamedVersions,
+      }),
     });
     yield event(request.reconciliationId, {
       type: "domain-complete",
