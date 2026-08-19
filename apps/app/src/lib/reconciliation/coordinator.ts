@@ -71,6 +71,8 @@ type BufferedLiveEvent<TLiveEvent> = {
   payload: TLiveEvent;
 };
 
+const ALL_SCOPE_TARGETS_KEY = "scope:*";
+
 type BufferedApplication<TAuthoritative, TLiveEvent> =
   BufferedAuthoritative<TAuthoritative> | BufferedLiveEvent<TLiveEvent>;
 
@@ -155,6 +157,7 @@ export type ReconciliationCoordinatorEvent<TAuthoritative, TLiveEvent> =
       type: "live-event-received";
       eventId: string;
       targets: ReconciliationTarget[];
+      affectsAllScopes?: boolean;
       requiresHydration: ReconciliationHydrationDomain[];
       payload?: TLiveEvent;
       invalidates?: ReconciliationTarget[];
@@ -494,7 +497,14 @@ function isHydrated<TAuthoritative, TLiveEvent>(
 }
 
 function targetKeysOverlap(left: readonly string[], right: Set<string>) {
-  return left.some((key) => right.has(key));
+  const leftAffectsAllScopes = left.includes(ALL_SCOPE_TARGETS_KEY);
+  const rightAffectsAllScopes = right.has(ALL_SCOPE_TARGETS_KEY);
+  return (
+    left.some((key) => right.has(key)) ||
+    (leftAffectsAllScopes &&
+      [...right].some((key) => key.startsWith("scope:"))) ||
+    (rightAffectsAllScopes && left.some((key) => key.startsWith("scope:")))
+  );
 }
 
 function hasPendingTargetOverlap<TAuthoritative, TLiveEvent>(
@@ -547,6 +557,7 @@ function flushBufferedApplications<TAuthoritative, TLiveEvent>(
   const remaining: Array<BufferedApplication<TAuthoritative, TLiveEvent>> = [];
   const commands: Array<ReconciliationCommand<TAuthoritative, TLiveEvent>> = [];
   const staleTargets: ReconciliationTarget[] = [];
+  const invalidatedStaleTargetKeys = new Set<string>();
   for (const application of state.bufferedApplications) {
     const blocked =
       !isHydrated(state, application.requiresHydration) ||
@@ -578,6 +589,17 @@ function flushBufferedApplications<TAuthoritative, TLiveEvent>(
       )
     ) {
       staleTargets.push(application.target);
+      const targetKey = getReconciliationTargetKey(application.target);
+      const capturedRevision =
+        state.requests[application.reconciliationId]?.capturedRevisions[
+          targetKey
+        ];
+      if (
+        capturedRevision !== undefined &&
+        capturedRevision < targetState(state, application.target).revision
+      ) {
+        invalidatedStaleTargetKeys.add(targetKey);
+      }
       continue;
     }
     commands.push({
@@ -594,9 +616,25 @@ function flushBufferedApplications<TAuthoritative, TLiveEvent>(
   });
   if (staleTargets.length === 0) return { state: nextState, commands };
   nextState = markTargetsDirty(nextState, staleTargets, false);
+  const targetsWithoutCurrentRepair = staleTargets.filter((target) => {
+    if (!invalidatedStaleTargetKeys.has(getReconciliationTargetKey(target))) {
+      return true;
+    }
+    return (
+      !nextState.inFlight ||
+      !requestRevisionIsCurrent(
+        nextState,
+        nextState.inFlight.reconciliationId,
+        target,
+      )
+    );
+  });
+  if (targetsWithoutCurrentRepair.length === 0) {
+    return { state: nextState, commands };
+  }
   const queued = enqueueRequest(
     nextState,
-    repairIntentFor(nextState, staleTargets),
+    repairIntentFor(nextState, targetsWithoutCurrentRepair),
   );
   return { state: queued.state, commands: [...commands, ...queued.commands] };
 }
@@ -822,7 +860,10 @@ export function transitionReconciliation<TAuthoritative, TLiveEvent>(
       if (event.payload === undefined) {
         return { state: withDerivedTrust(nextState), commands };
       }
-      const targetKeys = event.targets.map(getReconciliationTargetKey);
+      const targetKeys = [
+        ...event.targets.map(getReconciliationTargetKey),
+        ...(event.affectsAllScopes ? [ALL_SCOPE_TARGETS_KEY] : []),
+      ];
       const hasEarlierBlockedTarget = hasPendingTargetOverlap(
         nextState,
         targetKeys,

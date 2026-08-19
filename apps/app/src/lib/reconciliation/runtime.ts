@@ -50,6 +50,15 @@ export type ReconciliationRuntimeDependencies<TLiveEvent> = {
         repairIntent?: ReconciliationRequestIntent;
       }
     | void;
+  getLiveEventTargets: (
+    payload: TLiveEvent,
+    context: {
+      hydratedDomains: ReconciliationCoordinatorState["hydratedDomains"];
+    },
+  ) => {
+    targets: ReconciliationTarget[];
+    affectsAllScopes?: boolean;
+  };
   getCurrentSelection: () => ReconciliationScopeTarget | null;
   isVisible?: () => boolean;
   isOnline?: () => boolean;
@@ -575,11 +584,15 @@ export function createReconciliationRuntime<TLiveEvent>(
       send({ type: "request-reconciliation", intent: pending });
     },
     receiveLiveEvent(payload: TLiveEvent) {
-      const selectedScope = dependencies.getCurrentSelection();
+      const { targets, affectsAllScopes } = dependencies.getLiveEventTargets(
+        payload,
+        { hydratedDomains: state.hydratedDomains },
+      );
       send({
         type: "live-event-received",
         eventId: `live:${++liveSequence}`,
-        targets: selectedScope ? [selectedScope] : [],
+        targets,
+        affectsAllScopes,
         requiresHydration: ["organization", "active-scope", "bookmarks"],
         payload,
       });

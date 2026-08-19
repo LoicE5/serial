@@ -204,6 +204,56 @@ describe("Bookmark mixed-content membership revision", () => {
     expect(revision()).toBe(initialRevision);
   });
 
+  it("drops a delayed progress response after the final body owner is released", () => {
+    const original = bookmark({ tagIds: [20] });
+    bookmarksStore.getState().upsert(original);
+    setRetainedEntityPins("membership-revision:test", {
+      bookmarkIds: [original.id],
+    });
+    mixedContentStore.getState().applyPage({
+      scope: { type: "tag", tagId: 20 },
+      contentStatus: { saveStatus: "saved", archiveStatus: "unread" },
+      page: {
+        references: [],
+        bookmarks: [],
+        feedItems: [],
+        cursor: null,
+        hasMore: false,
+      },
+      replacesScope: true,
+    });
+    const mutation = useUpdateBookmarkStateMutation(
+      original.id,
+    ) as unknown as MutationCallbacks<
+      { bookmarkId: string; progress: number; duration: number },
+      ApplicationBookmark,
+      { previousBookmark?: ApplicationBookmark; token?: object }
+    >;
+    const input = { bookmarkId: original.id, progress: 8, duration: 12 };
+    const initialRevision = revision();
+
+    clearRetainedEntityPins("membership-revision:test");
+    expect(bookmarksStore.getState().getBookmark(original.id)).toBeUndefined();
+    const context = mutation.onMutate(input);
+    mutation.onSuccess(
+      bookmark({
+        tagIds: [20],
+        progress: 8,
+        duration: 12,
+        progressUpdatedAt: new Date(NOW.getTime() + 1),
+        updatedAt: new Date(NOW.getTime() + 1),
+      }),
+      input,
+      context,
+    );
+
+    expect(revision()).toBe(initialRevision);
+    expect(bookmarksStore.getState().getBookmark(original.id)).toBeUndefined();
+    expect(
+      mixedContentStore.getState().scopes["tag:20:saved:unread"]?.references,
+    ).toEqual([]);
+  });
+
   it("pins a Bookmark body until an optimistic membership mutation settles", () => {
     const original = bookmark();
     bookmarksStore.getState().upsert(original);

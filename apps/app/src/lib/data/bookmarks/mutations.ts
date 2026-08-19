@@ -8,7 +8,10 @@ import {
 import { useMutation } from "@tanstack/react-query";
 import { isBookmarkProjectionChange } from "../mixed-content/bookmarkProjection";
 import { advanceMixedContentMembershipRevision } from "../mixed-content/membershipRevision";
-import { mixedContentStore } from "../mixed-content/store";
+import {
+  hasBookmarkBodyOwner,
+  mixedContentStore,
+} from "../mixed-content/store";
 import {
   clearRetainedEntityPins,
   setRetainedEntityPins,
@@ -92,10 +95,14 @@ export function useUpdateBookmarkStateMutation(bookmarkId: string) {
   return useMutation(
     orpc.bookmark.updateState.mutationOptions({
       onMutate: (input) => {
+        const changesMixedProjection =
+          input.isSaved !== undefined || input.isRead !== undefined;
         const previousBookmark = bookmarksStore
           .getState()
           .getBookmark(bookmarkId);
-        if (!previousBookmark) return { previousBookmark };
+        if (!previousBookmark) {
+          return { previousBookmark, changesMixedProjection };
+        }
         const now = new Date();
         const changes = [
           ...(input.isSaved !== undefined
@@ -150,7 +157,7 @@ export function useUpdateBookmarkStateMutation(bookmarkId: string) {
           releaseOptimisticBookmark(token);
           throw error;
         }
-        return { previousBookmark, token };
+        return { previousBookmark, token, changesMixedProjection };
       },
       onSuccess: (bookmark, _input, context) => {
         try {
@@ -158,6 +165,12 @@ export function useUpdateBookmarkStateMutation(bookmarkId: string) {
           const currentBookmark = bookmarksStore
             .getState()
             .getBookmark(bookmarkId);
+          if (!currentBookmark && !context?.changesMixedProjection) {
+            if (hasBookmarkBodyOwner(bookmarkId)) {
+              bookmarksStore.getState().upsert(serverBookmark);
+            }
+            return;
+          }
           const reconciled =
             context?.token && currentBookmark
               ? mutationCoordinator.reconcile(

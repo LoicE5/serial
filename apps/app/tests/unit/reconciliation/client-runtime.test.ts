@@ -147,6 +147,40 @@ function completeTargetedOrganization(
   ];
 }
 
+function completeTargetedScopeAndNavigation(
+  reconciliationId: string,
+): ReconciliationStreamEvent[] {
+  return [
+    {
+      reconciliationId,
+      chunk: { type: "active-first-page", page: PAGE },
+    },
+    {
+      reconciliationId,
+      chunk: {
+        type: "domain-complete",
+        domain: "active-scope",
+        target: ACTIVE_SCOPE,
+      },
+    },
+    {
+      reconciliationId,
+      chunk: { type: "navigation-snapshot", snapshot: NAVIGATION },
+    },
+    {
+      reconciliationId,
+      chunk: { type: "domain-complete", domain: "navigation" },
+    },
+    {
+      reconciliationId,
+      chunk: {
+        type: "epoch-complete",
+        requiredDomains: ["active-scope", "navigation"],
+      },
+    },
+  ];
+}
+
 function harness(
   events: (
     request: ReconciliationRequestDescriptor,
@@ -161,10 +195,21 @@ function harness(
         repairIntent?: ReconciliationRequestDescriptor["intent"];
       }
     | void,
-  options: { isVisible?: () => boolean; isOnline?: () => boolean } = {},
+  options: {
+    isVisible?: () => boolean;
+    isOnline?: () => boolean;
+    liveEventTargets?: (payload: string[]) => {
+      targets: ReconciliationTarget[];
+      affectsAllScopes?: boolean;
+    };
+  } = {},
 ) {
   const requests: ReconciliationRequestDescriptor[] = [];
   const applications: string[] = [];
+  const authoritativeApplications: Array<{
+    reconciliationId: string;
+    type: string;
+  }> = [];
   const liveApplications: string[][] = [];
   let currentSelection: ReconciliationScopeTarget | null = null;
   let now = 0;
@@ -193,14 +238,22 @@ function harness(
         }
       },
     }),
-    applyAuthoritative: (payload) => {
+    applyAuthoritative: (payload, context) => {
       applications.push(payload.type);
+      authoritativeApplications.push({
+        reconciliationId: context.reconciliationId,
+        type: payload.type,
+      });
       return true;
     },
     applyLiveEvent: (payload) => {
       liveApplications.push(payload);
       return applyLiveEvent?.(payload);
     },
+    getLiveEventTargets: (payload) =>
+      options.liveEventTargets?.(payload) ?? {
+        targets: currentSelection ? [currentSelection] : [],
+      },
     getCurrentSelection: () => currentSelection,
     isVisible: options.isVisible,
     isOnline: options.isOnline,
@@ -209,6 +262,7 @@ function harness(
     runtime,
     requests,
     applications,
+    authoritativeApplications,
     liveApplications,
     setSelection(selection: ReconciliationScopeTarget | null) {
       currentSelection = selection;
@@ -635,6 +689,128 @@ describe("client reconciliation runtime", () => {
     test.runtime.hydrationComplete("bookmarks");
     expect(test.liveApplications).toEqual([["membership-change"]]);
     expect(test.runtime.getState().trustedUpToDate).toBe(true);
+  });
+
+  it("keeps cold navigation authority behind a buffered live invalidation", async () => {
+    let releaseRepair!: () => void;
+    const repairReleased = new Promise<void>((resolve) => {
+      releaseRepair = resolve;
+    });
+    const navigationTarget = { type: "navigation" } as const;
+    const test = harness(
+      async function* (request) {
+        if (request.intent.type === "full") {
+          yield* completeEpoch(request.reconciliationId);
+          return;
+        }
+        await repairReleased;
+        yield* completeTargetedScopeAndNavigation(request.reconciliationId);
+      },
+      () => ({
+        repairTargets: [navigationTarget, ACTIVE_SCOPE],
+        repairIntent: {
+          type: "targeted",
+          targets: [navigationTarget, ACTIVE_SCOPE],
+        },
+      }),
+      {
+        liveEventTargets: () => ({
+          targets: [navigationTarget],
+          affectsAllScopes: true,
+        }),
+      },
+    );
+
+    test.runtime.receiveLiveEvent(["navigation-membership-change"]);
+    for (const domain of [
+      "organization",
+      "active-scope",
+      "navigation",
+    ] as const) {
+      test.runtime.hydrationComplete(domain);
+    }
+    test.runtime.cacheUsable();
+    test.runtime.sseConnectionChanged(true);
+    test.runtime.start();
+
+    await vi.waitFor(() => expect(test.requests).toHaveLength(1));
+    await vi.waitFor(() => expect(test.applications).toEqual(["organization"]));
+    expect(test.runtime.getState().trustedUpToDate).toBe(false);
+
+    test.runtime.hydrationComplete("bookmarks");
+    await vi.waitFor(() => expect(test.liveApplications).toHaveLength(1));
+    await vi.waitFor(() => expect(test.requests).toHaveLength(2));
+    expect(
+      test.runtime.getState().targets.navigation?.revision,
+    ).toBeGreaterThan(0);
+    expect(
+      test.runtime.getState().targets[getReconciliationTargetKey(ACTIVE_SCOPE)]
+        ?.revision,
+    ).toBeGreaterThan(0);
+    expect(test.applications).toEqual(["organization"]);
+
+    releaseRepair();
+    await vi.waitFor(() =>
+      expect(
+        test.authoritativeApplications
+          .filter((application) => application.type !== "organization")
+          .map((application) => application.reconciliationId),
+      ).toEqual([
+        test.requests[1]?.reconciliationId,
+        test.requests[1]?.reconciliationId,
+      ]),
+    );
+    await vi.waitFor(() =>
+      expect(test.runtime.getState().trustedUpToDate).toBe(true),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(test.requests).toHaveLength(2);
+    expect(
+      test.authoritativeApplications.filter(
+        (application) => application.type !== "organization",
+      ),
+    ).toHaveLength(2);
+  });
+
+  it("withholds cold trust while RSS feed items wait for hydration", async () => {
+    const navigationTarget = { type: "navigation" } as const;
+    const test = harness(
+      (request) => completeEpoch(request.reconciliationId),
+      () => ({ dirtyTargets: [navigationTarget, ACTIVE_SCOPE] }),
+      {
+        liveEventTargets: () => ({
+          targets: [navigationTarget],
+          affectsAllScopes: true,
+        }),
+      },
+    );
+
+    test.runtime.receiveLiveEvent(["rss-feed-items"]);
+    for (const domain of [
+      "organization",
+      "active-scope",
+      "navigation",
+    ] as const) {
+      test.runtime.hydrationComplete(domain);
+    }
+    test.runtime.cacheUsable();
+    test.runtime.sseConnectionChanged(true);
+    test.runtime.start();
+
+    await vi.waitFor(() => expect(test.requests).toHaveLength(1));
+    await vi.waitFor(() => expect(test.applications).toEqual(["organization"]));
+    expect(test.runtime.getState().trustedUpToDate).toBe(false);
+
+    test.runtime.hydrationComplete("bookmarks");
+    await vi.waitFor(() => expect(test.liveApplications).toHaveLength(1));
+    expect(
+      test.runtime.getState().targets.navigation?.revision,
+    ).toBeGreaterThan(0);
+    expect(
+      test.runtime.getState().targets[getReconciliationTargetKey(ACTIVE_SCOPE)]
+        ?.revision,
+    ).toBeGreaterThan(0);
+    test.runtime.stop();
   });
 
   it("keeps RSS detail events repair-silent and schedules one summary repair", async () => {

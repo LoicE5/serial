@@ -63,14 +63,19 @@ const vanillaBookmarkStore = createStore<BookmarkStore>()(
       getBookmark: (id) => bookmarkEntities[id],
       snapshot: () => bookmarkEntities,
       upsert: (bookmark) => {
-        bookmarkEntities[bookmark.id] = bookmark;
+        bookmarkEntities = {
+          ...bookmarkEntities,
+          [bookmark.id]: bookmark,
+        };
         set({ revision: get().revision + 1 });
       },
       upsertMany: (bookmarks) => {
         if (bookmarks.length === 0) return;
+        const nextEntities = { ...bookmarkEntities };
         for (const bookmark of bookmarks) {
-          bookmarkEntities[bookmark.id] = bookmark;
+          nextEntities[bookmark.id] = bookmark;
         }
+        bookmarkEntities = nextEntities;
         set({ revision: get().revision + 1 });
       },
       remove: (id) => {
