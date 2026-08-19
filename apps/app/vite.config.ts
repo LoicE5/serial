@@ -32,6 +32,7 @@ export default defineConfig(({ mode }) => {
   const isDemoBuild = mode === "demo";
   const isClientPerformanceBuild =
     process.env.SERIAL_CLIENT_PERFORMANCE_PRODUCTION === "1";
+  const e2eFaultControls = process.env.SERIAL_E2E_FAULT_CONTROLS === "1";
   const plugins = [
     tailwindcss(),
     tanstackStart({
@@ -74,6 +75,7 @@ export default defineConfig(({ mode }) => {
   return {
     define: {
       __SERIAL_DEMO_BUILD__: JSON.stringify(isDemoBuild),
+      __SERIAL_E2E_FAULT_CONTROLS__: JSON.stringify(e2eFaultControls),
     },
     // During e2e tests, VITE_ENV_DIR redirects Vite's .env* loading away from
     // root so that only the test env file (loaded by dotenv-cli) takes effect.

@@ -140,6 +140,28 @@ export async function getBookmarkState(tursoPort: number, id: string) {
   return bookmark ?? null;
 }
 
+export async function matchBookmarkToFeedItem(
+  tursoPort: number,
+  bookmarkId: string,
+  feedItemId: string,
+) {
+  const { db, client } = getDb(tursoPort);
+  const feedItem = await db
+    .select({ url: schema.feedItems.url })
+    .from(schema.feedItems)
+    .where(eq(schema.feedItems.id, feedItemId))
+    .get();
+  if (!feedItem) {
+    client.close();
+    throw new Error(`Feed item ${feedItemId} was not found`);
+  }
+  await db
+    .update(schema.bookmarks)
+    .set({ sourceUrl: feedItem.url, canonicalUrl: feedItem.url })
+    .where(eq(schema.bookmarks.id, bookmarkId));
+  client.close();
+}
+
 export async function setFeedItemContent(
   tursoPort: number,
   id: string,
@@ -783,6 +805,78 @@ export async function seedArticleData(
   client.close();
 
   return { feedItemId, email, password };
+}
+
+export async function seedRssPartialFailureData(
+  tursoPort: number,
+  appPort: number,
+  rssPort: number = SELF_HOSTED_RSS_SERVER_PORT,
+) {
+  const fixture = await seedArticleData(tursoPort, appPort, rssPort);
+  const { db, client } = getDb(tursoPort);
+  const [testUser, seededItem, defaultView] = await Promise.all([
+    db
+      .select()
+      .from(schema.user)
+      .where(eq(schema.user.email, fixture.email))
+      .get(),
+    db
+      .select({ feedId: schema.feedItems.feedId })
+      .from(schema.feedItems)
+      .where(eq(schema.feedItems.id, fixture.feedItemId))
+      .get(),
+    db
+      .select({ id: schema.views.id })
+      .from(schema.views)
+      .innerJoin(schema.user, eq(schema.views.userId, schema.user.id))
+      .where(eq(schema.user.email, fixture.email))
+      .get(),
+  ]);
+  if (!testUser || !seededItem || !defaultView) {
+    client.close();
+    throw new Error("RSS partial-failure seed prerequisites were not found");
+  }
+
+  const testId = uniqueId();
+  const dueAt = new Date(0);
+  const successSlug = `rss-success-${testId}`;
+  await db
+    .update(schema.feeds)
+    .set({
+      url: `http://127.0.0.1:${rssPort}/feed/${successSlug}`,
+      lastFetchedAt: dueAt,
+      nextFetchAt: dueAt,
+    })
+    .where(eq(schema.feeds.id, seededItem.feedId));
+  const [failingFeed] = await db
+    .insert(schema.feeds)
+    .values({
+      userId: testUser.id,
+      name: `Failing Feed ${testId}`,
+      url: `http://127.0.0.1:${rssPort}/delayed/missing-feed`,
+      imageUrl: "",
+      platform: "website",
+      openLocation: "serial",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      lastFetchedAt: dueAt,
+      nextFetchAt: dueAt,
+    })
+    .returning();
+  if (!failingFeed) {
+    client.close();
+    throw new Error("Failing RSS Feed was not created");
+  }
+  await db.insert(schema.viewFeeds).values({
+    viewId: defaultView.id,
+    feedId: failingFeed.id,
+  });
+  client.close();
+
+  return {
+    ...fixture,
+    successTitle: `${successSlug.replaceAll("-", " ").replace(/\b\w/g, (character) => character.toUpperCase())} - Article 1`,
+  };
 }
 
 export async function seedSidebarFeedAvailabilityData(

@@ -52,7 +52,10 @@ const NAVIGATION: NavigationSnapshot = {
   viewFeeds: {},
 };
 
-function completeEpoch(reconciliationId: string): ReconciliationStreamEvent[] {
+function completeEpoch(
+  reconciliationId: string,
+  target: ReconciliationScopeTarget = ACTIVE_SCOPE,
+): ReconciliationStreamEvent[] {
   return [
     {
       reconciliationId,
@@ -64,14 +67,14 @@ function completeEpoch(reconciliationId: string): ReconciliationStreamEvent[] {
     },
     {
       reconciliationId,
-      chunk: { type: "active-first-page", page: PAGE },
+      chunk: { type: "active-first-page", page: { ...PAGE, target } },
     },
     {
       reconciliationId,
       chunk: {
         type: "domain-complete",
         domain: "active-scope",
-        target: ACTIVE_SCOPE,
+        target,
       },
     },
     {
@@ -147,7 +150,9 @@ function completeTargetedOrganization(
 function harness(
   events: (
     request: ReconciliationRequestDescriptor,
-  ) => ReconciliationStreamEvent[],
+  ) =>
+    | Iterable<ReconciliationStreamEvent>
+    | AsyncIterable<ReconciliationStreamEvent>,
   applyLiveEvent?: (payload: string[]) =>
     | ReconciliationTarget[]
     | {
@@ -182,7 +187,7 @@ function harness(
       async *[Symbol.asyncIterator]() {
         const request = requests.at(-1);
         if (!request) throw new Error("Expected a request");
-        for (const event of events(request)) {
+        for await (const event of events(request)) {
           if (signal.aborted) return;
           yield event;
         }
@@ -268,6 +273,112 @@ describe("client reconciliation runtime", () => {
       test.runtime.getState().targets[getReconciliationTargetKey(ACTIVE_SCOPE)]
         ?.status,
     ).toBe("verified");
+  });
+
+  it("lets the in-flight full stream satisfy startup View activation", async () => {
+    let releaseStream!: () => void;
+    const streamReleased = new Promise<void>((resolve) => {
+      releaseStream = resolve;
+    });
+    const test = harness(async function* (request) {
+      if (request.intent.type === "targeted") {
+        yield* completeTargetedScope(request.reconciliationId);
+        return;
+      }
+      await streamReleased;
+      yield* completeEpoch(request.reconciliationId);
+    });
+    hydrate(test.runtime);
+    test.runtime.cacheUsable();
+    test.runtime.sseConnectionChanged(true);
+    test.runtime.start();
+    await vi.waitFor(() => expect(test.requests).toHaveLength(1));
+
+    test.setSelection(ACTIVE_SCOPE);
+    test.runtime.activateScope(ACTIVE_SCOPE);
+    releaseStream();
+
+    await vi.waitFor(() =>
+      expect(test.runtime.getState().trustedUpToDate).toBe(true),
+    );
+    expect(test.requests).toHaveLength(1);
+  });
+
+  it.each([
+    ["View", { type: "view", viewId: 7 }],
+    ["Tag", { type: "tag", tagId: 11 }],
+    ["Feed", { type: "feed", feedId: 13 }],
+  ] as const)(
+    "applies a Bookmark-free %s page before Bookmark hydration",
+    async (_name, scope) => {
+      const target: ReconciliationScopeTarget = {
+        type: "scope",
+        scope,
+        contentStatus: { saveStatus: "inbox", archiveStatus: "unread" },
+      };
+      const test = harness((request) =>
+        completeEpoch(request.reconciliationId, target),
+      );
+      test.runtime.cacheUsable();
+      test.runtime.sseConnectionChanged(true);
+      test.runtime.start();
+
+      test.runtime.hydrationComplete("organization");
+      test.runtime.hydrationComplete("active-scope");
+      test.runtime.hydrationComplete("navigation");
+
+      await vi.waitFor(() =>
+        expect(test.applications).toEqual([
+          "organization",
+          "active-scope",
+          "navigation",
+        ]),
+      );
+      expect(test.runtime.getState().hydratedDomains.bookmarks).toBe(false);
+    },
+  );
+
+  it("stages a Bookmark page atomically until Bookmark hydration", async () => {
+    const bookmarkPage: ActiveFirstPageResult = {
+      ...PAGE,
+      orderedRefs: [
+        {
+          entityKind: "bookmark",
+          entityId: "bookmark-one",
+          sectionPlacement: null,
+          normalizedAt: new Date("2026-08-18T00:00:00.000Z"),
+        },
+      ],
+    };
+    const test = harness((request) =>
+      completeEpoch(request.reconciliationId).map((event) =>
+        event.chunk.type === "active-first-page"
+          ? {
+              ...event,
+              chunk: { type: "active-first-page", page: bookmarkPage },
+            }
+          : event,
+      ),
+    );
+    test.runtime.cacheUsable();
+    test.runtime.sseConnectionChanged(true);
+    test.runtime.start();
+
+    test.runtime.hydrationComplete("organization");
+    test.runtime.hydrationComplete("active-scope");
+    test.runtime.hydrationComplete("navigation");
+    await vi.waitFor(() =>
+      expect(test.applications).toEqual(["organization", "navigation"]),
+    );
+
+    test.runtime.hydrationComplete("bookmarks");
+    await vi.waitFor(() =>
+      expect(test.applications).toEqual([
+        "organization",
+        "navigation",
+        "active-scope",
+      ]),
+    );
   });
 
   it("includes dynamically discovered inactive View pages in full parity", async () => {

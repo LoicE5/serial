@@ -46,6 +46,7 @@
     "test:unit": "vitest run",
     "test:e2e": "concurrently \"pnpm test:e2e:main\" \"pnpm test:e2e:self-hosted\" \"pnpm test:e2e:demo\"",
     "test:e2e:main": "node --import=tsx scripts/run-e2e.ts main",
+    "test:e2e:ownership": "BACKGROUND_REFRESH_ENABLED=true SERIAL_EXPECT_AUTOMATIC_RSS_OWNER=background-task node --import=tsx scripts/run-e2e.ts main reconciliation-ownership.spec.ts && BACKGROUND_REFRESH_ENABLED=false SERIAL_EXPECT_AUTOMATIC_RSS_OWNER=client node --import=tsx scripts/run-e2e.ts main reconciliation-ownership.spec.ts && BACKGROUND_REFRESH_ENABLED=true SERIAL_EXPECT_AUTOMATIC_RSS_OWNER=background-task node --import=tsx scripts/run-e2e.ts self-hosted reconciliation-topology.spec.ts && BACKGROUND_REFRESH_ENABLED=false SERIAL_EXPECT_AUTOMATIC_RSS_OWNER=client node --import=tsx scripts/run-e2e.ts self-hosted reconciliation-topology.spec.ts",
     "test:e2e:main:ui": "node --import=tsx scripts/run-e2e.ts main --ui",
     "test:e2e:headed": "node --import=tsx scripts/run-e2e.ts main --headed",
     "test:e2e:self-hosted": "SERIAL_CLIENT_PERFORMANCE_PRODUCTION=1 node --import=tsx scripts/run-e2e.ts self-hosted",

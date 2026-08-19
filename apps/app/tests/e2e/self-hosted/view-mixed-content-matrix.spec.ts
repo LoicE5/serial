@@ -12,6 +12,7 @@ import {
 import {
   archiveMixedViewItems,
   cleanupUser,
+  matchBookmarkToFeedItem,
   seedMixedViewSectionCase,
   seedSavedViewClientStateData,
 } from "../fixtures/seed-db";
@@ -334,6 +335,109 @@ test.describe("exhaustive mixed-content View section matrix", () => {
           .poll(() => renderedItemIds(section.locator("[data-item-id]")))
           .toEqual([...expectedSection.itemIds].sort());
       }
+    });
+  }
+
+  for (const contentStatus of [
+    { saveStatus: "inbox", archiveStatus: "unread" },
+    { saveStatus: "inbox", archiveStatus: "archived" },
+    { saveStatus: "saved", archiveStatus: "unread" },
+    { saveStatus: "saved", archiveStatus: "archived" },
+  ] as const) {
+    test(`keeps matching Bookmark and Feed rows independent across View, Tag, and Feed in ${contentStatus.saveStatus} + ${contentStatus.archiveStatus}`, async ({
+      page,
+    }) => {
+      test.setTimeout(60_000);
+      const fixture = await seedMixedViewSectionCase(
+        SELF_HOSTED_TURSO_PORT,
+        SELF_HOSTED_APP_PORT,
+        {
+          feedSectionFeedItem: false,
+          tagSectionFeedItem: true,
+          tagSectionBookmark: true,
+          uncategorizedFeedItem: false,
+          uncategorizedBookmark: false,
+        },
+        contentStatus,
+      );
+      testEmail = fixture.email;
+      await matchBookmarkToFeedItem(
+        SELF_HOSTED_TURSO_PORT,
+        fixture.items.tagSectionBookmark,
+        fixture.items.tagSectionFeedItem,
+      );
+      await signIn({
+        page,
+        email: fixture.email,
+        password: fixture.password,
+      });
+      await contentStatusTab(
+        page,
+        contentStatus.saveStatus === "saved" ? "Saved" : "Inbox",
+      ).click();
+      await contentStatusTab(
+        page,
+        contentStatus.archiveStatus === "archived" ? "Archived" : "Unread",
+      ).click();
+
+      const feedMain = page
+        .locator("main")
+        .filter({
+          has: page.getByRole("heading", { name: "Serial", exact: true }),
+        })
+        .last();
+      const feedItem = feedMain.locator(
+        `article[data-item-id="${fixture.items.tagSectionFeedItem}"]`,
+      );
+      const bookmark = feedMain.locator(
+        `article[data-item-id="${fixture.items.tagSectionBookmark}"]`,
+      );
+
+      await feedMain
+        .getByRole("radio", { name: fixture.viewName, exact: true })
+        .click();
+      await expect(feedItem).toBeVisible({ timeout: 30_000 });
+      await expect(bookmark).toBeVisible();
+
+      const tagButton = page
+        .locator('[data-sidebar="group"]')
+        .filter({
+          has: page.locator('[data-sidebar="group-label"]', {
+            hasText: "Tags",
+          }),
+        })
+        .locator('[data-sidebar="menu-button"]')
+        .filter({ hasText: fixture.tagName });
+      // The exhaustive fixture can push this control below the nested
+      // sidebar viewport. Dispatching through the located control exercises
+      // the same React handler without making pointer scrolling part of the
+      // data-topology assertion.
+      await tagButton.dispatchEvent("click");
+      await expect(feedItem).toBeVisible({ timeout: 30_000 });
+      await expect(bookmark).toBeVisible();
+
+      if (
+        contentStatus.saveStatus === "saved" &&
+        contentStatus.archiveStatus === "unread"
+      ) {
+        await bookmark.getByRole("link").hover();
+        await page.keyboard.press("s");
+        await expect(bookmark).toHaveCount(0);
+        await expect(feedItem).toBeVisible();
+      }
+
+      const feedButton = page
+        .locator('[data-sidebar="group"]')
+        .filter({
+          has: page.locator('[data-sidebar="group-label"]', {
+            hasText: "Feeds",
+          }),
+        })
+        .locator('[data-sidebar="menu-button"]')
+        .filter({ hasText: fixture.feeds.tagSection.name });
+      await feedButton.dispatchEvent("click");
+      await expect(feedItem).toBeVisible({ timeout: 30_000 });
+      await expect(bookmark).toHaveCount(0);
     });
   }
 

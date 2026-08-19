@@ -18,15 +18,6 @@ import { feedItemsStore } from "~/lib/data/store";
 import { mixedContentStore } from "~/lib/data/mixed-content/store";
 import { processPublishedChunks } from "~/lib/data/subscriptionCoordinator";
 import { viewsStore } from "~/lib/data/views/store";
-import {
-  BOOKMARK_SYNC_REQUEST_BUDGET_BYTES,
-  BOOKMARK_SYNC_RESPONSE_BUDGET_BYTES,
-  buildBookmarkSyncManifest,
-} from "~/lib/data/bookmarks/manifest";
-import {
-  buildBookmarkSyncPages,
-  computeChangedBookmarkSyncBuckets,
-} from "~/server/mixed-content/sync";
 import { NORMALIZED_ARRAY_CHUNK_SIZE } from "~/lib/data/normalized-idb-storage";
 import {
   CLIENT_PAGE_RETENTION_BUDGETS,
@@ -68,12 +59,6 @@ export type ClientAuditResult = {
     mixedContent: number;
     total: number;
   };
-  synchronizationBytes: {
-    request: number;
-    maximumResponsePage: number;
-    requestBudget: number;
-    responseBudget: number;
-  };
   persistenceMutationBytes: {
     measured: number;
     budget: number;
@@ -99,8 +84,6 @@ export type ClientAuditResult = {
     feedProgressBurst: ClientAuditOperation;
     bookmarkBurstSingleFrame: ClientAuditOperation;
     bookmarkBurstSeparateFrames: ClientAuditOperation;
-    coldSynchronization: ClientAuditOperation;
-    warmSynchronization: ClientAuditOperation;
     localViewProjection: ClientAuditOperation;
     normalizedPersistenceMutation: ClientAuditOperation;
   };
@@ -108,7 +91,7 @@ export type ClientAuditResult = {
 
 export type ClientAuditBudgetMeasurements = Pick<
   ClientAuditResult,
-  "synchronizationBytes" | "persistenceMutationBytes" | "retention"
+  "persistenceMutationBytes" | "retention"
 > & {
   operations: {
     [Operation in keyof ClientAuditResult["operations"]]: Omit<
@@ -136,16 +119,6 @@ export function evaluateClientAuditOperationBudgets(
     }
   }
 
-  checkMaximum(
-    "Bookmark synchronization request bytes",
-    result.synchronizationBytes.request,
-    result.synchronizationBytes.requestBudget,
-  );
-  checkMaximum(
-    "Bookmark synchronization response-page bytes",
-    result.synchronizationBytes.maximumResponsePage,
-    result.synchronizationBytes.responseBudget,
-  );
   checkMaximum(
     "normalized persistence mutation bytes",
     result.persistenceMutationBytes.measured,
@@ -247,22 +220,6 @@ export function evaluateClientAuditOperationBudgets(
     },
     bookmarkBurstSeparateFrames: {
       bookmarkStoreNotifications: 100,
-      mixedStoreNotifications: 0,
-      authoritativeRefills: 0,
-    },
-    coldSynchronization: {
-      bookmarkStoreNotifications: 128,
-      feedItemStoreNotifications: 0,
-      feedItemProjectionNotifications: 0,
-      feedItemScopeNotifications: 0,
-      mixedStoreNotifications: 0,
-      authoritativeRefills: 0,
-    },
-    warmSynchronization: {
-      bookmarkStoreNotifications: 0,
-      feedItemStoreNotifications: 0,
-      feedItemProjectionNotifications: 0,
-      feedItemScopeNotifications: 0,
       mixedStoreNotifications: 0,
       authoritativeRefills: 0,
     },
@@ -782,48 +739,11 @@ export function runClientAuditProfile(
     return refills;
   });
 
-  fixture = seedClientFixture(profileName);
-  const changedBuckets = computeChangedBookmarkSyncBuckets(
-    fixture.bookmarks,
-    [],
-  );
-  const bookmarkSyncPages = changedBuckets.flatMap(buildBookmarkSyncPages);
-  const coldSynchronizationPayloads: PublishedChunk[] = bookmarkSyncPages.map(
-    (chunk) => ({ source: "bookmark", chunk }),
-  );
-  resetStores();
-  viewsStore.setState({
-    views: fixture.views,
-    viewsDict: Object.fromEntries(fixture.views.map((view) => [view.id, view])),
-    fetchStatus: "success",
-  });
-  const coldSynchronization = measure(() => {
-    processPublishedChunks(coldSynchronizationPayloads);
-    return 0;
-  });
-
-  fixture = seedClientFixture(profileName);
-  const requestManifest = buildBookmarkSyncManifest(fixture.bookmarks);
-  const warmSynchronization = measure(() => {
-    const unchangedBuckets = computeChangedBookmarkSyncBuckets(
-      fixture.bookmarks,
-      requestManifest,
-    );
-    processPublishedChunks(
-      unchangedBuckets
-        .flatMap(buildBookmarkSyncPages)
-        .map((chunk) => ({ source: "bookmark" as const, chunk })),
-    );
-    return 0;
-  });
   const payloadBytes = persistedPayloadBytes();
   const normalizedPersistenceMutation = measureNormalizedPersistenceMutation();
   const persistenceMutationBytes = serialize(
     normalizedPersistenceMutationPayload(),
   ).byteLength;
-  const responsePageBytes = bookmarkSyncPages.map((page) =>
-    Buffer.byteLength(JSON.stringify(page)),
-  );
   const afterTwelvePages = measureRetentionPlateau(12);
   const afterTwentyFourPages = measureRetentionPlateau(24);
 
@@ -837,12 +757,6 @@ export function runClientAuditProfile(
       referencesPerScope: PAGE_SIZE,
     },
     persistedPayloadBytes: payloadBytes,
-    synchronizationBytes: {
-      request: Buffer.byteLength(JSON.stringify(requestManifest)),
-      maximumResponsePage: Math.max(0, ...responsePageBytes),
-      requestBudget: BOOKMARK_SYNC_REQUEST_BUDGET_BYTES,
-      responseBudget: BOOKMARK_SYNC_RESPONSE_BUDGET_BYTES,
-    },
     persistenceMutationBytes: {
       measured: persistenceMutationBytes,
       budget: NORMALIZED_PERSISTENCE_MUTATION_BUDGET_BYTES,
@@ -868,8 +782,6 @@ export function runClientAuditProfile(
       feedProgressBurst,
       bookmarkBurstSingleFrame,
       bookmarkBurstSeparateFrames,
-      coldSynchronization,
-      warmSynchronization,
       localViewProjection,
       normalizedPersistenceMutation,
     },

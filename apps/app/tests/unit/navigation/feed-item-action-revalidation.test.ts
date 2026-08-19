@@ -63,9 +63,6 @@ vi.mock("~/lib/data/feeds/store", () => ({
 vi.mock("~/lib/data/navigation/store", () => ({
   refreshNavigationSnapshotSafely: mocks.refreshNavigationSnapshotSafely,
 }));
-vi.mock("~/lib/data/clientChannel", () => ({
-  getDataSubscriptionClientId: () => "connected-client",
-}));
 vi.mock("~/lib/data/subscriptionConnection", () => ({
   isDataSubscriptionConnected: mocks.isDataSubscriptionConnected,
 }));
@@ -95,6 +92,11 @@ describe("connected Feed item action revalidation", () => {
       mocks.refreshNavigationAfterFeedItemChangeIfNeeded,
     ).not.toHaveBeenCalled();
     expect(mocks.refreshNavigationSnapshotSafely).not.toHaveBeenCalled();
+    expect(mocks.setWatchedValue).toHaveBeenCalledWith({
+      id: "saved-item",
+      feedId: 1,
+      isWatched: true,
+    });
   });
 
   it("waits for full reconnect recovery when the subscription is disconnected", async () => {

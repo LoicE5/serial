@@ -1,11 +1,5 @@
 {
   "client": {
-    "synchronizationBytes": {
-      "request": 2743,
-      "maximumResponsePage": 36049,
-      "requestBudget": 16384,
-      "responseBudget": 262144
-    },
     "persistenceMutationBytes": {
       "measured": 10881,
       "budget": 524288
@@ -115,24 +109,6 @@
       "bookmarkBurstSeparateFrames": {
         "durationMs": 0.19908299999997325,
         "bookmarkStoreNotifications": 100,
-        "feedItemStoreNotifications": 0,
-        "feedItemProjectionNotifications": 0,
-        "feedItemScopeNotifications": 0,
-        "mixedStoreNotifications": 0,
-        "authoritativeRefills": 0
-      },
-      "coldSynchronization": {
-        "durationMs": 0.6547499999996944,
-        "bookmarkStoreNotifications": 1,
-        "feedItemStoreNotifications": 0,
-        "feedItemProjectionNotifications": 0,
-        "feedItemScopeNotifications": 0,
-        "mixedStoreNotifications": 0,
-        "authoritativeRefills": 0
-      },
-      "warmSynchronization": {
-        "durationMs": 17.816749999999956,
-        "bookmarkStoreNotifications": 0,
         "feedItemStoreNotifications": 0,
         "feedItemProjectionNotifications": 0,
         "feedItemScopeNotifications": 0,

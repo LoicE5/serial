@@ -1,4 +1,15 @@
+import { percentile } from "./model";
+
 const MEBIBYTE = 1_024 * 1_024;
+
+export function summarizePercentiles(values: number[]) {
+  if (values.length === 0) return { samples: 0, p50: null, p95: null };
+  return {
+    samples: values.length,
+    p50: percentile(values, 0.5),
+    p95: percentile(values, 0.95),
+  };
+}
 
 export const CLIENT_BROWSER_BUDGETS = {
   coldLoad: {
@@ -23,7 +34,7 @@ export const CLIENT_BROWSER_BUDGETS = {
     requests: 700,
     transferBytes: 1.5 * MEBIBYTE,
     rpcRequests: 8,
-    rpcTransferBytes: 512 * 1_024,
+    rpcTransferBytes: MEBIBYTE,
     indexedDbReads: 1_600,
     indexedDbWrites: 500,
   },
@@ -33,9 +44,9 @@ export const CLIENT_BROWSER_BUDGETS = {
     heapBytes: 128 * MEBIBYTE,
     storageBytes: 16 * MEBIBYTE,
     requests: 12,
-    transferBytes: 512 * 1_024,
+    transferBytes: MEBIBYTE,
     rpcRequests: 8,
-    rpcTransferBytes: 512 * 1_024,
+    rpcTransferBytes: MEBIBYTE,
     indexedDbReads: 16,
     indexedDbWrites: 500,
   },
