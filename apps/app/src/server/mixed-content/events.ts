@@ -92,7 +92,7 @@ export async function publishBookmarkDeletion(input: {
   id: string;
   canonicalUrl: string;
   bookmark?: BookmarkInvalidationState;
-  invalidation?: ReconciliationInvalidationSummary | null;
+  invalidation?: ReconciliationInvalidationSummary;
 }) {
   await publisher.publish(getUserChannel(input.userId), {
     source: "bookmark",
@@ -101,18 +101,30 @@ export async function publishBookmarkDeletion(input: {
       id: input.id,
       canonicalUrl: input.canonicalUrl,
     },
-    ...(input.invalidation === null
-      ? {}
-      : {
-          invalidation:
-            input.invalidation ??
-            (input.bookmark
-              ? buildBookmarkInvalidationSummary({ before: input.bookmark })
-              : {
-                  type: "reconciliation-invalidation" as const,
-                  domains: ["navigation" as const],
-                  scopeImpact: { type: "unknown" as const },
-                }),
-        }),
+    invalidation:
+      input.invalidation ??
+      (input.bookmark
+        ? buildBookmarkInvalidationSummary({ before: input.bookmark })
+        : {
+            type: "reconciliation-invalidation" as const,
+            domains: ["navigation" as const],
+            scopeImpact: { type: "unknown" as const },
+          }),
   });
+}
+
+export function publishBookmarkConsolidationDeletions(input: {
+  userId: string;
+  bookmarkIds: string[];
+  canonicalUrl: string;
+}) {
+  return Promise.all(
+    input.bookmarkIds.map((bookmarkId) =>
+      publishBookmarkDeletion({
+        userId: input.userId,
+        id: bookmarkId,
+        canonicalUrl: input.canonicalUrl,
+      }),
+    ),
+  );
 }

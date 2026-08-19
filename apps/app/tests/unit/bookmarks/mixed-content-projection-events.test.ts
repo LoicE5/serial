@@ -155,6 +155,127 @@ beforeEach(() => {
 });
 
 describe("Bookmark projection events and direct mixed pages", () => {
+  it("rejects an in-flight page after a list-changing Bookmark event", async () => {
+    const savedBookmark = bookmark();
+    const scope = { type: "view" as const, viewId: 10 };
+    const contentStatus = {
+      saveStatus: "saved" as const,
+      archiveStatus: "unread" as const,
+    };
+    const references = [reference("bookmark", savedBookmark.id)];
+    applyRequestedMixedContentPage({
+      scope,
+      contentStatus,
+      page: { ...page(references), bookmarks: [savedBookmark] },
+      replacesScope: true,
+    });
+
+    let resolvePage:
+      | ((value: MixedContentPage | PromiseLike<MixedContentPage>) => void)
+      | undefined;
+    orpcMocks.requestPage.mockReturnValue(
+      new Promise<MixedContentPage>((resolve) => {
+        resolvePage = resolve;
+      }),
+    );
+    const request = dataRequestActions.requestMixedContentPage(
+      scope,
+      contentStatus,
+    );
+    const revisionBeforeEvent = getMixedContentMembershipRevision();
+    const archivedBookmark = bookmark({
+      isRead: true,
+      readUpdatedAt: new Date(NOW.getTime() + 1),
+      updatedAt: new Date(NOW.getTime() + 1),
+    });
+    const affectedScopes = processPublishedChunks([
+      {
+        source: "bookmark",
+        chunk: {
+          type: "bookmark-upsert",
+          bookmark: archivedBookmark,
+          affectsListProjection: true,
+        },
+      },
+      {
+        source: "bookmark",
+        chunk: {
+          type: "bookmark-upsert",
+          bookmark: archivedBookmark,
+          affectsListProjection: true,
+        },
+      },
+    ]);
+    resolvePage?.({
+      ...page(references),
+      bookmarks: [savedBookmark],
+    });
+    await request;
+
+    expect(affectedScopes).toHaveLength(1);
+    expect(getMixedContentMembershipRevision()).toBe(revisionBeforeEvent + 1);
+    expect(
+      mixedContentStore.getState().scopes[
+        getMixedScopeKey(scope, contentStatus)
+      ]?.references,
+    ).toEqual([]);
+  });
+
+  it("advances membership once for retained Bookmark batches and deletions", () => {
+    const first = bookmark({ id: "batch-one" });
+    const second = bookmark({ id: "batch-two" });
+    const scope = { type: "view" as const, viewId: 10 };
+    const contentStatus = {
+      saveStatus: "saved" as const,
+      archiveStatus: "unread" as const,
+    };
+    applyRequestedMixedContentPage({
+      scope,
+      contentStatus,
+      page: {
+        ...page([
+          reference("bookmark", first.id),
+          reference("bookmark", second.id),
+        ]),
+        bookmarks: [first, second],
+      },
+      replacesScope: true,
+    });
+    const revisionBeforeBatch = getMixedContentMembershipRevision();
+
+    const affectedByBatch = processPublishedChunks([
+      {
+        source: "bookmark",
+        chunk: {
+          type: "bookmark-upsert-batch",
+          bookmarks: [
+            bookmark({ id: first.id, isRead: true }),
+            bookmark({ id: second.id, isRead: true }),
+          ],
+        },
+      },
+    ]);
+
+    expect(affectedByBatch).toHaveLength(1);
+    expect(getMixedContentMembershipRevision()).toBe(revisionBeforeBatch + 1);
+
+    const revisionBeforeDeletion = getMixedContentMembershipRevision();
+    processPublishedChunks([
+      {
+        source: "bookmark",
+        chunk: {
+          type: "bookmark-delete",
+          id: first.id,
+          canonicalUrl: first.canonicalUrl,
+        },
+      },
+    ]);
+
+    expect(getMixedContentMembershipRevision()).toBe(
+      revisionBeforeDeletion + 1,
+    );
+  });
+
   it("rejects an in-flight page after a mixed Bookmark read mutation", async () => {
     const savedBookmark = bookmark();
     const scope = { type: "view" as const, viewId: 10 };

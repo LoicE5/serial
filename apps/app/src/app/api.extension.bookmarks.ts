@@ -23,6 +23,7 @@ import {
   createExtensionBookmarkView,
 } from "~/server/bookmarks/extensionOrganization";
 import {
+  publishBookmarkConsolidationDeletions,
   publishBookmarkDeletion,
   publishBookmarkUpsert,
 } from "~/server/mixed-content/events";
@@ -55,16 +56,11 @@ const DEFAULT_ROUTE_DEPENDENCIES: ExtensionBookmarkRouteDependencies = {
     const removedBookmarkIds =
       result.removedBookmarkIds ??
       (result.removedBookmarkId ? [result.removedBookmarkId] : []);
-    await Promise.all(
-      removedBookmarkIds.map((removedBookmarkId) =>
-        publishBookmarkDeletion({
-          userId,
-          id: removedBookmarkId,
-          canonicalUrl: result.bookmark.canonicalUrl,
-          invalidation: null,
-        }),
-      ),
-    );
+    await publishBookmarkConsolidationDeletions({
+      userId,
+      bookmarkIds: removedBookmarkIds,
+      canonicalUrl: result.bookmark.canonicalUrl,
+    });
     return publishBookmarkUpsert({
       database: db,
       userId,
