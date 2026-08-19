@@ -2,7 +2,7 @@
 
 import createDOMPurify from "dompurify";
 import parse, { Element } from "html-react-parser";
-import { useEffect, useState } from "react";
+import { useMemo, useSyncExternalStore } from "react";
 import type { HTMLReactParserOptions } from "html-react-parser";
 import { CustomVideoPlayer } from "~/components/CustomVideoPlayer";
 import { flattenReaderImages } from "~/components/content-reader/flattenReaderImages";
@@ -14,25 +14,24 @@ import {
 } from "~/server/bookmarks/sanitizePolicy";
 
 const YOUTUBE_VIDEO_ID = /^[A-Za-z0-9_-]{11}$/;
+const subscribeToClientSnapshot = () => () => undefined;
 
 export function BookmarkArticleContent({ content }: { content: string }) {
-  const [sanitizedContent, setSanitizedContent] = useState("");
   const [videoPlayer] = useFlagState("CUSTOM_VIDEO_PLAYER");
-
-  useEffect(() => {
-    const purifier = createDOMPurify(window);
-    const frame = window.requestAnimationFrame(() => {
-      setSanitizedContent(
-        purifier.sanitize(content, {
-          ALLOWED_TAGS: [...BOOKMARK_CAPTURE_ALLOWED_TAGS],
-          ALLOWED_ATTR: [...BOOKMARK_CAPTURE_ALLOWED_ATTRIBUTES],
-          ALLOW_DATA_ATTR: false,
-          ALLOW_ARIA_ATTR: false,
-        }),
-      );
+  const clientSanitizedContent = useMemo(() => {
+    if (typeof window === "undefined") return "";
+    return createDOMPurify(window).sanitize(content, {
+      ALLOWED_TAGS: [...BOOKMARK_CAPTURE_ALLOWED_TAGS],
+      ALLOWED_ATTR: [...BOOKMARK_CAPTURE_ALLOWED_ATTRIBUTES],
+      ALLOW_DATA_ATTR: false,
+      ALLOW_ARIA_ATTR: false,
     });
-    return () => window.cancelAnimationFrame(frame);
   }, [content]);
+  const sanitizedContent = useSyncExternalStore(
+    subscribeToClientSnapshot,
+    () => clientSanitizedContent,
+    () => "",
+  );
 
   if (!sanitizedContent) {
     return (
