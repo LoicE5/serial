@@ -1,6 +1,6 @@
-export function getBookmarkPostedAt(bookmark: {
+export function getBookmarkAddedAt(bookmark: {
   createdAt: Date;
   publishedAt: Date | null;
 }) {
-  return bookmark.publishedAt ?? bookmark.createdAt;
+  return bookmark.createdAt;
 }

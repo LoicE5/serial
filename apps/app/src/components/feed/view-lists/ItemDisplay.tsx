@@ -10,7 +10,7 @@ import {
   SendIcon,
   Trash2Icon,
 } from "lucide-react";
-import { getBookmarkPostedAt } from "./itemDate";
+import { getBookmarkAddedAt } from "./itemDate";
 import type { ApplicationBookmark } from "~/server/mixed-content/projection";
 import { KeyboardShortcutDisplay } from "~/components/ButtonWithShortcut";
 import { Button } from "~/components/ui/button";
@@ -595,7 +595,7 @@ function BookmarkItemDisplay({
   });
   const href = destination.href;
   const isLarge = size === "large";
-  const postedAt = getBookmarkPostedAt(bookmark);
+  const postedAt = getBookmarkAddedAt(bookmark);
 
   if (grid) {
     return (
