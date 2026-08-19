@@ -13,7 +13,11 @@ import { buildBookmarkInvalidationSummary } from "~/lib/reconciliation";
 type MixedContentDatabase = typeof defaultDatabase;
 
 export type BookmarkPublishedChunk =
-  | { type: "bookmark-upsert"; bookmark: ApplicationBookmark }
+  | {
+      type: "bookmark-upsert";
+      bookmark: ApplicationBookmark;
+      affectsListProjection?: boolean;
+    }
   | { type: "bookmark-upsert-batch"; bookmarks: ApplicationBookmark[] }
   | { type: "bookmark-delete"; id: string; canonicalUrl: string };
 
@@ -36,12 +40,17 @@ export async function publishBookmarkUpsert(input: {
   previousBookmark?: BookmarkInvalidationState | null;
   contentStatusKeys?: ContentStatusKey[];
   invalidation?: ReconciliationInvalidationSummary;
+  affectsListProjection?: boolean;
 }) {
   const bookmark = await loadApplicationBookmark(input);
   if (!bookmark) return null;
   await publisher.publish(getUserChannel(input.userId), {
     source: "bookmark",
-    chunk: { type: "bookmark-upsert", bookmark },
+    chunk: {
+      type: "bookmark-upsert",
+      bookmark,
+      affectsListProjection: input.affectsListProjection,
+    },
     invalidation:
       input.invalidation ??
       buildBookmarkInvalidationSummary({
@@ -83,7 +92,7 @@ export async function publishBookmarkDeletion(input: {
   id: string;
   canonicalUrl: string;
   bookmark?: BookmarkInvalidationState;
-  invalidation?: ReconciliationInvalidationSummary | null;
+  invalidation?: ReconciliationInvalidationSummary;
 }) {
   await publisher.publish(getUserChannel(input.userId), {
     source: "bookmark",
@@ -92,18 +101,30 @@ export async function publishBookmarkDeletion(input: {
       id: input.id,
       canonicalUrl: input.canonicalUrl,
     },
-    ...(input.invalidation === null
-      ? {}
-      : {
-          invalidation:
-            input.invalidation ??
-            (input.bookmark
-              ? buildBookmarkInvalidationSummary({ before: input.bookmark })
-              : {
-                  type: "reconciliation-invalidation" as const,
-                  domains: ["navigation" as const],
-                  scopeImpact: { type: "unknown" as const },
-                }),
-        }),
+    invalidation:
+      input.invalidation ??
+      (input.bookmark
+        ? buildBookmarkInvalidationSummary({ before: input.bookmark })
+        : {
+            type: "reconciliation-invalidation" as const,
+            domains: ["navigation" as const],
+            scopeImpact: { type: "unknown" as const },
+          }),
   });
+}
+
+export function publishBookmarkConsolidationDeletions(input: {
+  userId: string;
+  bookmarkIds: string[];
+  canonicalUrl: string;
+}) {
+  return Promise.all(
+    input.bookmarkIds.map((bookmarkId) =>
+      publishBookmarkDeletion({
+        userId: input.userId,
+        id: bookmarkId,
+        canonicalUrl: input.canonicalUrl,
+      }),
+    ),
+  );
 }

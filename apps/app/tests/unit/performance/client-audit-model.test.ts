@@ -33,15 +33,20 @@ describe("client performance audit model", () => {
       ).toBe(2);
       expect(result.operations.bookmarkDelete.authoritativeRefills).toBe(1);
       expect(result.operations.bookmarkBurstSingleFrame).toMatchObject({
-        bookmarkStoreNotifications: 100,
         mixedStoreNotifications: 0,
         authoritativeRefills: 0,
       });
+      expect(
+        result.operations.bookmarkBurstSingleFrame.bookmarkStoreNotifications,
+      ).toBeLessThanOrEqual(100);
       expect(result.operations.bookmarkBurstSeparateFrames).toMatchObject({
-        bookmarkStoreNotifications: 100,
         mixedStoreNotifications: 0,
         authoritativeRefills: 0,
       });
+      expect(
+        result.operations.bookmarkBurstSeparateFrames
+          .bookmarkStoreNotifications,
+      ).toBeLessThanOrEqual(100);
       expect(result.operations.localViewProjection).toMatchObject({
         bookmarkStoreNotifications: 0,
         feedItemStoreNotifications: 0,

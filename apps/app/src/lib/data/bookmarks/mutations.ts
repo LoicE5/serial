@@ -6,7 +6,16 @@ import {
   bookmarkPropertiesChange,
 } from "@serial/bookmark-capture";
 import { useMutation } from "@tanstack/react-query";
-import { mixedContentStore } from "../mixed-content/store";
+import { isBookmarkProjectionChange } from "../mixed-content/bookmarkProjection";
+import { advanceMixedContentMembershipRevision } from "../mixed-content/membershipRevision";
+import {
+  hasBookmarkBodyOwner,
+  mixedContentStore,
+} from "../mixed-content/store";
+import {
+  clearRetainedEntityPins,
+  setRetainedEntityPins,
+} from "../page-retention";
 import { viewsStore } from "../views/store";
 import { bookmarksStore } from "./store";
 import type { ApplicationBookmark } from "~/server/mixed-content/projection";
@@ -15,10 +24,36 @@ import { orpc } from "~/lib/orpc";
 const mutationCoordinator =
   new BookmarkMutationCoordinator<ApplicationBookmark>();
 
+function optimisticRetentionOwner(token: {
+  bookmarkId: string;
+  sequence: number;
+}) {
+  return `optimistic:bookmark:${token.bookmarkId}:${token.sequence}`;
+}
+
+function retainOptimisticBookmark(token: {
+  bookmarkId: string;
+  sequence: number;
+}) {
+  setRetainedEntityPins(optimisticRetentionOwner(token), {
+    bookmarkIds: [token.bookmarkId],
+  });
+}
+
+function releaseOptimisticBookmark(token: {
+  bookmarkId: string;
+  sequence: number;
+}) {
+  clearRetainedEntityPins(optimisticRetentionOwner(token));
+}
+
 function projectBookmark(
   bookmark: ApplicationBookmark,
   previousBookmark: ApplicationBookmark | undefined,
 ) {
+  if (isBookmarkProjectionChange(previousBookmark, bookmark)) {
+    advanceMixedContentMembershipRevision();
+  }
   bookmarksStore.getState().upsert(bookmark);
   mixedContentStore.getState().reprojectUpsert({
     bookmark,
@@ -28,6 +63,7 @@ function projectBookmark(
 }
 
 function removeProjectedBookmark(bookmark: ApplicationBookmark) {
+  advanceMixedContentMembershipRevision();
   bookmarksStore.getState().remove(bookmark.id);
   mixedContentStore.getState().reprojectDeletion({
     bookmarkId: bookmark.id,
@@ -59,10 +95,14 @@ export function useUpdateBookmarkStateMutation(bookmarkId: string) {
   return useMutation(
     orpc.bookmark.updateState.mutationOptions({
       onMutate: (input) => {
+        const changesMixedProjection =
+          input.isSaved !== undefined || input.isRead !== undefined;
         const previousBookmark = bookmarksStore
           .getState()
           .getBookmark(bookmarkId);
-        if (!previousBookmark) return { previousBookmark };
+        if (!previousBookmark) {
+          return { previousBookmark, changesMixedProjection };
+        }
         const now = new Date();
         const changes = [
           ...(input.isSaved !== undefined
@@ -107,40 +147,64 @@ export function useUpdateBookmarkStateMutation(bookmarkId: string) {
             : []),
         ];
         const token = mutationCoordinator.begin(bookmarkId, changes);
-        projectBookmark(
-          mutationCoordinator.apply(previousBookmark, token),
-          previousBookmark,
-        );
-        return { previousBookmark, token };
+        retainOptimisticBookmark(token);
+        try {
+          projectBookmark(
+            mutationCoordinator.apply(previousBookmark, token),
+            previousBookmark,
+          );
+        } catch (error) {
+          releaseOptimisticBookmark(token);
+          throw error;
+        }
+        return { previousBookmark, token, changesMixedProjection };
       },
       onSuccess: (bookmark, _input, context) => {
-        const serverBookmark = bookmark as ApplicationBookmark;
-        const currentBookmark = bookmarksStore
-          .getState()
-          .getBookmark(bookmarkId);
-        const reconciled =
-          context?.token && currentBookmark
-            ? mutationCoordinator.reconcile(
-                currentBookmark,
-                serverBookmark,
-                context.token,
-              )
-            : serverBookmark;
-        projectBookmark(reconciled, currentBookmark);
+        try {
+          const serverBookmark = bookmark as ApplicationBookmark;
+          const currentBookmark = bookmarksStore
+            .getState()
+            .getBookmark(bookmarkId);
+          if (!currentBookmark && !context?.changesMixedProjection) {
+            if (hasBookmarkBodyOwner(bookmarkId)) {
+              bookmarksStore.getState().upsert(serverBookmark);
+            }
+            return;
+          }
+          const reconciled =
+            context?.token && currentBookmark
+              ? mutationCoordinator.reconcile(
+                  currentBookmark,
+                  serverBookmark,
+                  context.token,
+                )
+              : serverBookmark;
+          projectBookmark(reconciled, currentBookmark);
+        } finally {
+          if (context?.token) releaseOptimisticBookmark(context.token);
+        }
       },
       onError: (_error, _input, context) => {
-        const optimisticBookmark = bookmarksStore
-          .getState()
-          .getBookmark(bookmarkId);
-        if (context?.previousBookmark && context.token && optimisticBookmark) {
-          projectBookmark(
-            mutationCoordinator.rollback(
+        try {
+          const optimisticBookmark = bookmarksStore
+            .getState()
+            .getBookmark(bookmarkId);
+          if (
+            context?.previousBookmark &&
+            context.token &&
+            optimisticBookmark
+          ) {
+            projectBookmark(
+              mutationCoordinator.rollback(
+                optimisticBookmark,
+                context.previousBookmark,
+                context.token,
+              ),
               optimisticBookmark,
-              context.previousBookmark,
-              context.token,
-            ),
-            optimisticBookmark,
-          );
+            );
+          }
+        } finally {
+          if (context?.token) releaseOptimisticBookmark(context.token);
         }
       },
     }),
@@ -158,39 +222,53 @@ export function useSetBookmarkViewMutation() {
         const token = mutationCoordinator.begin(input.bookmarkId, [
           bookmarkMembershipChange("view", input.viewId, input.assigned),
         ]);
-        projectBookmark(
-          mutationCoordinator.apply(previousBookmark, token),
-          previousBookmark,
-        );
+        retainOptimisticBookmark(token);
+        try {
+          projectBookmark(
+            mutationCoordinator.apply(previousBookmark, token),
+            previousBookmark,
+          );
+        } catch (error) {
+          releaseOptimisticBookmark(token);
+          throw error;
+        }
         return { previousBookmark, token };
       },
       onSuccess: (bookmark, _input, context) => {
-        const currentBookmark = context?.previousBookmark
-          ? bookmarksStore.getState().getBookmark(context.previousBookmark.id)
-          : undefined;
-        if (bookmark && currentBookmark && context?.token) {
-          const applicationBookmark = mutationCoordinator.reconcile(
-            currentBookmark,
-            bookmark,
-            context.token,
-          );
-          projectBookmark(applicationBookmark, currentBookmark);
+        try {
+          const currentBookmark = context?.previousBookmark
+            ? bookmarksStore.getState().getBookmark(context.previousBookmark.id)
+            : undefined;
+          if (bookmark && currentBookmark && context?.token) {
+            const applicationBookmark = mutationCoordinator.reconcile(
+              currentBookmark,
+              bookmark,
+              context.token,
+            );
+            projectBookmark(applicationBookmark, currentBookmark);
+          }
+        } finally {
+          if (context?.token) releaseOptimisticBookmark(context.token);
         }
       },
       onError: (_error, _input, context) => {
-        if (!context?.previousBookmark || !context.token) return;
-        const currentBookmark = bookmarksStore
-          .getState()
-          .getBookmark(context.previousBookmark.id);
-        if (!currentBookmark) return;
-        projectBookmark(
-          mutationCoordinator.rollback(
+        try {
+          if (!context?.previousBookmark || !context.token) return;
+          const currentBookmark = bookmarksStore
+            .getState()
+            .getBookmark(context.previousBookmark.id);
+          if (!currentBookmark) return;
+          projectBookmark(
+            mutationCoordinator.rollback(
+              currentBookmark,
+              context.previousBookmark,
+              context.token,
+            ),
             currentBookmark,
-            context.previousBookmark,
-            context.token,
-          ),
-          currentBookmark,
-        );
+          );
+        } finally {
+          if (context?.token) releaseOptimisticBookmark(context.token);
+        }
       },
     }),
   );
@@ -207,39 +285,53 @@ export function useSetBookmarkTagMutation() {
         const token = mutationCoordinator.begin(input.bookmarkId, [
           bookmarkMembershipChange("tag", input.tagId, input.assigned),
         ]);
-        projectBookmark(
-          mutationCoordinator.apply(previousBookmark, token),
-          previousBookmark,
-        );
+        retainOptimisticBookmark(token);
+        try {
+          projectBookmark(
+            mutationCoordinator.apply(previousBookmark, token),
+            previousBookmark,
+          );
+        } catch (error) {
+          releaseOptimisticBookmark(token);
+          throw error;
+        }
         return { previousBookmark, token };
       },
       onSuccess: (bookmark, _input, context) => {
-        const currentBookmark = context?.previousBookmark
-          ? bookmarksStore.getState().getBookmark(context.previousBookmark.id)
-          : undefined;
-        if (bookmark && currentBookmark && context?.token) {
-          const applicationBookmark = mutationCoordinator.reconcile(
-            currentBookmark,
-            bookmark,
-            context.token,
-          );
-          projectBookmark(applicationBookmark, currentBookmark);
+        try {
+          const currentBookmark = context?.previousBookmark
+            ? bookmarksStore.getState().getBookmark(context.previousBookmark.id)
+            : undefined;
+          if (bookmark && currentBookmark && context?.token) {
+            const applicationBookmark = mutationCoordinator.reconcile(
+              currentBookmark,
+              bookmark,
+              context.token,
+            );
+            projectBookmark(applicationBookmark, currentBookmark);
+          }
+        } finally {
+          if (context?.token) releaseOptimisticBookmark(context.token);
         }
       },
       onError: (_error, _input, context) => {
-        if (!context?.previousBookmark || !context.token) return;
-        const currentBookmark = bookmarksStore
-          .getState()
-          .getBookmark(context.previousBookmark.id);
-        if (!currentBookmark) return;
-        projectBookmark(
-          mutationCoordinator.rollback(
+        try {
+          if (!context?.previousBookmark || !context.token) return;
+          const currentBookmark = bookmarksStore
+            .getState()
+            .getBookmark(context.previousBookmark.id);
+          if (!currentBookmark) return;
+          projectBookmark(
+            mutationCoordinator.rollback(
+              currentBookmark,
+              context.previousBookmark,
+              context.token,
+            ),
             currentBookmark,
-            context.previousBookmark,
-            context.token,
-          ),
-          currentBookmark,
-        );
+          );
+        } finally {
+          if (context?.token) releaseOptimisticBookmark(context.token);
+        }
       },
     }),
   );

@@ -11,6 +11,7 @@ import {
 } from "~/server/bookmarks/service";
 import { normalizeBookmarkUrl } from "~/server/bookmarks/url";
 import {
+  publishBookmarkConsolidationDeletions,
   publishBookmarkDeletion,
   publishBookmarkUpsert,
   publishBookmarkUpsertBatch,
@@ -67,16 +68,11 @@ export const save = protectedProcedure
     const removedBookmarkIds =
       result.removedBookmarkIds ??
       (result.removedBookmarkId ? [result.removedBookmarkId] : []);
-    await Promise.all(
-      removedBookmarkIds.map((removedBookmarkId) =>
-        publishBookmarkDeletion({
-          userId: context.user.id,
-          id: removedBookmarkId,
-          canonicalUrl: result.bookmark.canonicalUrl,
-          invalidation: null,
-        }),
-      ),
-    );
+    await publishBookmarkConsolidationDeletions({
+      userId: context.user.id,
+      bookmarkIds: removedBookmarkIds,
+      canonicalUrl: result.bookmark.canonicalUrl,
+    });
     const applicationBookmark = await publishBookmarkUpsert({
       database: context.db,
       userId: context.user.id,
@@ -150,6 +146,8 @@ export const updateState = protectedProcedure
       userId: context.user.id,
       bookmarkId: bookmark.id,
       previousBookmark,
+      affectsListProjection:
+        input.isSaved !== undefined || input.isRead !== undefined,
     });
     return applicationBookmark ?? bookmark;
   });

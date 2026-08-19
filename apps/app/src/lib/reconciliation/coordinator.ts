@@ -71,6 +71,8 @@ type BufferedLiveEvent<TLiveEvent> = {
   payload: TLiveEvent;
 };
 
+const ALL_SCOPE_TARGETS_KEY = "scope:*";
+
 type BufferedApplication<TAuthoritative, TLiveEvent> =
   BufferedAuthoritative<TAuthoritative> | BufferedLiveEvent<TLiveEvent>;
 
@@ -89,6 +91,7 @@ export type ReconciliationCoordinatorState<
   dirtyTargets: Record<string, ReconciliationTarget>;
   hydratedDomains: Record<ReconciliationHydrationDomain, boolean>;
   bufferedApplications: Array<BufferedApplication<TAuthoritative, TLiveEvent>>;
+  applyingLiveEvents: Record<string, string[]>;
   latestFullEpoch: FullEpoch | null;
   activeScope: ReconciliationScopeTarget | null;
   cacheUsableAt: number | null;
@@ -154,11 +157,13 @@ export type ReconciliationCoordinatorEvent<TAuthoritative, TLiveEvent> =
       type: "live-event-received";
       eventId: string;
       targets: ReconciliationTarget[];
+      affectsAllScopes?: boolean;
       requiresHydration: ReconciliationHydrationDomain[];
       payload?: TLiveEvent;
       invalidates?: ReconciliationTarget[];
       repairIntent?: ReconciliationRequestIntent;
     }
+  | { type: "live-event-applied"; eventId: string }
   | {
       type: "targets-dirtied";
       targets: ReconciliationTarget[];
@@ -220,6 +225,7 @@ export function createReconciliationCoordinatorState<
     dirtyTargets: {},
     hydratedDomains: initialHydrationState(),
     bufferedApplications: [],
+    applyingLiveEvents: {},
     latestFullEpoch: null,
     activeScope: null,
     cacheUsableAt: null,
@@ -491,7 +497,29 @@ function isHydrated<TAuthoritative, TLiveEvent>(
 }
 
 function targetKeysOverlap(left: readonly string[], right: Set<string>) {
-  return left.some((key) => right.has(key));
+  const leftAffectsAllScopes = left.includes(ALL_SCOPE_TARGETS_KEY);
+  const rightAffectsAllScopes = right.has(ALL_SCOPE_TARGETS_KEY);
+  return (
+    left.some((key) => right.has(key)) ||
+    (leftAffectsAllScopes &&
+      [...right].some((key) => key.startsWith("scope:"))) ||
+    (rightAffectsAllScopes && left.some((key) => key.startsWith("scope:")))
+  );
+}
+
+function hasPendingTargetOverlap<TAuthoritative, TLiveEvent>(
+  state: ReconciliationCoordinatorState<TAuthoritative, TLiveEvent>,
+  targetKeys: readonly string[],
+) {
+  const targetKeySet = new Set(targetKeys);
+  return (
+    state.bufferedApplications.some((application) =>
+      targetKeysOverlap(application.targetKeys, targetKeySet),
+    ) ||
+    Object.values(state.applyingLiveEvents).some((applyingTargetKeys) =>
+      targetKeysOverlap(applyingTargetKeys, targetKeySet),
+    )
+  );
 }
 
 function requestRevisionIsCurrent<TAuthoritative, TLiveEvent>(
@@ -522,10 +550,14 @@ function bufferApplication<TAuthoritative, TLiveEvent>(
 function flushBufferedApplications<TAuthoritative, TLiveEvent>(
   state: ReconciliationCoordinatorState<TAuthoritative, TLiveEvent>,
 ): ReconciliationCoordinatorTransition<TAuthoritative, TLiveEvent> {
-  const blockedTargetKeys = new Set<string>();
+  const applyingLiveEvents = { ...state.applyingLiveEvents };
+  const blockedTargetKeys = new Set(
+    Object.values(applyingLiveEvents).flatMap((targetKeys) => targetKeys),
+  );
   const remaining: Array<BufferedApplication<TAuthoritative, TLiveEvent>> = [];
   const commands: Array<ReconciliationCommand<TAuthoritative, TLiveEvent>> = [];
   const staleTargets: ReconciliationTarget[] = [];
+  const invalidatedStaleTargetKeys = new Set<string>();
   for (const application of state.bufferedApplications) {
     const blocked =
       !isHydrated(state, application.requiresHydration) ||
@@ -543,6 +575,10 @@ function flushBufferedApplications<TAuthoritative, TLiveEvent>(
         eventId: application.eventId,
         payload: application.payload,
       });
+      applyingLiveEvents[application.eventId] = application.targetKeys;
+      for (const targetKey of application.targetKeys) {
+        blockedTargetKeys.add(targetKey);
+      }
       continue;
     }
     if (
@@ -553,6 +589,17 @@ function flushBufferedApplications<TAuthoritative, TLiveEvent>(
       )
     ) {
       staleTargets.push(application.target);
+      const targetKey = getReconciliationTargetKey(application.target);
+      const capturedRevision =
+        state.requests[application.reconciliationId]?.capturedRevisions[
+          targetKey
+        ];
+      if (
+        capturedRevision !== undefined &&
+        capturedRevision < targetState(state, application.target).revision
+      ) {
+        invalidatedStaleTargetKeys.add(targetKey);
+      }
       continue;
     }
     commands.push({
@@ -565,12 +612,29 @@ function flushBufferedApplications<TAuthoritative, TLiveEvent>(
   let nextState = withDerivedTrust({
     ...state,
     bufferedApplications: remaining,
+    applyingLiveEvents,
   });
   if (staleTargets.length === 0) return { state: nextState, commands };
   nextState = markTargetsDirty(nextState, staleTargets, false);
+  const targetsWithoutCurrentRepair = staleTargets.filter((target) => {
+    if (!invalidatedStaleTargetKeys.has(getReconciliationTargetKey(target))) {
+      return true;
+    }
+    return (
+      !nextState.inFlight ||
+      !requestRevisionIsCurrent(
+        nextState,
+        nextState.inFlight.reconciliationId,
+        target,
+      )
+    );
+  });
+  if (targetsWithoutCurrentRepair.length === 0) {
+    return { state: nextState, commands };
+  }
   const queued = enqueueRequest(
     nextState,
-    repairIntentFor(nextState, staleTargets),
+    repairIntentFor(nextState, targetsWithoutCurrentRepair),
   );
   return { state: queued.state, commands: [...commands, ...queued.commands] };
 }
@@ -615,13 +679,13 @@ function deriveTrustedUpToDate<TAuthoritative, TLiveEvent>(
       ? [getReconciliationTargetKey(state.activeScope)]
       : []),
   ]);
-  const hasBufferedAuthoritative = state.bufferedApplications.some(
-    (application) =>
-      application.type === "authoritative" &&
-      application.targetKeys.some((targetKey) =>
-        requiredTargetKeys.has(targetKey),
-      ),
-  );
+  const hasPendingRequiredApplication =
+    state.bufferedApplications.some((application) =>
+      targetKeysOverlap(application.targetKeys, requiredTargetKeys),
+    ) ||
+    Object.values(state.applyingLiveEvents).some((targetKeys) =>
+      targetKeysOverlap(targetKeys, requiredTargetKeys),
+    );
   return Boolean(
     state.cacheUsableAt !== null &&
     state.latestFullEpoch?.established &&
@@ -630,7 +694,7 @@ function deriveTrustedUpToDate<TAuthoritative, TLiveEvent>(
     [...requiredTargetKeys].every(
       (targetKey) => state.dirtyTargets[targetKey] === undefined,
     ) &&
-    !hasBufferedAuthoritative,
+    !hasPendingRequiredApplication,
   );
 }
 
@@ -725,9 +789,9 @@ export function transitionReconciliation<TAuthoritative, TLiveEvent>(
         );
       }
       const targetKeys = [getReconciliationTargetKey(event.target)];
-      const hasEarlierBlockedTarget = state.bufferedApplications.some(
-        (application) =>
-          targetKeysOverlap(application.targetKeys, new Set(targetKeys)),
+      const hasEarlierBlockedTarget = hasPendingTargetOverlap(
+        state,
+        targetKeys,
       );
       if (
         !isHydrated(state, event.requiresHydration) ||
@@ -796,13 +860,13 @@ export function transitionReconciliation<TAuthoritative, TLiveEvent>(
       if (event.payload === undefined) {
         return { state: withDerivedTrust(nextState), commands };
       }
-      const targetKeys = event.targets.map(getReconciliationTargetKey);
-      const targetKeySet = new Set(targetKeys);
-      const hasEarlierBlockedTarget = nextState.bufferedApplications.some(
-        (application) =>
-          application.targetKeys.some((targetKey) =>
-            targetKeySet.has(targetKey),
-          ),
+      const targetKeys = [
+        ...event.targets.map(getReconciliationTargetKey),
+        ...(event.affectsAllScopes ? [ALL_SCOPE_TARGETS_KEY] : []),
+      ];
+      const hasEarlierBlockedTarget = hasPendingTargetOverlap(
+        nextState,
+        targetKeys,
       );
       if (
         !isHydrated(nextState, event.requiresHydration) ||
@@ -820,7 +884,13 @@ export function transitionReconciliation<TAuthoritative, TLiveEvent>(
         };
       }
       return {
-        state: nextState,
+        state: withDerivedTrust({
+          ...nextState,
+          applyingLiveEvents: {
+            ...nextState.applyingLiveEvents,
+            [event.eventId]: targetKeys,
+          },
+        }),
         commands: [
           ...commands,
           {
@@ -830,6 +900,11 @@ export function transitionReconciliation<TAuthoritative, TLiveEvent>(
           },
         ],
       };
+    }
+    case "live-event-applied": {
+      const applyingLiveEvents = { ...state.applyingLiveEvents };
+      delete applyingLiveEvents[event.eventId];
+      return flushBufferedApplications({ ...state, applyingLiveEvents });
     }
     case "request-settled": {
       let nextState = state;

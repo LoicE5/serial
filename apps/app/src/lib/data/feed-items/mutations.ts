@@ -2,13 +2,14 @@ import { useMutation } from "@tanstack/react-query";
 import { feedItemsStore, useFeedItemState } from "../store";
 import { feedCategoriesStore } from "../feed-categories/store";
 import { mixedContentStore } from "../mixed-content/store";
+import { advanceMixedContentMembershipRevision } from "../mixed-content/membershipRevision";
 import { viewsStore } from "../views/store";
 import {
   clearPendingFeedItemOverride,
   setPendingWatchedOverride,
   setPendingWatchLaterOverride,
 } from "./pendingMutations";
-import { advanceFeedItemMembershipRevision } from "./membershipRevision";
+import { hasFeedItemListProjectionChanged } from "./listProjection";
 import type { ApplicationFeedItem } from "~/server/db/schema";
 import { orpc, orpcRouterClient } from "~/lib/orpc";
 
@@ -44,6 +45,13 @@ function setFeedItemsWithMixedProjection(items: ApplicationFeedItem[]) {
   const previousFeedItems = Object.fromEntries(
     items.map((item) => [item.id, store.feedItemsDict[item.id]]),
   );
+  if (
+    items.some((item) =>
+      hasFeedItemListProjectionChanged(previousFeedItems[item.id], item),
+    )
+  ) {
+    advanceMixedContentMembershipRevision();
+  }
   store.setFeedItems(items);
   mixedContentStore.getState().reprojectFeedItems({
     itemIds: items.map((item) => item.id),
@@ -75,7 +83,6 @@ export function applyOptimisticWatchedValues(
     return [{ ...feedItem, isWatched, isWatchedUpdatedAt }];
   });
   if (updatedItems.length > 0) {
-    advanceFeedItemMembershipRevision();
     setFeedItemsWithMixedProjection(updatedItems);
   }
   return contexts;
@@ -102,7 +109,6 @@ export function applyOptimisticWatchLaterValue(
     isWatchLater,
     isWatchLaterUpdatedAt,
   );
-  advanceFeedItemMembershipRevision();
   setFeedItemsWithMixedProjection([
     { ...feedItem, isWatchLater, isWatchLaterUpdatedAt },
   ]);

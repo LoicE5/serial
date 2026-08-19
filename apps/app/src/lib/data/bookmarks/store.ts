@@ -18,9 +18,11 @@ type BookmarkStore = {
   upsert: (bookmark: ApplicationBookmark) => void;
   upsertMany: (bookmarks: ApplicationBookmark[]) => void;
   remove: (id: string) => void;
+  removeMany: (ids: Iterable<string>) => void;
+  pruneExcept: (retainedIds: ReadonlySet<string>) => void;
 };
 
-const bookmarkEntities: Record<string, ApplicationBookmark> = {};
+let bookmarkEntities: Record<string, ApplicationBookmark> = {};
 
 function isPersistedBookmarkStore(
   value: unknown,
@@ -33,8 +35,17 @@ function isPersistedBookmarkStore(
 function replaceBookmarkEntities(
   bookmarks: Record<string, ApplicationBookmark>,
 ) {
-  for (const id of Object.keys(bookmarkEntities)) delete bookmarkEntities[id];
-  Object.assign(bookmarkEntities, bookmarks);
+  bookmarkEntities = { ...bookmarks };
+}
+
+function removeBookmarkEntities(ids: Iterable<string>) {
+  const removedIds = [...ids].filter((id) => id in bookmarkEntities);
+  if (removedIds.length === 0) return false;
+
+  const nextEntities = { ...bookmarkEntities };
+  for (const id of removedIds) delete nextEntities[id];
+  bookmarkEntities = nextEntities;
+  return true;
 }
 
 const vanillaBookmarkStore = createStore<BookmarkStore>()(
@@ -52,18 +63,37 @@ const vanillaBookmarkStore = createStore<BookmarkStore>()(
       getBookmark: (id) => bookmarkEntities[id],
       snapshot: () => bookmarkEntities,
       upsert: (bookmark) => {
-        bookmarkEntities[bookmark.id] = bookmark;
+        bookmarkEntities = {
+          ...bookmarkEntities,
+          [bookmark.id]: bookmark,
+        };
         set({ revision: get().revision + 1 });
       },
       upsertMany: (bookmarks) => {
         if (bookmarks.length === 0) return;
+        const nextEntities = { ...bookmarkEntities };
         for (const bookmark of bookmarks) {
-          bookmarkEntities[bookmark.id] = bookmark;
+          nextEntities[bookmark.id] = bookmark;
         }
+        bookmarkEntities = nextEntities;
         set({ revision: get().revision + 1 });
       },
       remove: (id) => {
-        delete bookmarkEntities[id];
+        if (!removeBookmarkEntities([id])) return;
+        set({ revision: get().revision + 1 });
+      },
+      removeMany: (ids) => {
+        if (!removeBookmarkEntities(ids)) return;
+        set({ revision: get().revision + 1 });
+      },
+      pruneExcept: (retainedIds) => {
+        if (
+          !removeBookmarkEntities(
+            Object.keys(bookmarkEntities).filter((id) => !retainedIds.has(id)),
+          )
+        ) {
+          return;
+        }
         set({ revision: get().revision + 1 });
       },
     }),

@@ -1,15 +1,15 @@
 let membershipRevision = 0;
 
-export function getFeedItemMembershipRevision() {
+export function getMixedContentMembershipRevision() {
   return membershipRevision;
 }
 
-export function advanceFeedItemMembershipRevision() {
+export function advanceMixedContentMembershipRevision() {
   membershipRevision += 1;
   return membershipRevision;
 }
 
-export function isFeedItemMembershipRevisionStale(
+export function isMixedContentMembershipRevisionStale(
   candidateRevision: number | undefined,
 ) {
   return (

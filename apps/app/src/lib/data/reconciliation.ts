@@ -4,7 +4,7 @@ import { useSyncExternalStore } from "react";
 import { bookmarksStore } from "./bookmarks/store";
 import { contentCategoriesStore } from "./content-categories/store";
 import { feedCategoriesStore } from "./feed-categories/store";
-import { getFeedItemMembershipRevision } from "./feed-items/membershipRevision";
+import { getMixedContentMembershipRevision } from "./mixed-content/membershipRevision";
 import { feedsStore } from "./feeds/store";
 import { loadingActor, updateRefreshCooldown } from "./loading-machine";
 import { getMixedScopeKey, mixedContentStore } from "./mixed-content/store";
@@ -27,6 +27,7 @@ import type {
   ReconciliationEntityManifestEntry,
   ReconciliationHydrationDomain,
   ReconciliationInput,
+  ReconciliationInvalidationSummary,
   ReconciliationPageManifest,
   ReconciliationRequestDescriptor,
   ReconciliationScopeTarget,
@@ -36,6 +37,8 @@ import type { PublishedChunk } from "~/server/api/publisher";
 import type { RssAttemptSummary, RssTrigger } from "~/lib/rss";
 import { orpcRouterClient } from "~/lib/orpc";
 import {
+  ALL_CONTENT_STATUS_KEYS,
+  buildFeedInvalidationSummary,
   createReconciliationRuntime,
   expandInvalidationSummary,
   getBookmarkReconciliationVersion,
@@ -146,7 +149,7 @@ function buildInput(
         selection: {
           type: "cold",
           contentStatus: request.intent.coldContentStatus,
-          membershipRevision: getFeedItemMembershipRevision(),
+          membershipRevision: getMixedContentMembershipRevision(),
         },
       };
     }
@@ -159,7 +162,7 @@ function buildInput(
         scope: selectedScope.scope,
         contentStatus: selectedScope.contentStatus,
         pageManifest: firstPageManifest(selectedScope),
-        membershipRevision: getFeedItemMembershipRevision(),
+        membershipRevision: getMixedContentMembershipRevision(),
       },
     };
   }
@@ -172,7 +175,7 @@ function buildInput(
         return {
           target,
           pageManifest: firstPageManifest(target),
-          membershipRevision: getFeedItemMembershipRevision(),
+          membershipRevision: getMixedContentMembershipRevision(),
         };
       }
       return target.type === "organization"
@@ -245,14 +248,33 @@ function retainedScopeTargets(activeTarget: ReconciliationScopeTarget | null) {
   ];
 }
 
-function mutationInvalidationEffects(
-  payloads: PublishedChunk[],
-  activeTarget: ReconciliationScopeTarget | null,
-) {
-  const summaries = payloads.flatMap((payload) => {
+function invalidationSummariesFrom(payloads: PublishedChunk[]) {
+  return payloads.flatMap((payload) => {
     if (payload.source === "invalidation") return [payload.chunk];
     return payload.invalidation ? [payload.invalidation] : [];
   });
+}
+
+function rssDetailInvalidationFrom(payloads: PublishedChunk[]) {
+  const feedIds = payloads.flatMap((payload) =>
+    payload.source === "rss" &&
+    payload.chunk.type === "feed-items" &&
+    payload.chunk.feedItems.length > 0
+      ? [payload.chunk.feedId]
+      : [],
+  );
+  return feedIds.length > 0
+    ? buildFeedInvalidationSummary({
+        feedIds,
+        contentStatusKeys: ALL_CONTENT_STATUS_KEYS,
+      })
+    : null;
+}
+
+function invalidationEffects(
+  summaries: ReconciliationInvalidationSummary[],
+  activeTarget: ReconciliationScopeTarget | null,
+) {
   if (summaries.length === 0) return null;
 
   const retainedScopes = retainedScopeTargets(activeTarget);
@@ -264,6 +286,17 @@ function mutationInvalidationEffects(
   const repairTargets = new Map<string, ReconciliationTarget>();
   const dirtyTargets = new Map<string, ReconciliationTarget>();
   let unknown = false;
+  const recordScopeTarget = (target: ReconciliationScopeTarget) => {
+    const key = getReconciliationTargetKey(target);
+    if (
+      target.scope.type === "view" ||
+      (activeTarget && key === getReconciliationTargetKey(activeTarget))
+    ) {
+      repairTargets.set(key, target);
+    } else {
+      dirtyTargets.set(key, target);
+    }
+  };
 
   for (const summary of summaries) {
     for (const domain of summary.domains) {
@@ -275,17 +308,13 @@ function mutationInvalidationEffects(
       retainedScopes,
       memberships,
     });
-    unknown ||= expanded.scopeImpactUnknown;
+    if (expanded.scopeImpactUnknown) {
+      unknown = true;
+      for (const target of retainedScopes) recordScopeTarget(target);
+      continue;
+    }
     for (const target of expanded.scopes) {
-      const key = getReconciliationTargetKey(target);
-      if (
-        target.scope.type === "view" ||
-        (activeTarget && key === getReconciliationTargetKey(activeTarget))
-      ) {
-        repairTargets.set(key, target);
-      } else {
-        dirtyTargets.set(key, target);
-      }
+      recordScopeTarget(target);
     }
   }
 
@@ -307,6 +336,70 @@ function mutationInvalidationEffects(
           ? ({ type: "targeted", targets: eagerTargets } as const)
           : undefined,
   };
+}
+
+function mutationInvalidationEffects(
+  payloads: PublishedChunk[],
+  activeTarget: ReconciliationScopeTarget | null,
+) {
+  return invalidationEffects(invalidationSummariesFrom(payloads), activeTarget);
+}
+
+function liveEventTargets(
+  payloads: PublishedChunk[],
+  activeTarget: ReconciliationScopeTarget | null,
+  scopeTargetsHydrated: boolean,
+) {
+  const targets = new Map<string, ReconciliationTarget>();
+  const addTarget = (target: ReconciliationTarget) => {
+    targets.set(getReconciliationTargetKey(target), target);
+  };
+  const rssDetailInvalidation = rssDetailInvalidationFrom(payloads);
+  const summaries = [
+    ...invalidationSummariesFrom(payloads),
+    ...(rssDetailInvalidation ? [rssDetailInvalidation] : []),
+  ];
+  let affectsAllScopes = summaries.some(
+    (summary) => summary.scopeImpact.type === "unknown",
+  );
+
+  if (scopeTargetsHydrated) {
+    const effects = invalidationEffects(summaries, activeTarget);
+    for (const target of [
+      ...(effects?.repairTargets ?? []),
+      ...(effects?.dirtyTargets ?? []),
+    ]) {
+      addTarget(target);
+    }
+  } else {
+    for (const summary of summaries) {
+      for (const domain of summary.domains) addTarget({ type: domain });
+      if (
+        summary.scopeImpact.type === "known" &&
+        summary.scopeImpact.selectors.length > 0
+      ) {
+        affectsAllScopes = true;
+      }
+    }
+  }
+
+  const rssSummary = rssSummaryFrom(payloads);
+  if (rssSummary && rssSummary.affectedFeeds.length > 0) {
+    addTarget({ type: "navigation" });
+    if (scopeTargetsHydrated) {
+      for (const target of retainedScopeTargets(activeTarget)) {
+        if (
+          rssSummaryAffectsTarget(rssSummary, target, rssRepairMemberships())
+        ) {
+          addTarget(target);
+        }
+      }
+    } else {
+      affectsAllScopes = true;
+    }
+  }
+
+  return { targets: [...targets.values()], affectsAllScopes };
 }
 
 let manualFullPromise: Promise<void> | null = null;
@@ -393,13 +486,23 @@ const runtime = createReconciliationRuntime<PublishedChunk[]>({
       refreshNavigation: false,
     });
     const activeTarget = currentSelection();
-    const invalidationEffects = mutationInvalidationEffects(
-      payloads,
-      activeTarget,
-    );
+    const mutationEffects = mutationInvalidationEffects(payloads, activeTarget);
     const summary = rssSummaryFrom(payloads);
     const onlyRssPayloads = payloads.every(({ source }) => source === "rss");
-    if (onlyRssPayloads && !summary) return;
+    if (onlyRssPayloads && !summary) {
+      const rssDetailInvalidation = rssDetailInvalidationFrom(payloads);
+      if (!rssDetailInvalidation) return;
+      const effects = invalidationEffects(
+        [rssDetailInvalidation],
+        activeTarget,
+      );
+      return {
+        dirtyTargets: [
+          ...(effects?.repairTargets ?? []),
+          ...(effects?.dirtyTargets ?? []),
+        ],
+      };
+    }
     if (summary) {
       performanceMark("serial:rss-complete");
       const repairTargets: ReconciliationTarget[] = [];
@@ -418,9 +521,15 @@ const runtime = createReconciliationRuntime<PublishedChunk[]>({
         repairIntent: { type: "targeted", targets: repairTargets } as const,
       };
     }
-    if (invalidationEffects) return invalidationEffects;
+    if (mutationEffects) return mutationEffects;
     return;
   },
+  getLiveEventTargets: (payloads, { hydratedDomains }) =>
+    liveEventTargets(
+      payloads,
+      currentSelection(),
+      hydratedDomains.organization && hydratedDomains["active-scope"],
+    ),
   getCurrentSelection: currentSelection,
   mark: performanceMark,
   onParityApplied: ({ automaticRssOwner, reconciliationId }) => {

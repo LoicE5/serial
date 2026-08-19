@@ -4,9 +4,9 @@ import { orpc, orpcRouterClient } from "../orpc";
 import { getQueryClient } from "../query-client";
 import { feedsStore } from "./feeds/store";
 import {
-  getFeedItemMembershipRevision,
-  isFeedItemMembershipRevisionStale,
-} from "./feed-items/membershipRevision";
+  getMixedContentMembershipRevision,
+  isMixedContentMembershipRevisionStale,
+} from "./mixed-content/membershipRevision";
 import { loadingActor } from "./loading-machine";
 import { applyRequestedMixedContentPage } from "./subscriptionCoordinator";
 import { feedItemsStore } from "./store";
@@ -59,11 +59,13 @@ export const dataRequestActions = {
     >[0]["cursor"],
     limit?: number,
   ) => {
-    const membershipRevision = getFeedItemMembershipRevision();
+    const membershipRevision = getMixedContentMembershipRevision();
     return orpcRouterClient.mixedContent
       .requestPage({ scope, contentStatus, cursor, limit })
       .then((page) => {
-        if (isFeedItemMembershipRevisionStale(membershipRevision)) return page;
+        if (isMixedContentMembershipRevisionStale(membershipRevision)) {
+          return page;
+        }
         applyRequestedMixedContentPage({
           scope,
           contentStatus,

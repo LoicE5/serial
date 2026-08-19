@@ -22,12 +22,16 @@ import {
   partitionMixedReadTargets,
   setMixedReadValue,
 } from "~/lib/data/mixed-content/mutations";
+import { dataRequestActions } from "~/lib/data/directRequests";
+import { applyReconciliationFirstPage } from "~/lib/data/reconciliationPage";
+import { getMixedContentMembershipRevision } from "~/lib/data/mixed-content/membershipRevision";
 
 const NOW = new Date("2026-07-30T12:00:00.000Z");
 
 const orpcMocks = vi.hoisted(() => ({
   setBookmarkBulkReadValue: vi.fn(),
   setFeedBulkWatchedValue: vi.fn(),
+  requestPage: vi.fn(),
 }));
 
 vi.mock("~/lib/orpc", () => ({
@@ -35,6 +39,7 @@ vi.mock("~/lib/orpc", () => ({
   orpcRouterClient: {
     bookmark: { setBulkReadValue: orpcMocks.setBookmarkBulkReadValue },
     feedItem: { setBulkWatchedValue: orpcMocks.setFeedBulkWatchedValue },
+    mixedContent: { requestPage: orpcMocks.requestPage },
   },
 }));
 
@@ -150,6 +155,223 @@ beforeEach(() => {
 });
 
 describe("Bookmark projection events and direct mixed pages", () => {
+  it("rejects an in-flight page after a list-changing Bookmark event", async () => {
+    const savedBookmark = bookmark();
+    const scope = { type: "view" as const, viewId: 10 };
+    const contentStatus = {
+      saveStatus: "saved" as const,
+      archiveStatus: "unread" as const,
+    };
+    const references = [reference("bookmark", savedBookmark.id)];
+    applyRequestedMixedContentPage({
+      scope,
+      contentStatus,
+      page: { ...page(references), bookmarks: [savedBookmark] },
+      replacesScope: true,
+    });
+
+    let resolvePage:
+      | ((value: MixedContentPage | PromiseLike<MixedContentPage>) => void)
+      | undefined;
+    orpcMocks.requestPage.mockReturnValue(
+      new Promise<MixedContentPage>((resolve) => {
+        resolvePage = resolve;
+      }),
+    );
+    const request = dataRequestActions.requestMixedContentPage(
+      scope,
+      contentStatus,
+    );
+    const revisionBeforeEvent = getMixedContentMembershipRevision();
+    const archivedBookmark = bookmark({
+      isRead: true,
+      readUpdatedAt: new Date(NOW.getTime() + 1),
+      updatedAt: new Date(NOW.getTime() + 1),
+    });
+    const affectedScopes = processPublishedChunks([
+      {
+        source: "bookmark",
+        chunk: {
+          type: "bookmark-upsert",
+          bookmark: archivedBookmark,
+          affectsListProjection: true,
+        },
+      },
+      {
+        source: "bookmark",
+        chunk: {
+          type: "bookmark-upsert",
+          bookmark: archivedBookmark,
+          affectsListProjection: true,
+        },
+      },
+    ]);
+    resolvePage?.({
+      ...page(references),
+      bookmarks: [savedBookmark],
+    });
+    await request;
+
+    expect(affectedScopes).toHaveLength(1);
+    expect(getMixedContentMembershipRevision()).toBe(revisionBeforeEvent + 1);
+    expect(
+      mixedContentStore.getState().scopes[
+        getMixedScopeKey(scope, contentStatus)
+      ]?.references,
+    ).toEqual([]);
+  });
+
+  it("advances membership once for retained Bookmark batches and deletions", () => {
+    const first = bookmark({ id: "batch-one" });
+    const second = bookmark({ id: "batch-two" });
+    const scope = { type: "view" as const, viewId: 10 };
+    const contentStatus = {
+      saveStatus: "saved" as const,
+      archiveStatus: "unread" as const,
+    };
+    applyRequestedMixedContentPage({
+      scope,
+      contentStatus,
+      page: {
+        ...page([
+          reference("bookmark", first.id),
+          reference("bookmark", second.id),
+        ]),
+        bookmarks: [first, second],
+      },
+      replacesScope: true,
+    });
+    const revisionBeforeBatch = getMixedContentMembershipRevision();
+
+    const affectedByBatch = processPublishedChunks([
+      {
+        source: "bookmark",
+        chunk: {
+          type: "bookmark-upsert-batch",
+          bookmarks: [
+            bookmark({ id: first.id, isRead: true }),
+            bookmark({ id: second.id, isRead: true }),
+          ],
+        },
+      },
+    ]);
+
+    expect(affectedByBatch).toHaveLength(1);
+    expect(getMixedContentMembershipRevision()).toBe(revisionBeforeBatch + 1);
+
+    const revisionBeforeDeletion = getMixedContentMembershipRevision();
+    processPublishedChunks([
+      {
+        source: "bookmark",
+        chunk: {
+          type: "bookmark-delete",
+          id: first.id,
+          canonicalUrl: first.canonicalUrl,
+        },
+      },
+    ]);
+
+    expect(getMixedContentMembershipRevision()).toBe(
+      revisionBeforeDeletion + 1,
+    );
+  });
+
+  it("rejects an in-flight page after a mixed Bookmark read mutation", async () => {
+    const savedBookmark = bookmark();
+    const scope = { type: "view" as const, viewId: 10 };
+    const contentStatus = {
+      saveStatus: "saved" as const,
+      archiveStatus: "unread" as const,
+    };
+    const references = [reference("bookmark", savedBookmark.id)];
+    applyRequestedMixedContentPage({
+      scope,
+      contentStatus,
+      page: { ...page(references), bookmarks: [savedBookmark] },
+      replacesScope: true,
+    });
+
+    let resolvePage:
+      | ((value: MixedContentPage | PromiseLike<MixedContentPage>) => void)
+      | undefined;
+    orpcMocks.requestPage.mockReturnValue(
+      new Promise<MixedContentPage>((resolve) => {
+        resolvePage = resolve;
+      }),
+    );
+    let resolveBulkRead: ((value: unknown[]) => void) | undefined;
+    orpcMocks.setBookmarkBulkReadValue.mockReturnValue(
+      new Promise<unknown[]>((resolve) => {
+        resolveBulkRead = resolve;
+      }),
+    );
+
+    const request = dataRequestActions.requestMixedContentPage(
+      scope,
+      contentStatus,
+    );
+    const mutation = setMixedReadValue({ references, isRead: true });
+    resolvePage?.({
+      ...page(references),
+      bookmarks: [savedBookmark],
+    });
+    await request;
+    const bookmarkAfterRequest = bookmarksStore
+      .getState()
+      .getBookmark(savedBookmark.id);
+    const referencesAfterRequest =
+      mixedContentStore.getState().scopes[
+        getMixedScopeKey(scope, contentStatus)
+      ]?.references;
+    resolveBulkRead?.([]);
+    await mutation;
+
+    expect(bookmarkAfterRequest?.isRead).toBe(true);
+    expect(referencesAfterRequest).toEqual([]);
+  });
+
+  it("rejects stale reconciliation authority after a Bookmark read mutation", async () => {
+    const savedBookmark = bookmark();
+    const scope = { type: "view" as const, viewId: 10 };
+    const contentStatus = {
+      saveStatus: "saved" as const,
+      archiveStatus: "unread" as const,
+    };
+    const references = [reference("bookmark", savedBookmark.id)];
+    applyRequestedMixedContentPage({
+      scope,
+      contentStatus,
+      page: { ...page(references), bookmarks: [savedBookmark] },
+      replacesScope: true,
+    });
+    const membershipRevision = getMixedContentMembershipRevision();
+    let resolveBulkRead: ((value: unknown[]) => void) | undefined;
+    orpcMocks.setBookmarkBulkReadValue.mockReturnValue(
+      new Promise<unknown[]>((resolve) => {
+        resolveBulkRead = resolve;
+      }),
+    );
+
+    const mutation = setMixedReadValue({ references, isRead: true });
+    const applied = applyReconciliationFirstPage({
+      target: { type: "scope", scope, contentStatus },
+      membershipRevision,
+      orderedRefs: references,
+      bookmarkDiffs: [{ status: "upsert", entity: savedBookmark }],
+      feedItemDiffs: [],
+      cursor: null,
+      hasMore: false,
+    });
+    const bookmarkAfterRequest = bookmarksStore
+      .getState()
+      .getBookmark(savedBookmark.id);
+    resolveBulkRead?.([]);
+    await mutation;
+
+    expect(applied).toBe(false);
+    expect(bookmarkAfterRequest?.isRead).toBe(true);
+  });
+
   it("projects locally cached Bookmarks only into their owned Views", () => {
     const assigned = bookmark({ id: "assigned", viewIds: [10] });
     const unassigned = bookmark({ id: "unassigned", viewIds: [] });
@@ -307,7 +529,7 @@ describe("Bookmark projection events and direct mixed pages", () => {
       scope: { type: "view", viewId: 10 },
       contentStatus: { saveStatus: "saved", archiveStatus: "unread" },
       page: {
-        ...page([]),
+        ...page(bookmarks.map((item) => reference("bookmark", item.id))),
         bookmarks,
         feedItems: items,
       },
@@ -464,11 +686,14 @@ describe("Bookmark projection events and direct mixed pages", () => {
     for (const item of [matchingOne, matchingTwo, other]) {
       feedItemsStore.getState().setFeedItem(item.id, item);
     }
+    const existing = bookmark({ isSaved: false });
+    bookmarksStore.getState().upsert(existing);
     const scope = { type: "view" as const, viewId: 10 };
     mixedContentStore.getState().applyPage({
       scope,
       contentStatus: { saveStatus: "inbox", archiveStatus: "unread" },
       page: page([
+        reference("bookmark", existing.id),
         reference("feed-item", matchingOne.id),
         reference("feed-item", matchingTwo.id),
         reference("feed-item", other.id),
@@ -495,7 +720,7 @@ describe("Bookmark projection events and direct mixed pages", () => {
         chunk: { type: "bookmark-upsert", bookmark: saved },
       },
     ]);
-    expect(affectedOnSave).toHaveLength(1);
+    expect(affectedOnSave).toHaveLength(2);
     expect(
       mixedContentStore.getState().scopes[
         getMixedScopeKey(scope, {
@@ -556,6 +781,15 @@ describe("Bookmark projection events and direct mixed pages", () => {
   it("commits a bulk Bookmark upsert with one entity-store notification", () => {
     const first = bookmark({ id: "batch-one" });
     const second = bookmark({ id: "batch-two" });
+    mixedContentStore.getState().applyPage({
+      scope: { type: "view", viewId: 10 },
+      contentStatus: { saveStatus: "saved", archiveStatus: "unread" },
+      page: page([
+        reference("bookmark", first.id),
+        reference("bookmark", second.id),
+      ]),
+      replacesScope: true,
+    });
     let notifications = 0;
     const unsubscribe = bookmarksStore.subscribe(() => notifications++);
 

@@ -1,5 +1,6 @@
 import { createStore } from "zustand";
 import { persist } from "zustand/middleware";
+import { bookmarksStore } from "../bookmarks/store";
 import {
   createFeedItemFilterIndex,
   createFeedItemFilterPredicate,
@@ -8,6 +9,10 @@ import {
 } from "../feed-items/listProjection";
 import { createNormalizedIDBStorage } from "../normalized-idb-storage";
 import { createSelectorHooks } from "../createSelectorHooks";
+import {
+  getRetainedEntityPins,
+  onBookmarkRetentionPinsReleased,
+} from "../page-retention";
 import {
   bookmarkContentStatus,
   bookmarkReference,
@@ -27,6 +32,8 @@ import {
   getPersistedMixedContentState,
   mergeRetainedMixedPage,
   mixedReferenceKey,
+  replaceRetainedMixedRootPage,
+  retainedMixedBookmarkIds,
   retainedMixedReferenceKeys,
   updateBookmarkPageMembership,
   updateReferencePageMembership,
@@ -53,6 +60,43 @@ import { selectFeedItemOrderCoordinate } from "~/lib/data/feed-items/orderCoordi
 
 export { getMixedScopeKey } from "./bookmarkProjection";
 export type { LoadedMixedScope } from "./page-retention";
+
+let bookmarkOwnershipInitialized = false;
+
+function ownedBookmarkIds(scopes: Record<string, LoadedMixedScope>) {
+  const ids = getRetainedEntityPins("bookmark");
+  for (const scope of Object.values(scopes)) {
+    for (const id of retainedMixedBookmarkIds(scope.pages)) ids.add(id);
+  }
+  return ids;
+}
+
+export function hasBookmarkBodyOwner(bookmarkId: string) {
+  return ownedBookmarkIds(mixedContentStore.getState().scopes).has(bookmarkId);
+}
+
+function pruneBookmarkBodies(
+  scopes: Record<string, LoadedMixedScope>,
+  candidates: Iterable<string>,
+) {
+  const ownedIds = ownedBookmarkIds(scopes);
+  if (!bookmarkOwnershipInitialized) {
+    bookmarkOwnershipInitialized = true;
+    bookmarksStore.getState().pruneExcept(ownedIds);
+    return;
+  }
+
+  bookmarksStore
+    .getState()
+    .removeMany([...candidates].filter((id) => !ownedIds.has(id)));
+}
+
+export function synchronizeBookmarkBodyRetention() {
+  bookmarksStore
+    .getState()
+    .pruneExcept(ownedBookmarkIds(mixedContentStore.getState().scopes));
+  bookmarkOwnershipInitialized = true;
+}
 
 export function getViewContentAvailability(
   scopes: Record<string, LoadedMixedScope>,
@@ -126,13 +170,19 @@ const vanillaMixedContentStore = createStore<MixedContentStore>()(
       fetchingScopes: {},
       projectionIndexes: emptyProjectionIndexes(),
       projectionIndexesComplete: true,
-      reset: () =>
+      reset: () => {
+        const bookmarkIds = Object.values(get().scopes).flatMap((scope) => [
+          ...retainedMixedBookmarkIds(scope.pages),
+        ]);
         set({
           scopes: {},
           fetchingScopes: {},
           projectionIndexes: emptyProjectionIndexes(),
           projectionIndexesComplete: true,
-        }),
+        });
+        pruneBookmarkBodies({}, bookmarkIds);
+        bookmarkOwnershipInitialized = false;
+      },
       setScopeFetching: (scopeKey, isFetching) =>
         set((state) => ({
           fetchingScopes: {
@@ -151,6 +201,9 @@ const vanillaMixedContentStore = createStore<MixedContentStore>()(
           requestCursor,
           replacesScope,
         });
+        const previousBookmarkIds = retainedMixedBookmarkIds(
+          existing?.pages ?? [],
+        );
         const retainedKeys = retainedMixedReferenceKeys(pages);
         const pinnedEntityIds = getMixedRetentionPins();
         const nextScope = {
@@ -192,6 +245,7 @@ const vanillaMixedContentStore = createStore<MixedContentStore>()(
           projectionIndexes,
           projectionIndexesComplete: true,
         });
+        pruneBookmarkBodies(scopes, previousBookmarkIds);
       },
       reconcileFirstPage: ({ scope, contentStatus, page }) => {
         const key = getMixedScopeKey(scope, contentStatus);
@@ -223,6 +277,18 @@ const vanillaMixedContentStore = createStore<MixedContentStore>()(
             page,
             replacesScope: true,
           });
+        } else {
+          const scopes = {
+            ...current.scopes,
+            [key]: {
+              ...existing,
+              pages: replaceRetainedMixedRootPage(existing.pages, page),
+              cursor: page.cursor,
+              hasMore: page.hasMore,
+            },
+          };
+          set({ scopes });
+          pruneBookmarkBodies(scopes, []);
         }
 
         return { firstPageChanged };
@@ -313,6 +379,7 @@ const vanillaMixedContentStore = createStore<MixedContentStore>()(
             projectionIndexesComplete: true,
           });
         }
+        pruneBookmarkBodies(scopes, [bookmark.id]);
         return affected;
       },
       reprojectDeletion: ({ bookmarkId }) => {
@@ -493,3 +560,35 @@ const vanillaMixedContentStore = createStore<MixedContentStore>()(
 );
 
 export const mixedContentStore = createSelectorHooks(vanillaMixedContentStore);
+
+onBookmarkRetentionPinsReleased((releasedBookmarkIds) => {
+  pruneBookmarkBodies(mixedContentStore.getState().scopes, releasedBookmarkIds);
+});
+
+type PersistLifecycle = {
+  persist: {
+    hasHydrated: () => boolean;
+    onFinishHydration: (listener: () => void) => () => void;
+  };
+};
+
+const bookmarkPersistence = bookmarksStore as unknown as PersistLifecycle;
+const mixedContentPersistence =
+  mixedContentStore as unknown as PersistLifecycle;
+const synchronizeHydratedBookmarkRetention = () => {
+  if (
+    !bookmarkPersistence.persist.hasHydrated() ||
+    !mixedContentPersistence.persist.hasHydrated()
+  ) {
+    return;
+  }
+  synchronizeBookmarkBodyRetention();
+};
+
+bookmarkPersistence.persist.onFinishHydration(
+  synchronizeHydratedBookmarkRetention,
+);
+mixedContentPersistence.persist.onFinishHydration(
+  synchronizeHydratedBookmarkRetention,
+);
+synchronizeHydratedBookmarkRetention();

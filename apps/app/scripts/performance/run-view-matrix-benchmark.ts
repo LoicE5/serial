@@ -16,7 +16,7 @@ import {
 } from "./view-matrix-model";
 import type { ActiveFirstPageResult } from "~/lib/reconciliation";
 import type { ScopeData } from "~/server/mixed-content/projection/scope";
-import { getFeedItemMembershipRevision } from "~/lib/data/feed-items/membershipRevision";
+import { getMixedContentMembershipRevision } from "~/lib/data/mixed-content/membershipRevision";
 import { getPersistedFeedItemRetentionState } from "~/lib/data/feed-page-retention";
 import { bookmarksStore } from "~/lib/data/bookmarks/store";
 import { mixedContentStore } from "~/lib/data/mixed-content/store";
@@ -76,7 +76,7 @@ async function measureMatrix(input: {
       selection: {
         type: "cold",
         contentStatus: { saveStatus: "inbox", archiveStatus: "unread" },
-        membershipRevision: getFeedItemMembershipRevision(),
+        membershipRevision: getMixedContentMembershipRevision(),
       },
     },
   })) {

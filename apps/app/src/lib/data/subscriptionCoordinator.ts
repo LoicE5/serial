@@ -1,9 +1,14 @@
 import { bookmarksStore } from "./bookmarks/store";
 import { feedCategoriesStore } from "./feed-categories/store";
 import { feedItemsStore } from "./store";
-import { getMixedScopeKey, mixedContentStore } from "./mixed-content/store";
+import {
+  getMixedScopeKey,
+  hasBookmarkBodyOwner,
+  mixedContentStore,
+} from "./mixed-content/store";
 import { viewsStore } from "./views/store";
 import { isBookmarkProjectionChange } from "./mixed-content/bookmarkProjection";
+import { advanceMixedContentMembershipRevision } from "./mixed-content/membershipRevision";
 import { refreshNavigationSnapshotSafely } from "./navigation/store";
 import { hasFeedItemListProjectionChanged } from "./feed-items/listProjection";
 import type { LoadedMixedScope } from "./mixed-content/store";
@@ -52,6 +57,7 @@ export function applyPublishedChunks(
   options: { refreshNavigation?: boolean } = {},
 ) {
   const affectedScopes = new Map<string, LoadedMixedScope>();
+  let bookmarkProjectionChanged = false;
   let navigationSnapshotChanged = payloads.some(
     ({ chunk }) =>
       "refreshNavigationSnapshot" in chunk &&
@@ -99,14 +105,23 @@ export function applyPublishedChunks(
     if (payload.source !== "bookmark") continue;
     const { chunk } = payload;
     if (chunk.type === "bookmark-upsert") {
+      if (
+        !hasBookmarkBodyOwner(chunk.bookmark.id) &&
+        chunk.affectsListProjection === false
+      ) {
+        continue;
+      }
       const previousBookmark = bookmarksStore
         .getState()
         .getBookmark(chunk.bookmark.id);
-      bookmarksStore.getState().upsert(chunk.bookmark);
-      navigationSnapshotChanged ||= isBookmarkProjectionChange(
+      const projectionChanged = isBookmarkProjectionChange(
         previousBookmark,
         chunk.bookmark,
       );
+      bookmarkProjectionChanged ||=
+        chunk.affectsListProjection !== false && projectionChanged;
+      bookmarksStore.getState().upsert(chunk.bookmark);
+      navigationSnapshotChanged ||= projectionChanged;
       const affected = mixedContentStore.getState().reprojectUpsert({
         bookmark: chunk.bookmark,
         previousBookmark,
@@ -121,14 +136,25 @@ export function applyPublishedChunks(
       continue;
     }
     if (chunk.type === "bookmark-upsert-batch") {
+      const retainedBookmarks = chunk.bookmarks.filter((bookmark) =>
+        hasBookmarkBodyOwner(bookmark.id),
+      );
       const previousBookmarks = new Map(
-        chunk.bookmarks.map((bookmark) => [
+        retainedBookmarks.map((bookmark) => [
           bookmark.id,
           bookmarksStore.getState().getBookmark(bookmark.id),
         ]),
       );
-      bookmarksStore.getState().upsertMany(chunk.bookmarks);
-      for (const bookmark of chunk.bookmarks) {
+      bookmarkProjectionChanged ||=
+        retainedBookmarks.length < chunk.bookmarks.length ||
+        retainedBookmarks.some((bookmark) =>
+          isBookmarkProjectionChange(
+            previousBookmarks.get(bookmark.id),
+            bookmark,
+          ),
+        );
+      bookmarksStore.getState().upsertMany(retainedBookmarks);
+      for (const bookmark of retainedBookmarks) {
         navigationSnapshotChanged ||= isBookmarkProjectionChange(
           previousBookmarks.get(bookmark.id),
           bookmark,
@@ -147,6 +173,7 @@ export function applyPublishedChunks(
       }
       continue;
     }
+    bookmarkProjectionChanged = true;
     navigationSnapshotChanged = true;
     bookmarksStore.getState().remove(chunk.id);
     const affected = mixedContentStore.getState().reprojectDeletion({
@@ -158,6 +185,9 @@ export function applyPublishedChunks(
         scope,
       );
     }
+  }
+  if (bookmarkProjectionChanged) {
+    advanceMixedContentMembershipRevision();
   }
   if (navigationSnapshotChanged && options.refreshNavigation !== false) {
     void refreshNavigationSnapshotSafely();
