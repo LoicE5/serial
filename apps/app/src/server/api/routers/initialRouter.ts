@@ -1,79 +1,22 @@
-import {
-  and,
-  asc,
-  desc,
-  eq,
-  exists,
-  getTableColumns,
-  gt,
-  inArray,
-  lt,
-  not,
-  or,
-  sql,
-} from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
-import {
-  GET_BY_VIEW_CHUNK_SIZE,
-  ITEMS_BY_CONTENT_STATUS_CHUNK_SIZE,
-  ITEMS_PER_PAGE,
-  REVALIDATE_VIEW_CHUNK_SIZE,
-} from "../constants";
 import { publisher, trackChannelConnection } from "../publisher";
-import { getClientChannel, getUserChannel } from "../channels";
+import { getUserChannel } from "../channels";
 import { insertFeedWithCategories } from "./feed-router/utils";
 import type { PublishedChunk } from "../publisher";
-import type { SQL } from "drizzle-orm";
-import type {
-  ApplicationFeed,
-  ApplicationFeedItem,
-  ApplicationView,
-  DatabaseContentCategory,
-  DatabaseFeed,
-  DatabaseFeedCategory,
-  DatabaseView,
-  DatabaseViewCategory,
-  DatabaseViewFeed,
-  DatabaseViewSection,
-} from "~/server/db/schema";
-import type { ORPCContext } from "~/server/orpc/base";
+import type { ApplicationFeed } from "~/server/db/schema";
 import type { FetchFeedsStatus } from "~/server/rss/fetchFeeds";
-import type { NavigationSnapshot } from "~/server/navigation/snapshot";
-import type { ContentStatusFilter } from "~/lib/content-status";
-import {
-  contentStatusFilterSchema,
-  contentStatusUsesSectionOrder,
-  DEFAULT_CONTENT_STATUS_FILTER,
-  selectContentStatusOrderValue,
-} from "~/lib/content-status";
-import { captureException, logDebug } from "~/server/logger";
-import {
-  checkUserRefreshEligibility,
-  getFeedsActivationBudget,
-} from "~/server/subscriptions/helpers";
-import {
-  buildContentFilter,
-  buildContentStatusFilter,
-  buildTimeWindowFilter,
-  buildViewCategoryFilter,
-  isFeedCompatibleWithContentFilter,
-  VIDEO_PLATFORMS,
-} from "~/lib/data/feed-items/filters";
-import {
-  CONTENT_FILTER_OPTION,
-  contentFilterColumnHasOption,
-} from "~/lib/views/contentFilter";
-import { UNCATEGORIZED_VIEW_ID } from "~/lib/data/views/constants";
-import { sortViewsByPlacement } from "~/lib/data/views/utils";
-import { prepareArrayChunks } from "~/lib/iterators";
+import type {
+  ReconciliationScopeTarget,
+  ReconciliationStreamEvent,
+} from "~/lib/reconciliation";
+import { captureException } from "~/server/logger";
+import { getFeedsActivationBudget } from "~/server/subscriptions/helpers";
 import { organizationInvalidationSummary } from "~/server/reconciliation/invalidation";
-import { buildUncategorizedView } from "~/server/api/utils/buildUncategorizedView";
 import {
   DEFAULT_VIEW_LAYOUT,
   VIEW_LAYOUT_ITEM_TYPE,
 } from "~/server/db/constants";
-
-import { parseArrayOfSchema } from "~/lib/schemas/utils";
 import { dbSemaphore } from "~/lib/semaphore";
 import { workerPool } from "~/lib/workerPool";
 import {
@@ -81,17 +24,13 @@ import {
   feedCategories,
   feedItems,
   feeds,
-  feedsSchema,
-  viewCategories,
   viewFeeds,
   views,
   viewSections,
 } from "~/server/db/schema";
 import { protectedProcedure } from "~/server/orpc/base";
 import { fetchAndInsertFeedData } from "~/server/rss/fetchFeeds";
-import { refreshUserFeeds } from "~/server/rss/refreshUserFeeds";
 import {
-  boundedNumberIdsSchema,
   boundedStringsSchema,
   MAX_BULK_MUTATION_ITEMS,
 } from "~/lib/schemas/bulk";
@@ -99,15 +38,61 @@ import { queryNavigationSnapshot } from "~/server/navigation/snapshot";
 import { reconciliationInputSchema } from "~/server/reconciliation/input";
 import { reconcileApplicationState as streamApplicationReconciliation } from "~/server/reconciliation";
 import { fetchDueSources as runFetchDueSources } from "~/server/rss/fetchDueSources";
+import { env } from "~/env";
+import { getReconciliationTargetKey } from "~/lib/reconciliation";
 
 export const reconcileApplicationState = protectedProcedure
   .input(reconciliationInputSchema)
   .handler(async function* ({ context, input }) {
-    yield* streamApplicationReconciliation({
+    const stream = streamApplicationReconciliation({
       database: context.db,
       userId: context.user.id,
       request: input,
     });
+    const injectViewPageFailure =
+      env.SERIAL_E2E_FAULT_CONTROLS &&
+      context.headers.get("x-serial-e2e-reconciliation-failure") ===
+        "view-page-once";
+    let activePageCount = 0;
+    let failedTarget: ReconciliationScopeTarget | null = null;
+    for await (const event of stream) {
+      if (!injectViewPageFailure) {
+        yield event;
+        continue;
+      }
+      if (event.chunk.type === "active-first-page") {
+        activePageCount++;
+        if (activePageCount === 2) {
+          failedTarget = event.chunk.page.target;
+          continue;
+        }
+      }
+      if (
+        failedTarget &&
+        event.chunk.type === "domain-complete" &&
+        event.chunk.domain === "active-scope" &&
+        event.chunk.target &&
+        getReconciliationTargetKey(event.chunk.target) ===
+          getReconciliationTargetKey(failedTarget)
+      ) {
+        const failureEvent: ReconciliationStreamEvent = {
+          reconciliationId: input.reconciliationId,
+          chunk: {
+            type: "domain-error",
+            failure: {
+              phase: "load-view-page",
+              domain: "active-scope",
+              target: failedTarget,
+              message: "Injected E2E View-page failure",
+            },
+          },
+        };
+        yield failureEvent;
+        failedTarget = null;
+        continue;
+      }
+      yield event;
+    }
   });
 
 export const fetchDueSources = protectedProcedure
@@ -124,32 +109,6 @@ export const fetchDueSources = protectedProcedure
     }),
   );
 
-export type PaginationCursor = {
-  placement?: number;
-  postedAt: Date;
-  id: string;
-  isWatchedUpdatedAt?: Date | null;
-  isWatchLaterUpdatedAt?: Date | null;
-} | null;
-
-export type ClientManifestEntry = {
-  id: string;
-  contentHash: string | null;
-  progress?: number | null;
-  duration?: number | null;
-};
-
-export type DiffEntry =
-  | { status: "unchanged"; id: string }
-  | { status: "updated"; item: ApplicationFeedItem }
-  | { status: "new"; item: ApplicationFeedItem }
-  | { status: "deleted"; id: string };
-
-/** Feed item without the heavy `content` field, used for the initial lightweight fetch.
- *  `contentSnippet` is kept because large-list / large-grid layouts use it for the
- *  description line and we want that visible immediately. */
-export type LightweightFeedItem = Omit<ApplicationFeedItem, "content">;
-
 /** Fulltext content patch for items that need it after the lightweight fetch. */
 export type FeedItemFulltext = {
   id: string;
@@ -157,38 +116,7 @@ export type FeedItemFulltext = {
   contentSnippet: string;
 };
 
-export type ViewDataChunk =
-  | {
-      type: "feed-items";
-      viewId?: number;
-      feedId?: number;
-      feedItems: ApplicationFeedItem[];
-      contentStatusFilter?: ContentStatusFilter;
-      hasMore?: boolean;
-      nextCursor?: PaginationCursor;
-      refreshNavigationSnapshot?: boolean;
-    }
-  | { type: "error"; message: string; phase: string; viewId: number };
-
-export type GetByViewChunk =
-  | { type: "views"; views: ApplicationView[] }
-  | { type: "feeds"; feeds: ApplicationFeed[] }
-  | { type: "feed-categories"; feedCategories: DatabaseFeedCategory[] }
-  | { type: "content-categories"; contentCategories: DatabaseContentCategory[] }
-  | { type: "navigation-snapshot"; snapshot: NavigationSnapshot }
-  | { type: "feed-status"; feedId: number; status: FetchFeedsStatus }
-  | { type: "view-feeds"; viewId: number; feedIds: number[] }
-  | { type: "initial-data-complete" }
-  | { type: "refresh-start"; totalFeeds: number; nextRefreshAt: Date | null }
-  | { type: "refresh-complete" }
-  | { type: "view-items"; viewId: number; feedItemIds: string[] }
-  | {
-      type: "import-feed-inserted";
-      feedUrl: string;
-      feedId: number;
-      feed: ApplicationFeed;
-    }
-  | { type: "import-feed-error"; feedUrl: string; error: string }
+export type ImportProgressChunk =
   | { type: "import-start"; totalFeeds: number }
   | {
       type: "import-limit-warning";
@@ -196,41 +124,13 @@ export type GetByViewChunk =
       maxActiveFeeds: number;
     }
   | {
-      type: "view-diff";
-      viewId: number;
-      contentStatusFilter: ContentStatusFilter;
-      diff: DiffEntry[];
-      cursor: PaginationCursor;
-      hasMore: boolean;
-      replacesScope?: boolean;
+      type: "import-feed-inserted";
+      feedUrl: string;
+      feedId: number;
+      feed: ApplicationFeed;
     }
-  | {
-      type: "view-lightweight-items";
-      viewId: number;
-      contentStatusFilter: ContentStatusFilter;
-      items: LightweightFeedItem[];
-      cursor: PaginationCursor;
-      hasMore: boolean;
-    }
-  | {
-      type: "fulltext-items";
-      items: FeedItemFulltext[];
-    }
-  | { type: "error"; message: string; phase: "initial-fetch" }
-  | ViewDataChunk;
-
-export type RevalidateViewChunk =
-  | { type: "views"; views: ApplicationView[] }
-  | {
-      type: "feed-items";
-      viewId: number;
-      feedItems: ApplicationFeedItem[];
-      contentStatusFilter?: ContentStatusFilter;
-      hasMore?: boolean;
-      nextCursor?: PaginationCursor;
-    }
-  | { type: "view-feeds"; viewId: number; feedIds: number[] }
-  | { type: "error"; message: string; phase: string };
+  | { type: "import-feed-error"; feedUrl: string; error: string }
+  | { type: "feed-status"; feedId: number; status: FetchFeedsStatus };
 
 type RouterPublishedChunk = PublishedChunk;
 
@@ -238,182 +138,6 @@ type ChannelSubscription = {
   channel: string;
   lastEventId?: string;
 };
-
-function buildFeedCategoriesMap(
-  allFeedCategories: DatabaseFeedCategory[],
-): Map<number, number[]> {
-  const map = new Map<number, number[]>();
-  for (const fc of allFeedCategories) {
-    const existing = map.get(fc.feedId);
-    if (existing) {
-      existing.push(fc.categoryId);
-    } else {
-      map.set(fc.feedId, [fc.categoryId]);
-    }
-  }
-  return map;
-}
-
-/**
- * Compute which feeds belong to a view based on categories and content type.
- * This replicates client-side logic from useCheckFeedBelongsToView.
- */
-function computeFeedsForView(
-  view: ApplicationView,
-  allFeeds: ApplicationFeed[],
-  allFeedCategories: DatabaseFeedCategory[],
-  customViews: ApplicationView[],
-  customViewCategoryIds: Set<number>,
-  feedCategoriesMap?: Map<number, number[]>,
-  customViewFeedIds?: Set<number>,
-): number[] {
-  const feedIds = new Set<number>();
-
-  const categoryMap =
-    feedCategoriesMap ?? buildFeedCategoriesMap(allFeedCategories);
-
-  // For non-Uncategorized views, start with directly assigned feeds
-  if (view.id !== UNCATEGORIZED_VIEW_ID) {
-    for (const feedId of view.feedIds) feedIds.add(feedId);
-  }
-  const viewCategoryIdSet = new Set(view.categoryIds);
-
-  for (const feed of allFeeds) {
-    // Skip if already included via direct assignment
-    if (feedIds.has(feed.id)) continue;
-
-    // Check if feed's content type is compatible with the view
-    const isCompatible = isFeedCompatibleWithContentFilter(
-      feed.platform,
-      view.contentFilter,
-    );
-    if (!isCompatible) {
-      continue;
-    }
-
-    const feedCategoryIds = categoryMap.get(feed.id) ?? [];
-
-    // For Uncategorized view, include feeds that are NOT in any custom view category
-    // or feeds that are in the Uncategorized view's category list
-    if (view.id === UNCATEGORIZED_VIEW_ID) {
-      // Exclude feeds directly assigned to any custom view
-      if (customViewFeedIds?.has(feed.id)) {
-        continue;
-      }
-
-      // Check if feed has any category that's in a custom view with compatible content type
-      const wouldAppearInCustomView = feedCategoryIds.some((categoryId) => {
-        if (!customViewCategoryIds.has(categoryId)) return false;
-
-        const viewsWithCategory = customViews.filter((v) =>
-          v.categoryIds.includes(categoryId),
-        );
-
-        return viewsWithCategory.some((v) =>
-          isFeedCompatibleWithContentFilter(feed.platform, v.contentFilter),
-        );
-      });
-
-      // Feed belongs to Uncategorized if it wouldn't appear in any custom view
-      // OR if it has no categories at all
-      if (!wouldAppearInCustomView) {
-        feedIds.add(feed.id);
-        continue;
-      }
-
-      // Also check if feed's categories overlap with Uncategorized view's categoryIds
-      if (
-        feedCategoryIds.some((categoryId) => viewCategoryIdSet.has(categoryId))
-      ) {
-        feedIds.add(feed.id);
-        continue;
-      }
-    } else {
-      // Empty categoryIds and feedIds means "all categories" (no category filter)
-      if (view.categoryIds.length === 0 && view.feedIds.length === 0) {
-        feedIds.add(feed.id);
-      } else if (view.categoryIds.length > 0) {
-        // For views with specific categories, check if any of the feed's categories are in the view
-        const categoryMatch = feedCategoryIds.some((categoryId) =>
-          viewCategoryIdSet.has(categoryId),
-        );
-
-        if (categoryMatch) {
-          feedIds.add(feed.id);
-        }
-      }
-    }
-  }
-
-  return Array.from(feedIds);
-}
-
-/**
- * Compute a diff between the server's authoritative items and the client's
- * cached manifest for a view. Returns DiffEntry[] describing what changed.
- *
- * - "unchanged": client has correct version (matched by contentHash)
- * - "updated": client has stale version (hash mismatch or null hash)
- * - "new": client doesn't have this item
- * - "deleted": client has item but server doesn't (no longer in scope)
- */
-function computeViewDiff(
-  serverItems: ApplicationFeedItem[],
-  clientManifest: ClientManifestEntry[],
-): DiffEntry[] {
-  const clientMap = new Map<string, ClientManifestEntry>();
-  for (const entry of clientManifest) {
-    clientMap.set(entry.id, entry);
-  }
-
-  const serverIds = new Set<string>();
-  const diff: DiffEntry[] = [];
-
-  for (const item of serverItems) {
-    serverIds.add(item.id);
-
-    if (!clientMap.has(item.id)) {
-      diff.push({ status: "new", item });
-    } else {
-      const clientEntry = clientMap.get(item.id);
-      const clientHash = clientEntry?.contentHash;
-      // null hash on either side means we can't confirm match — treat as updated
-      const hashesMatch =
-        clientHash !== null &&
-        item.contentHash !== null &&
-        clientHash === item.contentHash;
-      const progressMatches =
-        clientEntry?.progress === undefined ||
-        clientEntry.progress === item.progress;
-      const durationMatches =
-        clientEntry?.duration === undefined ||
-        clientEntry.duration === item.duration;
-
-      if (hashesMatch && progressMatches && durationMatches) {
-        diff.push({ status: "unchanged", id: item.id });
-      } else {
-        diff.push({ status: "updated", item });
-      }
-    }
-  }
-
-  // Items the client has that the server doesn't → deleted
-  for (const entry of clientManifest) {
-    if (!serverIds.has(entry.id)) {
-      diff.push({ status: "deleted", id: entry.id });
-    }
-  }
-
-  return diff;
-}
-
-const clientScopedInputSchema = z.object({
-  clientId: z
-    .string()
-    .min(1)
-    .max(128)
-    .regex(/^[A-Za-z0-9_-]+$/),
-});
 
 async function* subscribeToChannels(
   subscriptions: ChannelSubscription[],
@@ -466,655 +190,6 @@ async function* subscribeToChannels(
   }
 }
 
-// ============================================================================
-// PREREQUISITE DATA HELPERS
-// ============================================================================
-
-type PrerequisiteData = {
-  viewsList: DatabaseView[];
-  feedsList: DatabaseFeed[];
-  contentCategoriesList: DatabaseContentCategory[];
-  feedCategoriesList: DatabaseFeedCategory[];
-  viewCategoriesList: DatabaseViewCategory[];
-  viewFeedsList: DatabaseViewFeed[];
-  viewSectionsList: DatabaseViewSection[];
-};
-
-/**
- * Fetch all prerequisite data needed for view-based queries.
- * Fetches views, feeds, content categories, feed categories, and view categories
- * in parallel batches for optimal performance.
- *
- * Note: This helper should only be called from protected procedures where user is guaranteed to exist.
- */
-async function fetchUserPrerequisiteData(
-  context: ORPCContext,
-): Promise<PrerequisiteData> {
-  const userId = context.user!.id;
-
-  // First batch: views, feeds, content categories (no dependencies)
-  const [viewsList, feedsList, contentCategoriesList] = await Promise.all([
-    context.db
-      .select()
-      .from(views)
-      .where(eq(views.userId, userId))
-      .orderBy(asc(views.placement)),
-    context.db.query.feeds.findMany({
-      where: eq(feeds.userId, userId),
-    }),
-    context.db
-      .select()
-      .from(contentCategories)
-      .where(eq(contentCategories.userId, userId))
-      .orderBy(asc(contentCategories.name)),
-  ]);
-
-  // Second batch: feed categories and view categories (depend on first batch)
-  const userContentCategoryIds = contentCategoriesList.map((cc) => cc.id);
-  const userViewIds = viewsList.map((v) => v.id);
-
-  const [
-    feedCategoriesList,
-    viewCategoriesList,
-    viewFeedsList,
-    viewSectionsList,
-  ] = await Promise.all([
-    userContentCategoryIds.length > 0
-      ? context.db
-          .select()
-          .from(feedCategories)
-          .where(inArray(feedCategories.categoryId, userContentCategoryIds))
-      : Promise.resolve([]),
-    userViewIds.length > 0
-      ? context.db
-          .select()
-          .from(viewCategories)
-          .where(inArray(viewCategories.viewId, userViewIds))
-      : Promise.resolve([]),
-    userViewIds.length > 0
-      ? context.db
-          .select()
-          .from(viewFeeds)
-          .where(inArray(viewFeeds.viewId, userViewIds))
-      : Promise.resolve([]),
-    userViewIds.length > 0
-      ? context.db
-          .select()
-          .from(viewSections)
-          .where(inArray(viewSections.viewId, userViewIds))
-          .orderBy(asc(viewSections.placement))
-      : Promise.resolve([]),
-  ]);
-
-  return {
-    viewsList,
-    feedsList,
-    contentCategoriesList,
-    feedCategoriesList,
-    viewCategoriesList,
-    viewFeedsList,
-    viewSectionsList,
-  };
-}
-
-type ScopedViewPageData = {
-  view: ApplicationView;
-  applicationFeeds: ApplicationFeed[];
-  feedsById: Map<number, DatabaseFeed>;
-  feedIds: number[];
-};
-
-function buildScopedViewPageData(
-  view: ApplicationView,
-  feedsList: DatabaseFeed[],
-): ScopedViewPageData {
-  return {
-    view,
-    applicationFeeds: parseArrayOfSchema(feedsList, feedsSchema),
-    feedsById: new Map(feedsList.map((feed) => [feed.id, feed])),
-    feedIds: feedsList.map((feed) => feed.id),
-  };
-}
-
-async function fetchUncategorizedPageData(
-  context: ORPCContext,
-  userId: string,
-): Promise<ScopedViewPageData> {
-  const compatibleCustomView = or(
-    and(
-      eq(feeds.platform, "website"),
-      contentFilterColumnHasOption(
-        views.contentFilter,
-        CONTENT_FILTER_OPTION.TEXT,
-      ),
-    ),
-    and(
-      inArray(feeds.platform, [...VIDEO_PLATFORMS]),
-      or(
-        contentFilterColumnHasOption(
-          views.contentFilter,
-          CONTENT_FILTER_OPTION.VIDEOS,
-        ),
-        contentFilterColumnHasOption(
-          views.contentFilter,
-          CONTENT_FILTER_OPTION.SHORTS,
-        ),
-      ),
-    ),
-  );
-  const directlyAssignedToCompatibleView = exists(
-    context.db
-      .select({ value: sql<number>`1` })
-      .from(viewFeeds)
-      .innerJoin(
-        views,
-        and(eq(views.id, viewFeeds.viewId), eq(views.userId, userId)),
-      )
-      .where(and(eq(viewFeeds.feedId, feeds.id), compatibleCustomView)),
-  );
-  const taggedIntoCompatibleView = exists(
-    context.db
-      .select({ value: sql<number>`1` })
-      .from(feedCategories)
-      .innerJoin(
-        viewCategories,
-        eq(viewCategories.categoryId, feedCategories.categoryId),
-      )
-      .innerJoin(
-        views,
-        and(eq(views.id, viewCategories.viewId), eq(views.userId, userId)),
-      )
-      .where(and(eq(feedCategories.feedId, feeds.id), compatibleCustomView)),
-  );
-  const includedByUnfilteredCompatibleView = exists(
-    context.db
-      .select({ value: sql<number>`1` })
-      .from(views)
-      .where(
-        and(
-          eq(views.userId, userId),
-          compatibleCustomView,
-          not(
-            exists(
-              context.db
-                .select({ value: sql<number>`1` })
-                .from(viewFeeds)
-                .where(eq(viewFeeds.viewId, views.id)),
-            ),
-          ),
-          not(
-            exists(
-              context.db
-                .select({ value: sql<number>`1` })
-                .from(viewCategories)
-                .where(eq(viewCategories.viewId, views.id)),
-            ),
-          ),
-        ),
-      ),
-  );
-  const feedsList = await context.db
-    .select()
-    .from(feeds)
-    .where(
-      and(
-        eq(feeds.userId, userId),
-        not(directlyAssignedToCompatibleView),
-        not(taggedIntoCompatibleView),
-        not(includedByUnfilteredCompatibleView),
-      ),
-    );
-
-  return buildScopedViewPageData(
-    buildUncategorizedView(userId, [], []),
-    feedsList,
-  );
-}
-
-async function fetchScopedViewPageData(
-  context: ORPCContext,
-  viewId: number,
-): Promise<ScopedViewPageData | null> {
-  const userId = context.user!.id;
-  if (viewId === UNCATEGORIZED_VIEW_ID) {
-    return fetchUncategorizedPageData(context, userId);
-  }
-
-  const [view] = await context.db
-    .select()
-    .from(views)
-    .where(and(eq(views.id, viewId), eq(views.userId, userId)))
-    .limit(1);
-  if (!view) return null;
-
-  const [categoryRows, directFeedRows, sectionRows] = await Promise.all([
-    context.db
-      .select()
-      .from(viewCategories)
-      .where(eq(viewCategories.viewId, viewId)),
-    context.db.select().from(viewFeeds).where(eq(viewFeeds.viewId, viewId)),
-    context.db
-      .select()
-      .from(viewSections)
-      .where(eq(viewSections.viewId, viewId))
-      .orderBy(asc(viewSections.placement)),
-  ]);
-  const categoryIds = categoryRows.flatMap((row) =>
-    row.categoryId === null ? [] : [row.categoryId],
-  );
-  const directFeedIds = directFeedRows.map((row) => row.feedId);
-  const taggedFeedFilter =
-    categoryIds.length > 0
-      ? exists(
-          context.db
-            .select({ value: sql<number>`1` })
-            .from(feedCategories)
-            .where(
-              and(
-                eq(feedCategories.feedId, feeds.id),
-                inArray(feedCategories.categoryId, categoryIds),
-              ),
-            ),
-        )
-      : undefined;
-  const directFeedFilter =
-    directFeedIds.length > 0 ? inArray(feeds.id, directFeedIds) : undefined;
-  const hasExplicitMembership =
-    categoryIds.length > 0 || directFeedIds.length > 0;
-  const membershipFilter = hasExplicitMembership
-    ? or(directFeedFilter, taggedFeedFilter)
-    : undefined;
-  const feedsList = await context.db
-    .select()
-    .from(feeds)
-    .where(and(eq(feeds.userId, userId), membershipFilter));
-  const applicationView: ApplicationView = {
-    ...view,
-    isDefault: false,
-    categoryIds,
-    feedIds: directFeedIds,
-    viewSections: sectionRows.map((section) => ({
-      ...section,
-      itemType: section.itemType as "tag" | "feed",
-    })),
-  };
-
-  return buildScopedViewPageData(applicationView, feedsList);
-}
-
-type ApplicationViewsData = {
-  customViews: ApplicationView[];
-  allViews: ApplicationView[];
-  customViewCategoryIds: Set<number>;
-  customViewFeedIds: Set<number>;
-};
-
-/**
- * Build ApplicationView objects from raw database data.
- * Includes creating the Uncategorized view and sorting by placement.
- */
-function buildApplicationViews(
-  userId: string,
-  viewsList: PrerequisiteData["viewsList"],
-  contentCategoriesList: PrerequisiteData["contentCategoriesList"],
-  viewCategoriesList: PrerequisiteData["viewCategoriesList"],
-  viewFeedsList: PrerequisiteData["viewFeedsList"],
-  viewSectionsList: PrerequisiteData["viewSectionsList"],
-): ApplicationViewsData {
-  // Transform database views to ApplicationView with categoryIds, feedIds, and viewSections
-  const customViews: ApplicationView[] = viewsList.map((view) => ({
-    ...view,
-    isDefault: false,
-    categoryIds: viewCategoriesList
-      .filter((vc) => vc.viewId === view.id)
-      .map((vc) => vc.categoryId)
-      .filter((id): id is number => id !== null),
-    feedIds: viewFeedsList
-      .filter((vf) => vf.viewId === view.id)
-      .map((vf) => vf.feedId),
-    viewSections: viewSectionsList
-      .filter((sv) => sv.viewId === view.id)
-      .map((sv) => ({
-        ...sv,
-        itemType: sv.itemType as "tag" | "feed",
-      })),
-  }));
-
-  // Build the Uncategorized view
-  const uncategorizedView = buildUncategorizedView(
-    userId,
-    contentCategoriesList,
-    customViews,
-  );
-
-  // Combine and sort all views
-  const allViews = sortViewsByPlacement([...customViews, uncategorizedView]);
-
-  // Collect all category IDs used by custom views (for Uncategorized view exclusion)
-  const customViewCategoryIds = new Set(
-    customViews.flatMap((v) => v.categoryIds),
-  );
-
-  // Collect all feed IDs directly assigned to custom views
-  const customViewFeedIds = new Set(customViews.flatMap((v) => v.feedIds));
-
-  return { customViews, allViews, customViewCategoryIds, customViewFeedIds };
-}
-
-// ============================================================================
-// SHARED HELPER FUNCTIONS
-// ============================================================================
-
-type PaginationResult<T> = {
-  itemsToReturn: T[];
-  hasMore: boolean;
-  nextCursor: PaginationCursor;
-};
-
-/**
- * Process pagination results: determine hasMore, slice items, create nextCursor.
- * Pass itemsData from a query that fetched limit + 1 items.
- */
-function processPaginationResults<
-  T extends {
-    postedAt: Date;
-    id: string;
-    placement?: number;
-    isWatchedUpdatedAt?: Date | null;
-    isWatchLaterUpdatedAt?: Date | null;
-  },
->(itemsData: T[], limit: number): PaginationResult<T> {
-  const hasMore = itemsData.length > limit;
-  const itemsToReturn = hasMore ? itemsData.slice(0, limit) : itemsData;
-
-  const lastItem = itemsToReturn[itemsToReturn.length - 1];
-  const nextCursor: PaginationCursor =
-    hasMore && lastItem
-      ? {
-          placement: lastItem.placement,
-          postedAt: lastItem.postedAt,
-          id: lastItem.id,
-          isWatchedUpdatedAt: lastItem.isWatchedUpdatedAt ?? undefined,
-          isWatchLaterUpdatedAt: lastItem.isWatchLaterUpdatedAt ?? undefined,
-        }
-      : null;
-
-  return { itemsToReturn, hasMore, nextCursor };
-}
-
-/**
- * Map database feed items to ApplicationFeedItem with platform lookup.
- */
-function mapToApplicationFeedItems(
-  items: Array<{ feedId: number; postedAt: Date; id: string }>,
-  feedsById: Map<number, DatabaseFeed>,
-): ApplicationFeedItem[] {
-  return items.map((item) => {
-    const itemFeed = feedsById.get(item.feedId);
-    return {
-      ...item,
-      platform: itemFeed?.platform ?? "youtube",
-    } as ApplicationFeedItem;
-  });
-}
-
-type ViewPaginatedFeedItemScope = {
-  type: "view";
-  view: ApplicationView;
-  feedIds: number[];
-  membershipResolved?: boolean;
-  feedCategoriesList: DatabaseFeedCategory[];
-  customViewCategoryIds: Set<number>;
-  customViews: ApplicationView[];
-  applicationFeeds: ApplicationFeed[];
-  customViewFeedIds?: Set<number>;
-};
-
-type PaginatedFeedItemScope =
-  | ViewPaginatedFeedItemScope
-  | { type: "feed"; feedId: number }
-  | { type: "category"; feedIds: number[] };
-
-function buildPaginatedFeedItemQuery({
-  scope,
-  contentStatusFilter,
-  cursor,
-}: {
-  scope: PaginatedFeedItemScope;
-  contentStatusFilter: ContentStatusFilter;
-  cursor: PaginationCursor | null;
-}) {
-  const hasSections =
-    scope.type === "view" &&
-    contentStatusUsesSectionOrder(contentStatusFilter) &&
-    scope.view.viewSections &&
-    scope.view.viewSections.length > 0;
-  const placementExpr =
-    hasSections && scope.type === "view"
-      ? buildSectionPlacementExpression(scope.view.id)
-      : undefined;
-
-  const scopeFilterConditions =
-    scope.type === "view"
-      ? [
-          inArray(feedItems.feedId, scope.feedIds),
-          scope.membershipResolved
-            ? undefined
-            : buildViewCategoryFilter(
-                scope.view,
-                scope.feedCategoriesList,
-                scope.feedIds,
-                scope.customViewCategoryIds,
-                scope.customViews,
-                scope.applicationFeeds,
-                scope.customViewFeedIds,
-              ),
-          buildContentFilter(scope.view.contentFilter),
-          buildTimeWindowFilter(scope.view.daysWindow),
-        ]
-      : scope.type === "feed"
-        ? [eq(feedItems.feedId, scope.feedId)]
-        : [inArray(feedItems.feedId, scope.feedIds)];
-
-  const filterConditions = [
-    ...scopeFilterConditions,
-    buildContentStatusFilter(contentStatusFilter),
-    buildCursorCondition(cursor, contentStatusFilter, placementExpr),
-  ].filter((f): f is NonNullable<typeof f> => f !== undefined);
-
-  return {
-    filter: filterConditions.length > 0 ? and(...filterConditions) : undefined,
-    orderBy: placementExpr
-      ? [asc(placementExpr), ...buildFlatItemsOrderBy(contentStatusFilter)]
-      : buildFlatItemsOrderBy(contentStatusFilter),
-    placementExpr,
-  };
-}
-
-/**
- * Shared helper to query feed items for a view with correct ordering based on
- * content status and section configuration.
- *
- * Queries limit + 1 to determine hasMore, then slices.
- */
-async function queryFeedItemsForView(
-  context: ORPCContext,
-  view: ApplicationView,
-  params: {
-    contentStatusFilter: ContentStatusFilter;
-    feedIds: number[];
-    cursor: PaginationCursor | null;
-    limit: number;
-    feedsById: Map<number, DatabaseFeed>;
-    feedCategoriesList: DatabaseFeedCategory[];
-    customViewCategoryIds: Set<number>;
-    customViews: ApplicationView[];
-    applicationFeeds: ApplicationFeed[];
-    customViewFeedIds?: Set<number>;
-    membershipResolved?: boolean;
-  },
-): Promise<{
-  items: ApplicationFeedItem[];
-  hasMore: boolean;
-  nextCursor: PaginationCursor;
-}> {
-  const {
-    contentStatusFilter,
-    feedIds,
-    cursor,
-    limit,
-    feedsById,
-    feedCategoriesList,
-    customViewCategoryIds,
-    customViews,
-    applicationFeeds,
-    customViewFeedIds,
-    membershipResolved,
-  } = params;
-
-  let itemsData: Array<typeof feedItems.$inferSelect & { placement?: number }>;
-  const queryParts = buildPaginatedFeedItemQuery({
-    scope: {
-      type: "view",
-      view,
-      feedIds,
-      feedCategoriesList,
-      customViewCategoryIds,
-      customViews,
-      applicationFeeds,
-      customViewFeedIds,
-      membershipResolved,
-    },
-    contentStatusFilter,
-    cursor,
-  });
-
-  if (!queryParts.placementExpr) {
-    itemsData = await context.db.query.feedItems.findMany({
-      where: queryParts.filter,
-      orderBy: queryParts.orderBy,
-      limit: limit + 1,
-    });
-  } else {
-    itemsData = await context.db
-      .select({
-        ...getTableColumns(feedItems),
-        placement: queryParts.placementExpr,
-      })
-      .from(feedItems)
-      .where(queryParts.filter)
-      .orderBy(...queryParts.orderBy)
-      .limit(limit + 1);
-  }
-
-  const { itemsToReturn, hasMore, nextCursor } = processPaginationResults(
-    itemsData,
-    limit,
-  );
-
-  const applicationFeedItems = mapToApplicationFeedItems(
-    itemsToReturn,
-    feedsById,
-  );
-
-  return {
-    items: applicationFeedItems,
-    hasMore,
-    nextCursor,
-  };
-}
-
-type PreparedApplicationData = {
-  customViews: ApplicationView[];
-  allViews: ApplicationView[];
-  customViewCategoryIds: Set<number>;
-  customViewFeedIds: Set<number>;
-  applicationFeeds: ApplicationFeed[];
-  feedsById: Map<number, DatabaseFeed>;
-  feedIds: number[];
-};
-
-/**
- * Prepare application data after fetching prerequisites.
- * Builds application views, parses feeds, creates feedsById map.
- */
-function prepareApplicationData(
-  userId: string,
-  prerequisiteData: PrerequisiteData,
-): PreparedApplicationData {
-  const {
-    viewsList,
-    feedsList,
-    contentCategoriesList,
-    viewCategoriesList,
-    viewFeedsList,
-    viewSectionsList,
-  } = prerequisiteData;
-
-  const { customViews, allViews, customViewCategoryIds, customViewFeedIds } =
-    buildApplicationViews(
-      userId,
-      viewsList,
-      contentCategoriesList,
-      viewCategoriesList,
-      viewFeedsList,
-      viewSectionsList,
-    );
-
-  const applicationFeeds = parseArrayOfSchema(feedsList, feedsSchema);
-  const feedsById = new Map(feedsList.map((f) => [f.id, f]));
-  const feedIds = feedsList.map((feed) => feed.id);
-
-  return {
-    customViews,
-    allViews,
-    customViewCategoryIds,
-    customViewFeedIds,
-    applicationFeeds,
-    feedsById,
-    feedIds,
-  };
-}
-
-/**
- * Publish prerequisite data chunks (views, feeds, content-categories, feed-categories).
- */
-async function publishPrerequisiteDataChunks(
-  channel: string,
-  source: "initial",
-  data: {
-    allViews: ApplicationView[];
-    applicationFeeds: ApplicationFeed[];
-    contentCategoriesList: DatabaseContentCategory[];
-    feedCategoriesList: DatabaseFeedCategory[];
-  },
-): Promise<void> {
-  await Promise.all([
-    publisher.publish(channel, {
-      source,
-      chunk: { type: "views", views: data.allViews },
-    }),
-    publisher.publish(channel, {
-      source,
-      chunk: { type: "feeds", feeds: data.applicationFeeds },
-    }),
-    publisher.publish(channel, {
-      source,
-      chunk: {
-        type: "content-categories",
-        contentCategories: data.contentCategoriesList,
-      },
-    }),
-    publisher.publish(channel, {
-      source,
-      chunk: {
-        type: "feed-categories",
-        feedCategories: data.feedCategoriesList,
-      },
-    }),
-  ]);
-}
-
 export const getNavigationSnapshot = protectedProcedure.handler(({ context }) =>
   queryNavigationSnapshot({
     database: context.db,
@@ -1122,98 +197,22 @@ export const getNavigationSnapshot = protectedProcedure.handler(({ context }) =>
   }),
 );
 
-type PublishViewFeedsResult = {
-  feedIdToViewIds?: Map<number, number[]>;
-};
-
-/**
- * Publish view-feeds chunks for all views.
- * Optionally builds and returns feedIdToViewIds map.
- */
-async function publishViewFeedsChunks(
-  channel: string,
-  source: "initial",
-  params: {
-    allViews: ApplicationView[];
-    applicationFeeds: ApplicationFeed[];
-    feedCategoriesList: DatabaseFeedCategory[];
-    customViews: ApplicationView[];
-    customViewCategoryIds: Set<number>;
-    customViewFeedIds: Set<number>;
-    buildFeedIdToViewIds?: boolean;
-  },
-): Promise<PublishViewFeedsResult> {
-  const {
-    allViews,
-    applicationFeeds,
-    feedCategoriesList,
-    customViews,
-    customViewCategoryIds,
-    customViewFeedIds,
-    buildFeedIdToViewIds,
-  } = params;
-
-  const feedIdToViewIds = buildFeedIdToViewIds
-    ? new Map<number, number[]>()
-    : undefined;
-
-  const feedCategoriesMap = buildFeedCategoriesMap(feedCategoriesList);
-
-  for (const view of allViews) {
-    const feedIdsForView = computeFeedsForView(
-      view,
-      applicationFeeds,
-      feedCategoriesList,
-      customViews,
-      customViewCategoryIds,
-      feedCategoriesMap,
-      customViewFeedIds,
-    );
-
-    // Preserve view publication order for the client-side reducer.
-    // oxlint-disable-next-line react-doctor/async-await-in-loop
-    await publisher.publish(channel, {
-      source,
-      chunk: {
-        type: "view-feeds",
-        viewId: view.id,
-        feedIds: feedIdsForView,
-      },
-    });
-
-    if (feedIdToViewIds) {
-      for (const feedId of feedIdsForView) {
-        const existingViewIds = feedIdToViewIds.get(feedId);
-        if (existingViewIds) {
-          existingViewIds.push(view.id);
-        } else {
-          feedIdToViewIds.set(feedId, [view.id]);
-        }
-      }
-    }
-  }
-
-  return { feedIdToViewIds };
-}
-
 // ============================================================================
 // SUBSCRIPTION PROCEDURE
 // ============================================================================
 
 /**
- * Subscribe to the user's broadcast channel and this client's reply channel.
- * This creates a long-lived SSE connection.
+ * Subscribe to the user's broadcast channel.
  */
 export const subscribe = protectedProcedure
-  .input(clientScopedInputSchema)
-  .handler(async function* ({ context, input, signal, lastEventId }) {
+  .input(z.object({}))
+  .handler(async function* ({ context, signal, lastEventId }) {
     const userChannel = getUserChannel(context.user.id);
-    const clientChannel = getClientChannel(context.user.id, input.clientId);
     const untrack = trackChannelConnection(userChannel);
 
     try {
       for await (const payload of subscribeToChannels(
-        [{ channel: userChannel, lastEventId }, { channel: clientChannel }],
+        [{ channel: userChannel, lastEventId }],
         signal,
       )) {
         yield payload;
@@ -1224,306 +223,8 @@ export const subscribe = protectedProcedure
   });
 
 // ============================================================================
-// REQUEST PROCEDURES (publish instead of yield)
+// REQUEST PROCEDURES
 // ============================================================================
-
-/**
- * Request initial data load. Database-backed response chunks are published
- * only to the requesting client's reply channel; newly fetched RSS data is
- * broadcast to the user's channel.
- *
- * Flow:
- *   1. Publish complete navigation metadata and availability.
- *   2. Publish initial-data-complete so the client can show the UI and request
- *      content only for its selected center-pane scope.
- *   3. If feeds are due for refresh, call refreshUserFeeds and republish the
- *      authoritative navigation snapshot.
- */
-export const requestInitialData = protectedProcedure
-  .input(clientScopedInputSchema)
-  .handler(async ({ context, input }) => {
-    const userChannel = getUserChannel(context.user.id);
-    const clientChannel = getClientChannel(context.user.id, input.clientId);
-
-    // Step 1: Fetch all prerequisite data using helper
-    let prerequisiteData: PrerequisiteData;
-    let navigationSnapshot: NavigationSnapshot;
-    try {
-      [prerequisiteData, navigationSnapshot] = await Promise.all([
-        fetchUserPrerequisiteData(context),
-        queryNavigationSnapshot({
-          database: context.db,
-          userId: context.user.id,
-        }),
-      ]);
-    } catch (error) {
-      captureException(error);
-      await publisher.publish(clientChannel, {
-        source: "initial",
-        chunk: {
-          type: "error",
-          message:
-            error instanceof Error
-              ? error.message
-              : "Failed to fetch initial data",
-          phase: "initial-fetch",
-          viewId: -1,
-        },
-      });
-      return { status: "error" };
-    }
-
-    logDebug(
-      `[requestInitialData] user=${context.user.id} phase=prerequisites-fetched`,
-    );
-
-    const { feedsList, contentCategoriesList, feedCategoriesList } =
-      prerequisiteData;
-
-    // Build application data using helper
-    const {
-      customViews,
-      allViews,
-      customViewCategoryIds,
-      customViewFeedIds,
-      applicationFeeds,
-    } = prepareApplicationData(context.user.id, prerequisiteData);
-
-    logDebug(
-      `[requestInitialData] user=${context.user.id} phase=application-data-prepared`,
-    );
-
-    // Step 2: Publish prerequisite data chunks
-    await publishPrerequisiteDataChunks(clientChannel, "initial", {
-      allViews,
-      applicationFeeds,
-      contentCategoriesList,
-      feedCategoriesList,
-    });
-
-    logDebug(
-      `[requestInitialData] user=${context.user.id} phase=prerequisites-published`,
-    );
-
-    // Step 3: Publish view-feeds chunks for each view
-    await publishViewFeedsChunks(clientChannel, "initial", {
-      allViews,
-      applicationFeeds,
-      feedCategoriesList,
-      customViews,
-      customViewCategoryIds,
-      customViewFeedIds,
-    });
-    await publisher.publish(clientChannel, {
-      source: "initial",
-      chunk: { type: "navigation-snapshot", snapshot: navigationSnapshot },
-    });
-
-    logDebug(
-      `[requestInitialData] user=${context.user.id} phase=view-feeds-published`,
-    );
-
-    // Center-pane content is intentionally not part of the eager load. Once
-    // the first View is selected, useValidateViewItems requests exactly that
-    // scope and content status. Other View, Tag, and Feed pages remain unloaded
-    // until selected.
-    await publisher.publish(clientChannel, {
-      source: "initial",
-      chunk: { type: "initial-data-complete" },
-    });
-
-    logDebug(
-      `[requestInitialData] user=${context.user.id} phase=initial-data-complete-signaled`,
-    );
-
-    // Step 4: Check refresh rate limit and publish refresh-start. The
-    // cooldown + total feeds are streamed before the slow RSS fetch so the
-    // client can show loading state immediately.
-    const eligibility = await checkUserRefreshEligibility(
-      context.db,
-      context.user.id,
-    );
-
-    const feedsDue = eligibility.eligible
-      ? feedsList.filter(
-          (f) => f.isActive && (!f.nextFetchAt || f.nextFetchAt <= new Date()),
-        )
-      : [];
-
-    await publisher.publish(userChannel, {
-      source: "initial",
-      chunk: {
-        type: "refresh-start",
-        totalFeeds: feedsDue.length,
-        nextRefreshAt: eligibility.nextRefreshAt,
-      },
-    });
-
-    logDebug(
-      `[requestInitialData] user=${context.user.id} phase=refresh-start-published feedsDue=${feedsDue.length}`,
-    );
-
-    // Step 5: Run RSS fetch if eligible.
-    if (eligibility.eligible) {
-      await refreshUserFeeds({
-        db: context.db,
-        feedsList,
-        channel: userChannel,
-      });
-      logDebug(
-        `[requestInitialData] user=${context.user.id} phase=refresh-completed`,
-      );
-    }
-
-    const refreshedNavigationSnapshot = await queryNavigationSnapshot({
-      database: context.db,
-      userId: context.user.id,
-    });
-    await publisher.publish(userChannel, {
-      source: "initial",
-      chunk: {
-        type: "navigation-snapshot",
-        snapshot: refreshedNavigationSnapshot,
-      },
-    });
-
-    // Step 6: Always signal completion so the client exits loading state.
-    await publisher.publish(userChannel, {
-      source: "initial",
-      chunk: { type: "refresh-complete" },
-    });
-
-    logDebug(
-      `[requestInitialData] user=${context.user.id} phase=refresh-complete-published`,
-    );
-
-    return { status: "completed" };
-  });
-
-/**
- * Request data after importing feeds. Similar to requestInitialData but also
- * streams ALL RSS-fetched items to the client for immediate display.
- * Only fetches RSS for the specified newFeedIds (the newly imported feeds).
- */
-export const requestImportedData = protectedProcedure
-  .input(z.object({ newFeedIds: boundedNumberIdsSchema }))
-  .handler(async ({ context, input }) => {
-    const { newFeedIds } = input;
-    const channel = getUserChannel(context.user.id);
-
-    // Step 1: Fetch all prerequisite data using helper
-    let prerequisiteData: PrerequisiteData;
-    try {
-      prerequisiteData = await fetchUserPrerequisiteData(context);
-    } catch (error) {
-      captureException(error);
-      await publisher.publish(channel, {
-        source: "initial",
-        chunk: {
-          type: "error",
-          message:
-            error instanceof Error
-              ? error.message
-              : "Failed to fetch initial data",
-          phase: "initial-fetch",
-          viewId: -1,
-        },
-      });
-      return { status: "error" };
-    }
-
-    const { feedsList, contentCategoriesList, feedCategoriesList } =
-      prerequisiteData;
-
-    // Build application data using helper
-    const {
-      customViews,
-      allViews,
-      customViewCategoryIds,
-      customViewFeedIds,
-      applicationFeeds,
-    } = prepareApplicationData(context.user.id, prerequisiteData);
-    const navigationSnapshot = await queryNavigationSnapshot({
-      database: context.db,
-      userId: context.user.id,
-    });
-
-    // Step 2: Publish prerequisite data chunks
-    await publishPrerequisiteDataChunks(channel, "initial", {
-      allViews,
-      applicationFeeds,
-      contentCategoriesList,
-      feedCategoriesList,
-    });
-
-    // Step 3: Publish view-feeds chunks
-    await publishViewFeedsChunks(channel, "initial", {
-      allViews,
-      applicationFeeds,
-      feedCategoriesList,
-      customViews,
-      customViewCategoryIds,
-      customViewFeedIds,
-      buildFeedIdToViewIds: false,
-    });
-    await publisher.publish(channel, {
-      source: "initial",
-      chunk: { type: "navigation-snapshot", snapshot: navigationSnapshot },
-    });
-    // Center-pane pages remain conditional after an import as well. The
-    // selected scope will request its own current page.
-    await publisher.publish(channel, {
-      source: "initial",
-      chunk: { type: "initial-data-complete" },
-      invalidation: organizationInvalidationSummary(),
-    });
-
-    // Step 5: Run fetch and insert for fresh RSS items - ONLY for newly imported feeds
-    // Filter feedsList to only include the newly imported feeds
-    const newFeedIdSet = new Set(newFeedIds);
-    const newFeedsToFetch = feedsList.filter((feed) =>
-      newFeedIdSet.has(feed.id),
-    );
-
-    for await (const feedResult of fetchAndInsertFeedData(
-      context,
-      newFeedsToFetch,
-    )) {
-      await publisher.publish(channel, {
-        source: "initial",
-        chunk: {
-          type: "feed-status",
-          status: feedResult.status,
-          feedId: feedResult.id,
-        },
-      });
-
-      // Stream ALL fetched items (unlike requestInitialData which only sends feed-status)
-      if (feedResult.status === "success" && feedResult.feedItems.length > 0) {
-        await publisher.publish(channel, {
-          source: "initial",
-          chunk: {
-            type: "feed-items",
-            feedId: feedResult.id,
-            feedItems: feedResult.feedItems,
-          },
-        });
-      }
-    }
-
-    await publisher.publish(channel, {
-      source: "initial",
-      chunk: {
-        type: "navigation-snapshot",
-        snapshot: await queryNavigationSnapshot({
-          database: context.db,
-          userId: context.user.id,
-        }),
-      },
-    });
-
-    return { status: "completed" };
-  });
 
 type ImportCategoryPathInput =
   | string
@@ -1649,17 +350,17 @@ export const streamingImport = protectedProcedure
       importMode: z.enum(["tags", "views", "ignore"]).optional(),
     }),
   )
-  .handler(async ({ context, input }) => {
+  .handler(async function* ({ context, input }) {
     const importMode = input.importMode ?? "tags";
     const channel = getUserChannel(context.user.id);
     const BATCH_SIZE = 4;
 
     if (!input.feeds.length) {
-      await publisher.publish(channel, {
-        source: "initial",
-        chunk: { type: "initial-data-complete" },
-      });
-      return { status: "completed" };
+      yield {
+        type: "import-start",
+        totalFeeds: 0,
+      } satisfies ImportProgressChunk;
+      return;
     }
 
     // Check activation budget upfront
@@ -1685,21 +386,18 @@ export const streamingImport = protectedProcedure
 
     // Publish import start with total feeds count (must come before
     // import-limit-warning so the client's loading machine is initialized first)
-    await publisher.publish(channel, {
-      source: "initial",
-      chunk: { type: "import-start", totalFeeds: input.feeds.length },
-    });
+    yield {
+      type: "import-start",
+      totalFeeds: input.feeds.length,
+    } satisfies ImportProgressChunk;
 
     // Publish warning if some feeds will be inactive
     if (deactivatedCount > 0) {
-      await publisher.publish(channel, {
-        source: "initial",
-        chunk: {
-          type: "import-limit-warning",
-          deactivatedCount,
-          maxActiveFeeds,
-        },
-      });
+      yield {
+        type: "import-limit-warning",
+        deactivatedCount,
+        maxActiveFeeds,
+      } satisfies ImportProgressChunk;
     }
 
     // Track successful feed IDs for building view mappings later
@@ -1712,8 +410,11 @@ export const streamingImport = protectedProcedure
     }> = [];
 
     // Worker function: insert feed + fetch RSS content
-    async function processFeed(feedInput: (typeof feedsWithActivation)[0]) {
+    async function processFeed(
+      feedInput: (typeof feedsWithActivation)[0],
+    ): Promise<ImportProgressChunk[]> {
       const IMPORT_TIMEOUT_MS = 15_000; // 15 seconds
+      const chunks: ImportProgressChunk[] = [];
 
       const timeoutPromise = new Promise<never>((_, reject) => {
         setTimeout(
@@ -1736,26 +437,20 @@ export const streamingImport = protectedProcedure
         );
 
         if (!insertResult.success) {
-          await publisher.publish(channel, {
-            source: "initial",
-            chunk: {
-              type: "import-feed-error",
-              feedUrl: feedInput.feedUrl,
-              error: insertResult.error,
-            },
+          chunks.push({
+            type: "import-feed-error",
+            feedUrl: feedInput.feedUrl,
+            error: insertResult.error,
           });
-          return { success: false as const, feedUrl: feedInput.feedUrl };
+          return chunks;
         }
 
         // 2. Publish that feed was inserted
-        await publisher.publish(channel, {
-          source: "initial",
-          chunk: {
-            type: "import-feed-inserted",
-            feedUrl: feedInput.feedUrl,
-            feedId: insertResult.feedId,
-            feed: insertResult.feed,
-          },
+        chunks.push({
+          type: "import-feed-inserted",
+          feedUrl: feedInput.feedUrl,
+          feedId: insertResult.feedId,
+          feed: insertResult.feed,
         });
 
         // Track successful feed for later
@@ -1771,48 +466,37 @@ export const streamingImport = protectedProcedure
         for await (const feedResult of fetchAndInsertFeedData(context, [
           insertResult.feed,
         ])) {
-          await publisher.publish(channel, {
-            source: "initial",
-            chunk: {
-              type: "feed-status",
-              feedId: feedResult.id,
-              status: feedResult.status,
-            },
+          chunks.push({
+            type: "feed-status",
+            feedId: feedResult.id,
+            status: feedResult.status,
           });
         }
 
-        return {
-          success: true as const,
-          feedUrl: feedInput.feedUrl,
-          feedId: insertResult.feedId,
-        };
+        return chunks;
       })();
 
       try {
         return await Promise.race([importPromise, timeoutPromise]);
       } catch (error) {
         captureException(error);
-        await publisher.publish(channel, {
-          source: "initial",
-          chunk: {
+        return [
+          {
             type: "import-feed-error",
             feedUrl: feedInput.feedUrl,
             error: error instanceof Error ? error.message : "Import timed out",
           },
-        });
-        return { success: false as const, feedUrl: feedInput.feedUrl };
+        ];
       }
     }
 
     // Process all feeds through worker pool
-    const workerIterator = workerPool(
+    for await (const chunks of workerPool(
       feedsWithActivation,
       BATCH_SIZE,
       processFeed,
-    );
-    // Consume the iterator - results are published via side effects in processFeed
-    while (!(await workerIterator.next()).done) {
-      // Results stream as each feed completes
+    )) {
+      for (const chunk of chunks) yield chunk;
     }
 
     // For "views" mode: create (or reuse) views from the top-level OPML
@@ -2068,864 +752,24 @@ export const streamingImport = protectedProcedure
       }
     }
 
-    // After all feeds complete, publish updated prerequisite data
-    const prerequisiteData = await fetchUserPrerequisiteData(context);
-    const { contentCategoriesList, feedCategoriesList } = prerequisiteData;
-
-    const {
-      customViews,
-      allViews,
-      customViewCategoryIds,
-      customViewFeedIds,
-      applicationFeeds,
-    } = prepareApplicationData(context.user.id, prerequisiteData);
-    const navigationSnapshot = await queryNavigationSnapshot({
-      database: context.db,
-      userId: context.user.id,
-    });
-
-    await publishPrerequisiteDataChunks(channel, "initial", {
-      allViews,
-      applicationFeeds,
-      contentCategoriesList,
-      feedCategoriesList,
-    });
-
-    // Publish view-feeds chunks
-    await publishViewFeedsChunks(channel, "initial", {
-      allViews,
-      applicationFeeds,
-      feedCategoriesList,
-      customViews,
-      customViewCategoryIds,
-      customViewFeedIds,
-    });
     await publisher.publish(channel, {
-      source: "initial",
-      chunk: { type: "navigation-snapshot", snapshot: navigationSnapshot },
+      source: "invalidation",
+      chunk: organizationInvalidationSummary(),
     });
-
-    await publisher.publish(channel, {
-      source: "initial",
-      chunk: { type: "initial-data-complete" },
-      invalidation: organizationInvalidationSummary(),
-    });
-
-    return { status: "completed" };
-  });
-
-/**
- * Cursor schema for pagination.
- * For sectioned views, placement is included to support ordering by section then date.
- */
-const cursorSchema = z
-  .object({
-    placement: z.number().optional(),
-    postedAt: z.coerce.date(),
-    id: z.string(),
-    isWatchedUpdatedAt: z.coerce.date().nullable().optional(),
-    isWatchLaterUpdatedAt: z.coerce.date().nullable().optional(),
-  })
-  .nullable();
-
-/**
- * Build cursor condition for pagination.
- * Uses composite cursor {postedAt, id} for date-ordered views,
- * and {placement, postedAt, id} for section-ordered views.
- */
-function buildCursorCondition(
-  cursor: {
-    placement?: number;
-    postedAt: Date;
-    id: string;
-    isWatchedUpdatedAt?: Date | null;
-    isWatchLaterUpdatedAt?: Date | null;
-  } | null,
-  contentStatusFilter: ContentStatusFilter,
-  placementColumn?: SQL<number>,
-) {
-  if (!cursor) return undefined;
-
-  const orderCoordinate = contentStatusOrderExpression(contentStatusFilter);
-  const cursorCoordinate = selectContentStatusOrderValue(contentStatusFilter, {
-    published: cursor.postedAt,
-    saved: cursor.isWatchLaterUpdatedAt ?? cursor.postedAt,
-    archived: cursor.isWatchedUpdatedAt ?? cursor.postedAt,
-  });
-  // SQLite timestamp columns persist epoch seconds. The composite expression
-  // has no encoder, so bind the persisted representation explicitly.
-  const cursorCoordinateSeconds = Math.floor(cursorCoordinate.getTime() / 1000);
-  if (!contentStatusUsesSectionOrder(contentStatusFilter)) {
-    return or(
-      sql`${orderCoordinate} < ${cursorCoordinateSeconds}`,
-      and(
-        sql`${orderCoordinate} = ${cursorCoordinateSeconds}`,
-        lt(feedItems.id, cursor.id),
-      ),
-    );
-  }
-  const coordinateCondition = or(
-    sql`${orderCoordinate} < ${cursorCoordinateSeconds}`,
-    and(
-      sql`${orderCoordinate} = ${cursorCoordinateSeconds}`,
-      lt(feedItems.postedAt, cursor.postedAt),
-    ),
-    and(
-      sql`${orderCoordinate} = ${cursorCoordinateSeconds}`,
-      eq(feedItems.postedAt, cursor.postedAt),
-      lt(feedItems.id, cursor.id),
-    ),
-  );
-  if (!placementColumn || cursor.placement === undefined) {
-    return coordinateCondition;
-  }
-  return or(
-    gt(placementColumn, cursor.placement),
-    and(eq(placementColumn, cursor.placement), coordinateCondition),
-  );
-}
-
-function contentStatusOrderExpression(contentStatus: ContentStatusFilter) {
-  return selectContentStatusOrderValue(contentStatus, {
-    published: sql<Date>`${feedItems.postedAt}`,
-    saved: sql<Date>`COALESCE(${feedItems.isWatchLaterUpdatedAt}, ${feedItems.postedAt})`,
-    archived: sql<Date>`COALESCE(${feedItems.isWatchedUpdatedAt}, ${feedItems.postedAt})`,
-  });
-}
-
-function buildFlatItemsOrderBy(contentStatusFilter: ContentStatusFilter) {
-  if (!contentStatusUsesSectionOrder(contentStatusFilter)) {
-    return [
-      desc(contentStatusOrderExpression(contentStatusFilter)),
-      desc(feedItems.id),
-    ];
-  }
-  return [
-    desc(contentStatusOrderExpression(contentStatusFilter)),
-    desc(feedItems.postedAt),
-    desc(feedItems.id),
-  ];
-}
-
-/**
- * Build a SQL expression that returns the minimum section placement for a feed item.
- * Uncategorized items (not in any section) get placement 999999.
- */
-function buildSectionPlacementExpression(viewId: number): SQL<number> {
-  // Drizzle serializes ${feedItems.feedId} as unqualified "feed_id" inside
-  // sql template subqueries, which resolves to the innermost table
-  // (feed_categories.feed_id) instead of the outer feed_item.feed_id.
-  // Build a raw qualified reference so both SELECT and ORDER BY contexts
-  // consistently reference serial_feed_item.feed_id.
-  const tableName = (feedItems as unknown as Record<symbol, string>)[
-    Symbol.for("drizzle:Name")
-  ];
-  const colName = (feedItems.feedId as unknown as { name: string }).name;
-  // Both identifiers come from static Drizzle schema metadata, not input.
-  // react-doctor-disable-next-line react-doctor/raw-sql-injection-risk
-  const feedIdRef = sql.raw(`"${tableName}"."${colName}"`);
-
-  return sql<number>`COALESCE(
-    (
-      SELECT MIN(placement)
-      FROM serial_view_sections
-      WHERE view_id = ${viewId}
-        AND item_type = 'feed'
-        AND item_id = ${feedIdRef}
-    ),
-    (
-      SELECT MIN(placement)
-      FROM serial_view_sections AS view_section
-      WHERE view_id = ${viewId}
-        AND item_type = 'tag'
-        AND EXISTS (
-          SELECT 1 FROM serial_feed_categories
-          WHERE feed_id = ${feedIdRef}
-            AND category_id = view_section.item_id
-        )
-    ),
-    999999
-  )`;
-}
-
-/**
- * Request items for a specific content-status filter with cursor-based pagination.
- * Used for lazy loading non-default content-status pages,
- * and for infinite scroll pagination.
- */
-export const requestItemsByContentStatus = protectedProcedure
-  .input(
-    clientScopedInputSchema.extend({
-      viewId: z.number(),
-      contentStatusFilter: contentStatusFilterSchema,
-      cursor: cursorSchema.optional(),
-      limit: z.number().min(1).max(500).optional(),
-      clientItems: z
-        .array(
-          z.object({
-            id: z.string(),
-            contentHash: z.string().nullable(),
-            progress: z.number().nullable().optional(),
-            duration: z.number().nullable().optional(),
-          }),
-        )
-        .optional(),
-      membershipRevision: z.number().int().min(0).optional(),
-    }),
-  )
-  .handler(async ({ context, input }) => {
-    const channel = getClientChannel(context.user.id, input.clientId);
-    const limit = input.limit ?? ITEMS_PER_PAGE;
-    const clientItems = input.clientItems;
-
-    let pageData: ScopedViewPageData | null;
-    try {
-      pageData = await fetchScopedViewPageData(context, input.viewId);
-    } catch (error) {
-      captureException(error);
-      await publisher.publish(channel, {
-        source: "content-status",
-        chunk: {
-          type: "error",
-          message:
-            error instanceof Error
-              ? error.message
-              : "Failed to fetch initial data",
-          phase: "initial-fetch",
-        },
-      });
-      return { status: "error" };
-    }
-
-    if (!pageData) {
-      await publisher.publish(channel, {
-        source: "content-status",
-        chunk: {
-          type: "error",
-          message: `View with ID ${input.viewId} not found`,
-          phase: "find-view",
-        },
-      });
-      return { status: "error" };
-    }
-
-    const { view: targetView, applicationFeeds, feedsById, feedIds } = pageData;
-
-    if (feedIds.length === 0) {
-      await publisher.publish(channel, {
-        source: "content-status",
-        chunk: {
-          type: "view-diff",
-          viewId: input.viewId,
-          contentStatusFilter: input.contentStatusFilter,
-          diff: [],
-          cursor: null,
-          hasMore: false,
-          membershipRevision: input.membershipRevision,
-        },
-      });
-      return { status: "completed" };
-    }
-
-    try {
-      const { items, hasMore, nextCursor } = await queryFeedItemsForView(
-        context,
-        targetView,
-        {
-          contentStatusFilter: input.contentStatusFilter,
-          feedIds,
-          cursor: input.cursor ?? null,
-          limit,
-          feedsById,
-          feedCategoriesList: [],
-          customViewCategoryIds: new Set(),
-          customViews: [],
-          applicationFeeds,
-          membershipResolved: true,
-        },
-      );
-
-      // Always use diff-based response
-      const diff = computeViewDiff(items, clientItems ?? []);
-
-      await publisher.publish(channel, {
-        source: "content-status",
-        chunk: {
-          type: "view-diff",
-          viewId: input.viewId,
-          contentStatusFilter: input.contentStatusFilter,
-          diff,
-          cursor: nextCursor,
-          hasMore,
-          replacesScope: clientItems !== undefined,
-          membershipRevision: input.membershipRevision,
-        },
-      });
-    } catch (error) {
-      captureException(error);
-      await publisher.publish(channel, {
-        source: "content-status",
-        chunk: {
-          type: "error",
-          message:
-            error instanceof Error
-              ? error.message
-              : `Failed to fetch items for view ${input.viewId}`,
-          phase: "feed-items",
-        },
-      });
-      return { status: "error" };
-    }
-
-    return { status: "completed" };
-  });
-
-/**
- * Request items for a specific feed with cursor-based pagination.
- * Used for lazy loading when a feed is selected in the sidebar.
- */
-export const requestItemsByFeed = protectedProcedure
-  .input(
-    clientScopedInputSchema.extend({
-      feedId: z.number(),
-      contentStatusFilter: contentStatusFilterSchema,
-      cursor: cursorSchema.optional(),
-      limit: z.number().min(1).max(500).optional(),
-    }),
-  )
-  .handler(async ({ context, input }) => {
-    const channel = getClientChannel(context.user.id, input.clientId);
-    const limit = input.limit ?? ITEMS_PER_PAGE;
-
-    // Verify feed belongs to user
-    const feed = await context.db.query.feeds.findFirst({
-      where: and(eq(feeds.id, input.feedId), eq(feeds.userId, context.user.id)),
-    });
-
-    if (!feed) {
-      await publisher.publish(channel, {
-        source: "feed",
-        chunk: {
-          type: "error",
-          message: `Feed with ID ${input.feedId} not found or does not belong to user`,
-          phase: "verify-feed",
-        },
-      });
-      return { status: "error" };
-    }
-
-    try {
-      const queryParts = buildPaginatedFeedItemQuery({
-        scope: { type: "feed", feedId: input.feedId },
-        contentStatusFilter: input.contentStatusFilter,
-        cursor: input.cursor ?? null,
-      });
-
-      // Query limit + 1 to determine if there are more items
-      const itemsData = await context.db.query.feedItems.findMany({
-        where: queryParts.filter,
-        orderBy: queryParts.orderBy,
-        limit: limit + 1,
-      });
-
-      // Process pagination results using helper
-      const { itemsToReturn, hasMore, nextCursor } = processPaginationResults(
-        itemsData,
-        limit,
-      );
-
-      // Map items with single feed's platform (no lookup needed)
-      const applicationFeedItems = itemsToReturn.map((item) => ({
-        ...item,
-        platform: feed.platform,
-      })) as ApplicationFeedItem[];
-
-      // Publish items in chunks for large result sets
-      const chunks = prepareArrayChunks(
-        applicationFeedItems,
-        GET_BY_VIEW_CHUNK_SIZE,
-      );
-      for (const [chunkIndex, chunk] of chunks.entries()) {
-        // Chunks must arrive in order so replacement precedes append chunks.
-        // oxlint-disable-next-line react-doctor/async-await-in-loop
-        await publisher.publish(channel, {
-          source: "feed",
-          chunk: {
-            type: "feed-items",
-            feedId: input.feedId,
-            feedItems: chunk,
-            contentStatusFilter: input.contentStatusFilter,
-            hasMore,
-            nextCursor,
-            replacesScope: input.cursor == null && chunkIndex === 0,
-          },
-        });
-      }
-
-      // If no items, still publish an empty response
-      if (applicationFeedItems.length === 0) {
-        await publisher.publish(channel, {
-          source: "feed",
-          chunk: {
-            type: "feed-items",
-            feedId: input.feedId,
-            feedItems: [],
-            contentStatusFilter: input.contentStatusFilter,
-            hasMore: false,
-            nextCursor: null,
-            replacesScope: input.cursor == null,
-          },
-        });
-      }
-    } catch (error) {
-      captureException(error);
-      await publisher.publish(channel, {
-        source: "feed",
-        chunk: {
-          type: "error",
-          message:
-            error instanceof Error
-              ? error.message
-              : `Failed to fetch items for feed ${input.feedId}`,
-          phase: "feed-items",
-        },
-      });
-      return { status: "error" };
-    }
-
-    return { status: "completed" };
-  });
-
-/**
- * Request items for feeds in a specific category with cursor-based pagination.
- * Used for lazy loading when a category is selected in the sidebar.
- */
-export const requestItemsByCategoryId = protectedProcedure
-  .input(
-    clientScopedInputSchema.extend({
-      categoryId: z.number(),
-      contentStatusFilter: contentStatusFilterSchema,
-      cursor: cursorSchema.optional(),
-      limit: z.number().min(1).max(500).optional(),
-    }),
-  )
-  .handler(async ({ context, input }) => {
-    const channel = getClientChannel(context.user.id, input.clientId);
-    const limit = input.limit ?? ITEMS_PER_PAGE;
-
-    // Verify category belongs to user
-    const category = await context.db.query.contentCategories.findFirst({
-      where: and(
-        eq(contentCategories.id, input.categoryId),
-        eq(contentCategories.userId, context.user.id),
-      ),
-    });
-
-    if (!category) {
-      await publisher.publish(channel, {
-        source: "category",
-        chunk: {
-          type: "error",
-          message: `Category with ID ${input.categoryId} not found or does not belong to user`,
-          phase: "verify-category",
-        },
-      });
-      return { status: "error" };
-    }
-
-    // Get feed IDs in this category
-    const categoryFeedLinks = await context.db
-      .select()
-      .from(feedCategories)
-      .where(eq(feedCategories.categoryId, input.categoryId));
-
-    const feedIdsInCategory = categoryFeedLinks.map((fc) => fc.feedId);
-
-    if (feedIdsInCategory.length === 0) {
-      await publisher.publish(channel, {
-        source: "category",
-        chunk: {
-          type: "feed-items",
-          categoryId: input.categoryId,
-          feedItems: [],
-          contentStatusFilter: input.contentStatusFilter,
-          hasMore: false,
-          nextCursor: null,
-          replacesScope: input.cursor == null,
-        },
-      });
-      return { status: "completed" };
-    }
-
-    // Fetch feeds for platform lookup
-    const feedsList = await context.db.query.feeds.findMany({
-      where: and(
-        inArray(feeds.id, feedIdsInCategory),
-        eq(feeds.userId, context.user.id),
-      ),
-    });
-
-    const feedsById = new Map(feedsList.map((f) => [f.id, f]));
-
-    try {
-      const queryParts = buildPaginatedFeedItemQuery({
-        scope: { type: "category", feedIds: feedIdsInCategory },
-        contentStatusFilter: input.contentStatusFilter,
-        cursor: input.cursor ?? null,
-      });
-
-      // Query limit + 1 to determine if there are more items
-      const itemsData = await context.db.query.feedItems.findMany({
-        where: queryParts.filter,
-        orderBy: queryParts.orderBy,
-        limit: limit + 1,
-      });
-
-      // Process pagination results using helper
-      const { itemsToReturn, hasMore, nextCursor } = processPaginationResults(
-        itemsData,
-        limit,
-      );
-
-      // Map to application feed items using helper
-      const applicationFeedItems = mapToApplicationFeedItems(
-        itemsToReturn,
-        feedsById,
-      );
-
-      // Publish items in chunks for large result sets
-      const chunks = prepareArrayChunks(
-        applicationFeedItems,
-        GET_BY_VIEW_CHUNK_SIZE,
-      );
-      for (const [chunkIndex, chunk] of chunks.entries()) {
-        // Chunks must arrive in order so replacement precedes append chunks.
-        // oxlint-disable-next-line react-doctor/async-await-in-loop
-        await publisher.publish(channel, {
-          source: "category",
-          chunk: {
-            type: "feed-items",
-            categoryId: input.categoryId,
-            feedItems: chunk,
-            contentStatusFilter: input.contentStatusFilter,
-            hasMore,
-            nextCursor,
-            replacesScope: input.cursor == null && chunkIndex === 0,
-          },
-        });
-      }
-
-      // If no items, still publish an empty response
-      if (applicationFeedItems.length === 0) {
-        await publisher.publish(channel, {
-          source: "category",
-          chunk: {
-            type: "feed-items",
-            categoryId: input.categoryId,
-            feedItems: [],
-            contentStatusFilter: input.contentStatusFilter,
-            hasMore: false,
-            nextCursor: null,
-            replacesScope: input.cursor == null,
-          },
-        });
-      }
-    } catch (error) {
-      captureException(error);
-      await publisher.publish(channel, {
-        source: "category",
-        chunk: {
-          type: "error",
-          message:
-            error instanceof Error
-              ? error.message
-              : `Failed to fetch items for category ${input.categoryId}`,
-          phase: "feed-items",
-        },
-      });
-      return { status: "error" };
-    }
-
-    return { status: "completed" };
-  });
-
-export const revalidateView = protectedProcedure
-  .input(z.object({ viewId: z.number() }))
-  .handler(async function* ({
-    context,
-    input,
-  }): AsyncGenerator<RevalidateViewChunk> {
-    let targetPageData: ScopedViewPageData | null;
-    try {
-      targetPageData = await fetchScopedViewPageData(context, input.viewId);
-    } catch (error) {
-      captureException(error);
-      yield {
-        type: "error",
-        message:
-          error instanceof Error
-            ? error.message
-            : "Failed to fetch initial data",
-        phase: "initial-fetch",
-      };
-      return;
-    }
-
-    if (!targetPageData) {
-      yield {
-        type: "error",
-        message: `View with ID ${input.viewId} not found`,
-        phase: "find-view",
-      };
-      return;
-    }
-
-    async function* queryAndYieldScope(
-      pageData: ScopedViewPageData,
-    ): AsyncGenerator<RevalidateViewChunk> {
-      const { view, applicationFeeds, feedsById, feedIds } = pageData;
-      if (feedIds.length === 0) {
-        yield { type: "feed-items", viewId: view.id, feedItems: [] };
-        return;
-      }
-
-      try {
-        const { items } = await queryFeedItemsForView(context, view, {
-          contentStatusFilter: DEFAULT_CONTENT_STATUS_FILTER,
-          feedIds,
-          cursor: null,
-          limit: REVALIDATE_VIEW_CHUNK_SIZE,
-          feedsById,
-          feedCategoriesList: [],
-          customViewCategoryIds: new Set(),
-          customViews: [],
-          applicationFeeds,
-          membershipResolved: true,
-        });
-
-        yield {
-          type: "feed-items",
-          viewId: view.id,
-          feedItems: items,
-        };
-      } catch (error) {
-        captureException(error);
-        yield {
-          type: "error",
-          message:
-            error instanceof Error
-              ? error.message
-              : `Failed to fetch items for view ${view.id}`,
-          phase: "feed-items",
-        };
-      }
-    }
-
-    yield* queryAndYieldScope(targetPageData);
-
-    if (targetPageData.view.id !== UNCATEGORIZED_VIEW_ID) {
-      try {
-        const uncategorizedPageData = await fetchUncategorizedPageData(
-          context,
-          context.user.id,
-        );
-        yield* queryAndYieldScope(uncategorizedPageData);
-      } catch (error) {
-        captureException(error);
-        yield {
-          type: "error",
-          message:
-            error instanceof Error
-              ? error.message
-              : "Failed to revalidate Uncategorized",
-          phase: "feed-items",
-        };
-      }
-    }
-
-    return;
-  });
-
-export type GetItemsByContentStatusChunk =
-  | {
-      type: "feed-items";
-      viewId: number;
-      feedItems: ApplicationFeedItem[];
-      contentStatusFilter: ContentStatusFilter;
-      hasMore: boolean;
-      nextCursor: PaginationCursor;
-      replacesScope?: boolean;
-      membershipRevision?: number;
-    }
-  | {
-      type: "view-diff";
-      viewId: number;
-      contentStatusFilter: ContentStatusFilter;
-      diff: DiffEntry[];
-      cursor: PaginationCursor;
-      hasMore: boolean;
-      replacesScope?: boolean;
-      membershipRevision?: number;
-    }
-  | { type: "error"; message: string; phase: string };
-
-export type GetItemsByFeedChunk =
-  | {
-      type: "feed-items";
-      feedId: number;
-      feedItems: ApplicationFeedItem[];
-      contentStatusFilter: ContentStatusFilter;
-      hasMore: boolean;
-      nextCursor: PaginationCursor;
-      replacesScope?: boolean;
-    }
-  | { type: "error"; message: string; phase: string };
-
-export type GetItemsByCategoryIdChunk =
-  | {
-      type: "feed-items";
-      categoryId: number;
-      feedItems: ApplicationFeedItem[];
-      contentStatusFilter: ContentStatusFilter;
-      hasMore: boolean;
-      nextCursor: PaginationCursor;
-      replacesScope?: boolean;
-    }
-  | { type: "error"; message: string; phase: string };
-
-/**
- * Fetch items for a specific content-status filter with cursor-based pagination.
- * Used for lazy loading non-default content-status pages,
- * and for infinite scroll pagination.
- */
-export const getItemsByContentStatus = protectedProcedure
-  .input(
-    z.object({
-      viewId: z.number(),
-      contentStatusFilter: contentStatusFilterSchema,
-      cursor: cursorSchema.optional(),
-      limit: z.number().min(1).max(500).optional(),
-    }),
-  )
-  .handler(async function* ({
-    context,
-    input,
-  }): AsyncGenerator<GetItemsByContentStatusChunk> {
-    const limit = input.limit ?? ITEMS_PER_PAGE;
-
-    let pageData: ScopedViewPageData | null;
-    try {
-      pageData = await fetchScopedViewPageData(context, input.viewId);
-    } catch (error) {
-      captureException(error);
-      yield {
-        type: "error",
-        message:
-          error instanceof Error
-            ? error.message
-            : "Failed to fetch initial data",
-        phase: "initial-fetch",
-      };
-      return;
-    }
-
-    if (!pageData) {
-      yield {
-        type: "error",
-        message: `View with ID ${input.viewId} not found`,
-        phase: "find-view",
-      };
-      return;
-    }
-
-    const { view: targetView, applicationFeeds, feedsById, feedIds } = pageData;
-
-    if (feedIds.length === 0) {
-      yield {
-        type: "feed-items",
-        viewId: input.viewId,
-        feedItems: [],
-        contentStatusFilter: input.contentStatusFilter,
-        hasMore: false,
-        nextCursor: null,
-        replacesScope: input.cursor == null,
-      };
-      return;
-    }
-
-    try {
-      const {
-        items: applicationFeedItems,
-        hasMore,
-        nextCursor,
-      } = await queryFeedItemsForView(context, targetView, {
-        feedIds,
-        feedsById,
-        feedCategoriesList: [],
-        customViewCategoryIds: new Set(),
-        customViews: [],
-        applicationFeeds,
-        membershipResolved: true,
-        contentStatusFilter: input.contentStatusFilter,
-        cursor: input.cursor ?? null,
-        limit,
-      });
-
-      const chunks = prepareArrayChunks(
-        applicationFeedItems,
-        ITEMS_BY_CONTENT_STATUS_CHUNK_SIZE,
-      );
-      for (const [chunkIndex, chunk] of chunks.entries()) {
-        yield {
-          type: "feed-items",
-          viewId: input.viewId,
-          feedItems: chunk,
-          contentStatusFilter: input.contentStatusFilter,
-          hasMore,
-          nextCursor,
-          replacesScope: input.cursor == null && chunkIndex === 0,
-        };
-      }
-
-      if (applicationFeedItems.length === 0) {
-        yield {
-          type: "feed-items",
-          viewId: input.viewId,
-          feedItems: [],
-          contentStatusFilter: input.contentStatusFilter,
-          hasMore: false,
-          nextCursor: null,
-          replacesScope: input.cursor == null,
-        };
-      }
-    } catch (error) {
-      captureException(error);
-      yield {
-        type: "error",
-        message:
-          error instanceof Error
-            ? error.message
-            : `Failed to fetch items for view ${input.viewId}`,
-        phase: "feed-items",
-      };
-    }
   });
 
 /**
  * Fetch fulltext content for a list of items.
  * Used by the client after receiving lightweight items to fill in missing content.
- * Publishes chunks to the user's SSE channel so the client receives them via
- * the existing subscription.
+ * Returns requested content directly to the initiating client.
  */
 export const requestFullTextForItems = protectedProcedure
   .input(
-    clientScopedInputSchema.extend({
+    z.object({
       itemIds: z.array(z.string()).max(500),
     }),
   )
   .handler(async ({ context, input }) => {
-    const channel = getClientChannel(context.user.id, input.clientId);
-
     try {
       const items = await context.db
         .select({
@@ -2942,28 +786,9 @@ export const requestFullTextForItems = protectedProcedure
           ),
         );
 
-      await publisher.publish(channel, {
-        source: "initial",
-        chunk: {
-          type: "fulltext-items",
-          items,
-        } as GetByViewChunk,
-      });
-
-      return { status: "completed" };
+      return items;
     } catch (error) {
       captureException(error);
-      await publisher.publish(channel, {
-        source: "initial",
-        chunk: {
-          type: "error",
-          message:
-            error instanceof Error
-              ? error.message
-              : "Failed to fetch fulltext items",
-          phase: "fulltext",
-        } as GetByViewChunk,
-      });
-      return { status: "error" };
+      throw error;
     }
   });

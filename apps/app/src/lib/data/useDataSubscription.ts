@@ -1,21 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { getDefaultStore } from "jotai";
 import { orpcRouterClient } from "../orpc";
-import { getDataSubscriptionClientId } from "./clientChannel";
 import { combineAbortSignals } from "./combineAbortSignals";
 import { loadingActor } from "./loading-machine";
 import { shouldAlwaysKeepSSEConnectionAlive } from "./atoms";
-import { getFeedItemMembershipRevision } from "./feed-items/membershipRevision";
 import { setDataSubscriptionConnected } from "./subscriptionConnection";
 import { dataReconciliation } from "./reconciliation";
 import type { PublishedChunk } from "~/server/api/publisher";
-import type { ContentStatusFilter } from "~/lib/content-status";
-import type {
-  ClientManifestEntry,
-  PaginationCursor,
-} from "~/server/api/routers/initialRouter";
 
 // Exponential backoff configuration
 const INITIAL_RETRY_DELAY = 1000; // 1 second
@@ -51,7 +44,6 @@ function waitForVisibilityChange(signal: AbortSignal) {
  * Handles connection lifecycle, auto-reconnection, and exposes request methods.
  */
 export function useDataSubscription() {
-  const [clientId] = useState(() => getDataSubscriptionClientId());
   const abortControllerRef = useRef<AbortController | null>(null);
   const retryDelayRef = useRef(INITIAL_RETRY_DELAY);
 
@@ -102,7 +94,7 @@ export function useDataSubscription() {
           // Each reconnect depends on the prior connection closing.
           // oxlint-disable-next-line react-doctor/async-await-in-loop
           const iterator = await orpcRouterClient.initial.subscribe(
-            { clientId },
+            {},
             { signal: connectionSignal },
           );
           setDataSubscriptionConnected(true);
@@ -120,6 +112,7 @@ export function useDataSubscription() {
         } catch (error) {
           setDataSubscriptionConnected(false);
           dataReconciliation.sseConnectionChanged(false);
+          dataReconciliation.subscriptionAttemptFailed();
 
           if (controller.signal.aborted) break;
 
@@ -215,166 +208,5 @@ export function useDataSubscription() {
         chunkBufferRef.current = [];
       }
     };
-  }, [clientId, flushBuffer]);
-
-  const requestFullTextForItems = useCallback(
-    (itemIds: string[]) => {
-      return orpcRouterClient.initial.requestFullTextForItems({
-        itemIds,
-        clientId,
-      });
-    },
-    [clientId],
-  );
-
-  const requestItemsByContentStatus = useCallback(
-    (
-      viewId: number,
-      contentStatusFilter: ContentStatusFilter,
-      cursor?: PaginationCursor,
-      limit?: number,
-      clientItems?: ClientManifestEntry[],
-    ) => {
-      return orpcRouterClient.initial.requestItemsByContentStatus({
-        viewId,
-        contentStatusFilter,
-        cursor,
-        limit,
-        clientItems,
-        membershipRevision: getFeedItemMembershipRevision(),
-        clientId,
-      });
-    },
-    [clientId],
-  );
-
-  const requestItemsByFeed = useCallback(
-    (
-      feedId: number,
-      contentStatusFilter: ContentStatusFilter,
-      cursor?: PaginationCursor,
-      limit?: number,
-    ) => {
-      return orpcRouterClient.initial.requestItemsByFeed({
-        feedId,
-        contentStatusFilter,
-        cursor,
-        limit,
-        clientId,
-      });
-    },
-    [clientId],
-  );
-
-  const requestItemsByCategoryId = useCallback(
-    (
-      categoryId: number,
-      contentStatusFilter: ContentStatusFilter,
-      cursor?: PaginationCursor,
-      limit?: number,
-    ) => {
-      return orpcRouterClient.initial.requestItemsByCategoryId({
-        categoryId,
-        contentStatusFilter,
-        cursor,
-        limit,
-        clientId,
-      });
-    },
-    [clientId],
-  );
-
-  return {
-    requestFullTextForItems,
-    requestItemsByContentStatus,
-    requestItemsByFeed,
-    requestItemsByCategoryId,
-  };
+  }, [flushBuffer]);
 }
-
-/**
- * Singleton context provider for the data subscription.
- * This allows accessing request methods from anywhere in the app.
- */
-export const dataSubscriptionActions = {
-  requestMixedContentPage: (
-    scope: Parameters<
-      typeof orpcRouterClient.mixedContent.requestPage
-    >[0]["scope"],
-    contentStatus: ContentStatusFilter,
-    cursor?: Parameters<
-      typeof orpcRouterClient.mixedContent.requestPage
-    >[0]["cursor"],
-    limit?: number,
-  ) =>
-    orpcRouterClient.mixedContent.requestPage({
-      clientId: getDataSubscriptionClientId(),
-      scope,
-      contentStatus,
-      cursor,
-      limit,
-    }),
-  requestFullTextForItems: (itemIds: string[]) => {
-    return orpcRouterClient.initial.requestFullTextForItems({
-      itemIds,
-      clientId: getDataSubscriptionClientId(),
-    });
-  },
-  streamingImport: (
-    feeds: Array<{
-      feedUrl: string;
-      categories: string[];
-      categoryPaths?: Array<
-        Array<{
-          name: string;
-          type?: "view" | "tag" | "feed";
-          feedUrl?: string;
-        }>
-      >;
-      tagNames?: string[];
-    }>,
-    importMode?: "tags" | "views" | "ignore",
-  ) => orpcRouterClient.initial.streamingImport({ feeds, importMode }),
-  requestItemsByContentStatus: (
-    viewId: number,
-    contentStatusFilter: ContentStatusFilter,
-    cursor?: PaginationCursor,
-    limit?: number,
-    clientItems?: ClientManifestEntry[],
-  ) =>
-    orpcRouterClient.initial.requestItemsByContentStatus({
-      viewId,
-      contentStatusFilter,
-      cursor,
-      limit,
-      clientItems,
-      membershipRevision: getFeedItemMembershipRevision(),
-      clientId: getDataSubscriptionClientId(),
-    }),
-  requestItemsByFeed: (
-    feedId: number,
-    contentStatusFilter: ContentStatusFilter,
-    cursor?: PaginationCursor,
-    limit?: number,
-  ) =>
-    orpcRouterClient.initial.requestItemsByFeed({
-      feedId,
-      contentStatusFilter,
-      cursor,
-      limit,
-      clientId: getDataSubscriptionClientId(),
-    }),
-  requestItemsByCategoryId: (
-    categoryId: number,
-    contentStatusFilter: ContentStatusFilter,
-    cursor?: PaginationCursor,
-    limit?: number,
-  ) =>
-    orpcRouterClient.initial.requestItemsByCategoryId({
-      categoryId,
-      contentStatusFilter,
-      cursor,
-      limit,
-      clientId: getDataSubscriptionClientId(),
-    }),
-};

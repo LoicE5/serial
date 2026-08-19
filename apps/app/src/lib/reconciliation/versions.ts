@@ -1,6 +1,5 @@
 import type { ApplicationFeedItem } from "~/server/db/schema";
 import type { ApplicationBookmark } from "~/server/mixed-content/projection";
-import { bookmarkManifestValue } from "~/lib/data/bookmarks/manifest";
 
 export function getFeedItemReconciliationVersion(item: ApplicationFeedItem) {
   return [
@@ -16,5 +15,14 @@ export function getFeedItemReconciliationVersion(item: ApplicationFeedItem) {
 export function getBookmarkReconciliationVersion(
   bookmark: ApplicationBookmark,
 ) {
-  return bookmarkManifestValue(bookmark);
+  return [
+    bookmark.updatedAt.toISOString(),
+    bookmark.savedUpdatedAt.toISOString(),
+    bookmark.readUpdatedAt.toISOString(),
+    bookmark.progressUpdatedAt.toISOString(),
+    bookmark.captureHash ?? "",
+    bookmark.capturedAt?.toISOString() ?? "",
+    bookmark.viewIds.join(","),
+    bookmark.tagIds.join(","),
+  ].join("|");
 }

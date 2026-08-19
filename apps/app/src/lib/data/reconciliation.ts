@@ -329,7 +329,7 @@ const runtime = createReconciliationRuntime<PublishedChunk[]>({
   buildInput,
   openStream: async (input, signal) =>
     orpcRouterClient.initial.reconcileApplicationState(input, { signal }),
-  applyAuthoritative: (payload) => {
+  applyAuthoritative: (payload, { reconciliationId }) => {
     switch (payload.type) {
       case "organization":
         unstable_batchedUpdates(() => {
@@ -353,22 +353,42 @@ const runtime = createReconciliationRuntime<PublishedChunk[]>({
             ),
           });
         });
-        performanceMark("serial:reconciliation-organization-applied");
+        performanceMark(
+          "serial:reconciliation-organization-applied",
+          reconciliationId,
+        );
         return true;
       case "active-scope": {
-        const applied = applyReconciliationFirstPage(payload.page);
+        let applied = false;
+        unstable_batchedUpdates(() => {
+          applied = applyReconciliationFirstPage(payload.page);
+        });
         if (applied) {
-          performanceMark("serial:reconciliation-active-scope-applied");
+          performanceMark(
+            "serial:reconciliation-active-scope-applied",
+            reconciliationId,
+          );
         }
         return applied;
       }
       case "navigation":
         navigationSnapshotStore.getState().set(payload.snapshot);
-        performanceMark("serial:reconciliation-navigation-applied");
+        performanceMark(
+          "serial:reconciliation-navigation-applied",
+          reconciliationId,
+        );
         return true;
     }
   },
   applyLiveEvent: (payloads) => {
+    if (
+      payloads.some(
+        (payload) =>
+          payload.source === "rss" && payload.chunk.type === "refresh-start",
+      )
+    ) {
+      performanceMark("serial:rss-start");
+    }
     applyPublishedChunks(payloads, {
       refreshNavigation: false,
     });
@@ -381,6 +401,7 @@ const runtime = createReconciliationRuntime<PublishedChunk[]>({
     const onlyRssPayloads = payloads.every(({ source }) => source === "rss");
     if (onlyRssPayloads && !summary) return;
     if (summary) {
+      performanceMark("serial:rss-complete");
       const repairTargets: ReconciliationTarget[] = [];
       if (summary.affectedFeeds.length > 0) {
         repairTargets.push({ type: "navigation" });
@@ -403,7 +424,7 @@ const runtime = createReconciliationRuntime<PublishedChunk[]>({
   getCurrentSelection: currentSelection,
   mark: performanceMark,
   onParityApplied: ({ automaticRssOwner, reconciliationId }) => {
-    loadingActor.send({ type: "INITIAL_DATA_COMPLETE" });
+    loadingActor.send({ type: "RECONCILIATION_COMPLETE" });
     if (resolveManualFull) {
       if (reconciliationId !== supersededManualFullId) resolveManualFull();
       return;
@@ -432,12 +453,17 @@ const activeScopeStores = [feedItemsStore, mixedContentStore].map(
   asPersistedStore,
 );
 const bookmarkStores = [bookmarksStore].map(asPersistedStore);
-const allPersistedStores = [
-  ...organizationStores,
-  ...activeScopeStores,
-  ...bookmarkStores,
-];
+const cacheUsableStores = [...organizationStores, ...activeScopeStores];
 let hydrationCleanups: Array<() => void> = [];
+let lifecycleStarted = false;
+let runtimeStarted = false;
+let initialSubscriptionAttemptFailed = false;
+
+function startRuntime() {
+  if (!lifecycleStarted || runtimeStarted) return;
+  runtimeStarted = true;
+  runtime.start();
+}
 
 function observeHydration(stores: PersistedStore[], onHydrated: () => void) {
   let emitted = false;
@@ -463,7 +489,8 @@ function observeDomainHydration(
 
 export const dataReconciliation = {
   start() {
-    if (hydrationCleanups.length > 0) return;
+    if (lifecycleStarted) return;
+    lifecycleStarted = true;
     const atoms = getDefaultStore();
     atoms.set(viewFilterIdAtom, UNSELECTED_VIEW_ID);
     atoms.set(feedFilterAtom, -1);
@@ -476,14 +503,19 @@ export const dataReconciliation = {
       observeDomainHydration("organization", organizationStores),
       observeDomainHydration("active-scope", activeScopeStores),
       observeDomainHydration("bookmarks", bookmarkStores),
-      observeHydration(allPersistedStores, () => runtime.cacheUsable()),
+      observeHydration(cacheUsableStores, () => runtime.cacheUsable()),
     ];
-    runtime.start();
+    if (runtime.getState().sseConnected || initialSubscriptionAttemptFailed) {
+      startRuntime();
+    }
   },
   stop() {
     hydrationCleanups.forEach((cleanup) => cleanup());
     hydrationCleanups = [];
     runtime.stop();
+    lifecycleStarted = false;
+    runtimeStarted = false;
+    initialSubscriptionAttemptFailed = false;
   },
   activateScope: runtime.activateScope,
   requestManualFull() {
@@ -520,7 +552,17 @@ export const dataReconciliation = {
     }
   },
   environmentChanged: runtime.environmentChanged,
-  sseConnectionChanged: runtime.sseConnectionChanged,
+  sseConnectionChanged(connected: boolean) {
+    runtime.sseConnectionChanged(connected);
+    if (connected) {
+      initialSubscriptionAttemptFailed = false;
+      startRuntime();
+    }
+  },
+  subscriptionAttemptFailed() {
+    initialSubscriptionAttemptFailed = true;
+    startRuntime();
+  },
   getState: runtime.getState,
   subscribe: runtime.subscribe,
 };

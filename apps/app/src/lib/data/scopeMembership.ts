@@ -4,7 +4,6 @@ import {
 } from "./feed-items/listProjection";
 import { feedCategoriesStore } from "./feed-categories/store";
 import { viewsStore } from "./views/store";
-import type { DiffEntry } from "~/server/api/routers/initialRouter";
 import type { ApplicationFeedItem } from "~/server/db/schema";
 import type { ContentStatusFilter } from "~/lib/content-status";
 import {
@@ -36,21 +35,6 @@ function mergeScopeItemIds(
   }
 
   return mergedIds;
-}
-
-export function getServerItemIdsFromDiff(diff: DiffEntry[]) {
-  return diff.flatMap((entry) => {
-    if (entry.status === "deleted") return [];
-    if (entry.status === "unchanged") return [entry.id];
-    return [entry.item.id];
-  });
-}
-
-export function getChangedItemsFromDiff(diff: DiffEntry[]) {
-  return diff.flatMap((entry) => {
-    if (entry.status !== "new" && entry.status !== "updated") return [];
-    return [entry.item];
-  });
 }
 
 export function applyScopeMembershipUpdate({

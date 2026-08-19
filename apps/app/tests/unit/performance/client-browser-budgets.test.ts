@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   CLIENT_BROWSER_BUDGETS,
   evaluateClientBrowserScenario,
+  summarizePercentiles,
 } from "../../../scripts/performance/client-browser-budgets";
 
 describe("client browser performance budgets", () => {
@@ -49,5 +50,37 @@ describe("client browser performance budgets", () => {
     });
 
     expect(violations).toHaveLength(11);
+  });
+
+  it("reports local p50 and p95 without creating a timing gate", () => {
+    expect(summarizePercentiles([100, 50, 400, 200, 300])).toEqual({
+      samples: 5,
+      p50: 200,
+      p95: 400,
+    });
+  });
+
+  it("retains a one-MiB ceiling for the finite full-matrix repair", () => {
+    const fullMatrixTransfer = 900 * 1_024;
+    const metrics = {
+      usableContentMs: 200,
+      longTasks: [],
+      commits: [],
+      indexedDb: { reads: 0, writes: 0 },
+      requests: 2,
+      transferBytes: fullMatrixTransfer,
+      rpcRequests: 1,
+      rpcTransferBytes: fullMatrixTransfer,
+      heapBytes: 32 * 1_024 * 1_024,
+      storageBytes: 8 * 1_024 * 1_024,
+    };
+
+    expect(evaluateClientBrowserScenario("warmHydration", metrics)).toEqual([]);
+    expect(
+      evaluateClientBrowserScenario("reconnect", {
+        ...metrics,
+        usableContentMs: null,
+      }),
+    ).toEqual([]);
   });
 });

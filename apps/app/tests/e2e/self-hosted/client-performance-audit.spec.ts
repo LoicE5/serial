@@ -8,6 +8,7 @@ import { signIn } from "../fixtures/auth";
 import {
   CLIENT_BROWSER_BUDGETS,
   evaluateClientBrowserScenario,
+  summarizePercentiles,
 } from "../../../scripts/performance/client-browser-budgets";
 import type { Page } from "@playwright/test";
 
@@ -29,12 +30,20 @@ type BrowserMetrics = {
   rpcTransferBytes: number;
   heapBytes: number | null;
   storageBytes: number | null;
+  marks: Array<{ name: string; startTime: number }>;
 };
 
 type PerformanceWindow = Window & {
   __SERIAL_CLIENT_PERFORMANCE__?: {
     commits: Array<{ actualDuration: number; baseDuration: number }>;
   };
+};
+
+type NetworkMetrics = {
+  requests: number;
+  transferBytes: number;
+  rpcRequests: number;
+  rpcTransferBytes: number;
 };
 
 async function installObservers(page: Page) {
@@ -82,18 +91,14 @@ async function resetBrowserMetrics(page: Page) {
     if (performanceWindow.__SERIAL_CLIENT_PERFORMANCE__) {
       performanceWindow.__SERIAL_CLIENT_PERFORMANCE__.commits = [];
     }
+    performance.clearMarks();
   });
 }
 
 async function collectMetrics(
   page: Page,
   inputStartedAt: number,
-  network: {
-    requests: number;
-    transferBytes: number;
-    rpcRequests: number;
-    rpcTransferBytes: number;
-  },
+  network: NetworkMetrics,
   inputUsableContentMs: number | null = null,
 ): Promise<BrowserMetrics> {
   return page.evaluate(
@@ -142,6 +147,10 @@ async function collectMetrics(
             }
           ).memory?.usedJSHeapSize ?? null,
         storageBytes: storageEstimate.usage ?? null,
+        marks: performance
+          .getEntriesByType("mark")
+          .filter(({ name }) => name.startsWith("serial:"))
+          .map(({ name, startTime }) => ({ name, startTime })),
       };
     },
     {
@@ -150,6 +159,55 @@ async function collectMetrics(
       ...network,
     },
   );
+}
+
+async function clearPersistedClientState(page: Page) {
+  await page.evaluate(async () => {
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open("keyval-store");
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    await new Promise<void>((resolve, reject) => {
+      const transaction = database.transaction("keyval", "readwrite");
+      transaction.objectStore("keyval").clear();
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+    });
+    database.close();
+  });
+}
+
+async function measureColdLoad(
+  page: Page,
+  network: NetworkMetrics,
+  resetNetwork: () => void,
+) {
+  await clearPersistedClientState(page);
+  resetNetwork();
+  await page.goto("/?client-performance-audit=1");
+  await expect(page.getByText(/Fixture item \d+/).first()).toBeVisible({
+    timeout: 120_000,
+  });
+  const usableContentMs = await page.evaluate(() => performance.now());
+  await page.waitForTimeout(2_200);
+  return collectMetrics(page, 0, network, usableContentMs);
+}
+
+async function measureWarmHydration(
+  page: Page,
+  network: NetworkMetrics,
+  resetNetwork: () => void,
+) {
+  await resetBrowserMetrics(page);
+  resetNetwork();
+  await page.reload();
+  await expect(page.getByText(/Fixture item \d+/).first()).toBeVisible({
+    timeout: 120_000,
+  });
+  const usableContentMs = await page.evaluate(() => performance.now());
+  await page.waitForTimeout(2_200);
+  return collectMetrics(page, 0, network, usableContentMs);
 }
 
 test("profiles representative cold load, warm hydration, reconnect, pagination, and reader rendering", async ({
@@ -200,51 +258,22 @@ test("profiles representative cold load, warm hydration, reconnect, pagination, 
       timeout: 120_000,
     });
     await page.waitForTimeout(2_200);
-    await page.evaluate(async () => {
-      const database = await new Promise<IDBDatabase>((resolve, reject) => {
-        const request = indexedDB.open("keyval-store");
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
-      });
-      await new Promise<void>((resolve, reject) => {
-        const transaction = database.transaction("keyval", "readwrite");
-        transaction.objectStore("keyval").clear();
-        transaction.oncomplete = () => resolve();
-        transaction.onerror = () => reject(transaction.error);
-      });
-      database.close();
-    });
-
-    resetNetwork();
-    await page.goto("/?client-performance-audit=1");
-    const coldStartedAt = 0;
-    await expect(page.getByText(/Fixture item \d+/).first()).toBeVisible({
-      timeout: 120_000,
-    });
-    const coldUsableContentMs = await page.evaluate(() => performance.now());
-    await page.waitForTimeout(2_200);
-    const coldLoad = await collectMetrics(
+    const coldLoad = await measureColdLoad(page, network, resetNetwork);
+    const warmHydration = await measureWarmHydration(
       page,
-      coldStartedAt,
       network,
-      coldUsableContentMs,
+      resetNetwork,
     );
-
-    await resetBrowserMetrics(page);
-    resetNetwork();
-    await page.reload();
-    const warmStartedAt = 0;
-    await expect(page.getByText(/Fixture item \d+/).first()).toBeVisible({
-      timeout: 120_000,
-    });
-    const warmUsableContentMs = await page.evaluate(() => performance.now());
-    await page.waitForTimeout(2_200);
-    const warmHydration = await collectMetrics(
-      page,
-      warmStartedAt,
-      network,
-      warmUsableContentMs,
+    const coldSamples = [coldLoad];
+    const warmSamples = [warmHydration];
+    const percentileSampleCount = Math.max(
+      1,
+      Number(process.env.SERIAL_CLIENT_PERFORMANCE_SAMPLES ?? 5),
     );
+    for (let sample = 1; sample < percentileSampleCount; sample++) {
+      coldSamples.push(await measureColdLoad(page, network, resetNetwork));
+      warmSamples.push(await measureWarmHydration(page, network, resetNetwork));
+    }
 
     await resetBrowserMetrics(page);
     resetNetwork();
@@ -335,6 +364,34 @@ test("profiles representative cold load, warm hydration, reconnect, pagination, 
       profile,
       coldLoad,
       warmHydration,
+      coldWarmPercentiles: {
+        coldUsableContentMs: summarizePercentiles(
+          coldSamples.flatMap(({ usableContentMs }) =>
+            usableContentMs === null ? [] : [usableContentMs],
+          ),
+        ),
+        coldServerParityMs: summarizePercentiles(
+          coldSamples.flatMap(({ marks }) =>
+            marks
+              .filter(({ name }) => name === "serial:server-parity-applied")
+              .map(({ startTime }) => startTime)
+              .slice(-1),
+          ),
+        ),
+        warmUsableContentMs: summarizePercentiles(
+          warmSamples.flatMap(({ usableContentMs }) =>
+            usableContentMs === null ? [] : [usableContentMs],
+          ),
+        ),
+        warmServerParityMs: summarizePercentiles(
+          warmSamples.flatMap(({ marks }) =>
+            marks
+              .filter(({ name }) => name === "serial:server-parity-applied")
+              .map(({ startTime }) => startTime)
+              .slice(-1),
+          ),
+        ),
+      },
       reconnect,
       pagination,
       reader,

@@ -35,17 +35,13 @@ function savedItem(isWatched: boolean): ApplicationFeedItem {
   };
 }
 
-function feedItemPayload(
-  item: ApplicationFeedItem,
-  refreshNavigationSnapshot = false,
-): PublishedChunk {
+function feedItemPayload(item: ApplicationFeedItem): PublishedChunk {
   return {
-    source: "initial",
+    source: "rss",
     chunk: {
       type: "feed-items",
       feedId: item.feedId,
       feedItems: [item],
-      refreshNavigationSnapshot,
     },
   };
 }
@@ -78,15 +74,4 @@ describe("feed item navigation snapshot revalidation", () => {
       await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
     },
   );
-
-  it("revalidates an optimistic mutation when its authoritative echo matches", async () => {
-    const item = savedItem(false);
-    feedItemsStore.getState().setFeedItem(item.id, item);
-    const fetch = vi.fn().mockResolvedValue(undefined);
-    navigationSnapshotStore.setState({ fetch });
-
-    processPublishedChunks([feedItemPayload(item, true)]);
-
-    await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
-  });
 });

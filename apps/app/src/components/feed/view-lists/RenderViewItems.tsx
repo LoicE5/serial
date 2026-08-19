@@ -35,10 +35,7 @@ import { useFeedCategories } from "~/lib/data/feed-categories";
 import { useFilteredContentOrder } from "~/lib/data/feed-items";
 import { useFeeds } from "~/lib/data/feeds";
 import { setMixedReadValue } from "~/lib/data/mixed-content/mutations";
-import {
-  useFetchFeedItemsLastFetchedAt,
-  useHasInitialData,
-} from "~/lib/data/store";
+import { useHasInitialData } from "~/lib/data/store";
 import { useFeedItemNavigation } from "~/lib/hooks/useFeedItemNavigation";
 import { useShortcut } from "~/lib/hooks/useShortcut";
 import { REMOTE_IMAGE_PROPS } from "~/lib/remoteMedia";
@@ -326,7 +323,6 @@ export function RenderViewItems() {
   const { feeds, hasFetchedFeeds } = useFeeds();
   const { hasFetchedFeedCategories } = useFeedCategories();
 
-  const feedItemsLastFetchedAt = useFetchFeedItemsLastFetchedAt();
   const hasInitialData = useHasInitialData();
 
   const filteredFeedItemsOrder = useFilteredContentOrder();
@@ -359,7 +355,7 @@ export function RenderViewItems() {
     (navigationItems.length > 0 ||
       (hasFetchedFeeds &&
         hasFetchedFeedCategories &&
-        (feedItemsLastFetchedAt !== null || feeds.length === 0)));
+        (paginationState.isLoaded || feeds.length === 0)));
   useRootItemScrollRestoration({
     activeItemIds: navigationItems,
     selectedItemId,
@@ -379,8 +375,10 @@ export function RenderViewItems() {
   }
 
   if (
+    paginationState.isLoaded &&
     hasFetchedFeeds &&
     !feeds.length &&
+    filteredFeedItemsOrder.length === 0 &&
     Object.keys(bookmarksStore.getState().snapshot()).length === 0
   ) {
     return <FeedEmptyState />;
@@ -388,7 +386,7 @@ export function RenderViewItems() {
 
   // Show skeletons while feed items are being fetched
   if (
-    (feedItemsLastFetchedAt === null || paginationState?.isFetching) &&
+    (!paginationState.isLoaded || paginationState.isFetching) &&
     filteredFeedItemsOrder.length === 0
   ) {
     switch (baseLayout) {
@@ -405,7 +403,7 @@ export function RenderViewItems() {
 
   if (
     hasFetchedFeeds &&
-    feedItemsLastFetchedAt !== null &&
+    paginationState.isLoaded &&
     hasFetchedFeedCategories &&
     !filteredFeedItemsOrder.length
   ) {

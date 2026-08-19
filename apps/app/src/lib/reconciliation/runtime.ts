@@ -38,7 +38,10 @@ export type ReconciliationRuntimeDependencies<TLiveEvent> = {
     input: ReconciliationInput,
     signal: AbortSignal,
   ) => Promise<AsyncIterable<ReconciliationStreamEvent>>;
-  applyAuthoritative: (payload: ReconciliationAuthoritativePayload) => boolean;
+  applyAuthoritative: (
+    payload: ReconciliationAuthoritativePayload,
+    context: { reconciliationId: string; target: ReconciliationTarget },
+  ) => boolean;
   applyLiveEvent: (payload: TLiveEvent) =>
     | ReconciliationTarget[]
     | {
@@ -79,7 +82,12 @@ function hydrationFor(payload: ReconciliationAuthoritativePayload) {
       return [
         "organization",
         "active-scope",
-        "bookmarks",
+        ...(payload.page.bookmarkDiffs.length > 0 ||
+        payload.page.orderedRefs.some(
+          (reference) => reference.entityKind === "bookmark",
+        )
+          ? (["bookmarks"] as const)
+          : []),
       ] as ReconciliationHydrationDomain[];
     case "navigation":
       return ["organization", "navigation"] as ReconciliationHydrationDomain[];
@@ -130,33 +138,6 @@ export function createReconciliationRuntime<TLiveEvent>(
 
   const notify = () => {
     for (const listener of listeners) listener();
-  };
-
-  const waitForHydration = (
-    domains: readonly ReconciliationHydrationDomain[],
-    signal: AbortSignal,
-  ) => {
-    if (domains.every((domain) => state.hydratedDomains[domain])) {
-      return Promise.resolve(true);
-    }
-    return new Promise<boolean>((resolve) => {
-      const cleanup = () => {
-        listeners.delete(check);
-        signal.removeEventListener("abort", aborted);
-      };
-      const check = () => {
-        if (!domains.every((domain) => state.hydratedDomains[domain])) return;
-        cleanup();
-        resolve(true);
-      };
-      const aborted = () => {
-        cleanup();
-        resolve(false);
-      };
-      listeners.add(check);
-      signal.addEventListener("abort", aborted, { once: true });
-      check();
-    });
   };
 
   const mergeRetryIntent = (
@@ -288,7 +269,10 @@ export function createReconciliationRuntime<TLiveEvent>(
         }
         continue;
       }
-      const applied = dependencies.applyAuthoritative(command.payload);
+      const applied = dependencies.applyAuthoritative(command.payload, {
+        reconciliationId: command.reconciliationId,
+        target: command.target,
+      });
       if (applied) {
         send({
           type: "authoritative-applied",
@@ -329,19 +313,17 @@ export function createReconciliationRuntime<TLiveEvent>(
     execute(transition.commands);
   };
 
-  const applyCompletedDomain = async (
+  const applyCompletedDomain = (
     reconciliationId: string,
     domain: RequiredReconciliationDomain,
     pending: Partial<
       Record<RequiredReconciliationDomain, ReconciliationAuthoritativePayload>
     >,
-    signal: AbortSignal,
   ) => {
     const payload = pending[domain];
     if (!payload) return;
     delete pending[domain];
     const requiresHydration = hydrationFor(payload);
-    if (!(await waitForHydration(requiresHydration, signal))) return;
     const target: ReconciliationTarget =
       payload.type === "active-scope"
         ? payload.page.target
@@ -395,14 +377,14 @@ export function createReconciliationRuntime<TLiveEvent>(
             };
             break;
           case "domain-complete":
-            await applyCompletedDomain(
+            applyCompletedDomain(
               request.reconciliationId,
               chunk.domain,
               pending,
-              signal,
             );
             break;
           case "automatic-rss-owner":
+            dependencies.mark?.(`serial:automatic-rss-owner:${chunk.owner}`);
             send({
               type: "automatic-rss-owner-resolved",
               owner: chunk.owner,
@@ -559,6 +541,12 @@ export function createReconciliationRuntime<TLiveEvent>(
     },
     activateScope(target: ReconciliationScopeTarget) {
       send({ type: "active-scope-changed", target });
+      if (
+        target.scope.type === "view" &&
+        state.inFlight?.intent.type === "full"
+      ) {
+        return;
+      }
       const targetState = state.targets[getReconciliationTargetKey(target)];
       if (
         targetState?.status === "verified" ||

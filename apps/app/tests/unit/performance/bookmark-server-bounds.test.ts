@@ -7,7 +7,7 @@ import {
 import { updateBookmarksReadState } from "~/server/bookmarks/service";
 import { loadExtensionBookmarkWorkspace } from "~/server/bookmarks/extensionWorkspace";
 import { queryMixedContentPage } from "~/server/mixed-content/projection";
-import { loadApplicationBookmark } from "~/server/mixed-content/sync";
+import { loadApplicationBookmark } from "~/server/mixed-content/events";
 import { reconcileApplicationState } from "~/server/reconciliation";
 import { UNCATEGORIZED_SECTION_PLACEMENT } from "~/lib/views/sections";
 import {

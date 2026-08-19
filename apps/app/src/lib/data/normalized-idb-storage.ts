@@ -18,6 +18,7 @@ export const NORMALIZED_ARRAY_CHUNK_SIZE = 250;
 type NormalizedStorageOptions = {
   recordFields?: string[];
   arrayFields?: string[];
+  beforeRead?: () => Promise<void> | void;
 };
 
 type NormalizedRoot = {
@@ -144,6 +145,7 @@ async function readNormalized<T>(
   name: string,
   options: NormalizedStorageOptions,
 ): Promise<StorageValue<T> | null> {
+  if (options.beforeRead) await options.beforeRead();
   const root = await get<NormalizedRoot>(rootKey(name));
   if (!root) return null;
 

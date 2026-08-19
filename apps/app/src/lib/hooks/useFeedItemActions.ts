@@ -15,7 +15,6 @@ import {
 } from "../data/feed-items/mutations";
 import { useFeeds as useFeedsArray } from "../data/feeds/store";
 import { captureRootScrollRestoration } from "~/lib/root-scroll-restoration";
-import { getDataSubscriptionClientId } from "~/lib/data/clientChannel";
 
 export function useFeedItemActions(itemId: string) {
   const router = useRouter();
@@ -32,7 +31,6 @@ export function useFeedItemActions(itemId: string) {
         id: itemId,
         feedId: item.feedId,
         isWatched: true,
-        clientId: getDataSubscriptionClientId(),
       })
       .then((serverValue) => {
         resolveOptimisticWatchedValue(context, serverValue);
@@ -50,7 +48,6 @@ export function useFeedItemActions(itemId: string) {
         id: itemId,
         feedId: item.feedId,
         isWatched: newIsWatched,
-        clientId: getDataSubscriptionClientId(),
       })
       .then((serverValue) => {
         resolveOptimisticWatchedValue(context, serverValue);
@@ -69,7 +66,6 @@ export function useFeedItemActions(itemId: string) {
         id: itemId,
         feedId: item.feedId,
         isWatchLater: !item.isWatchLater,
-        clientId: getDataSubscriptionClientId(),
       })
       .then((serverValue) => {
         resolveOptimisticWatchLaterValue(context, serverValue);

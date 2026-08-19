@@ -76,8 +76,6 @@ export function applyReconciliationFirstPage(page: ActiveFirstPageResult) {
       replacesScope: true,
     });
   }
-  feedItemsStore.setState({ fetchFeedItemsLastFetchedAt: Date.now() });
-
   const atoms = getDefaultStore();
   if (
     atoms.get(viewFilterIdAtom) === UNSELECTED_VIEW_ID &&

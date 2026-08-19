@@ -25,7 +25,7 @@ import {
 import {
   publishBookmarkDeletion,
   publishBookmarkUpsert,
-} from "~/server/mixed-content/sync";
+} from "~/server/mixed-content/events";
 import {
   extensionPreflightResponse,
   extensionJsonResponse as jsonResponse,

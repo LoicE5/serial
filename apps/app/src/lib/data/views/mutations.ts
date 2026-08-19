@@ -7,7 +7,7 @@ import {
 } from ".";
 import type { ApplicationView } from "~/server/db/schema";
 import { orpc } from "~/lib/orpc";
-import { feedItemsStore, useRevalidateView } from "~/lib/data/store";
+import { feedItemsStore } from "~/lib/data/store";
 import { useFetchViewFeeds } from "~/lib/data/view-feeds/store";
 import { mixedContentStore } from "~/lib/data/mixed-content/store";
 import { bookmarksStore } from "~/lib/data/bookmarks/store";
@@ -18,7 +18,6 @@ export function useCreateViewMutation() {
   const setViews = useSetViews();
   const fetchViews = useFetchViews();
   const fetchViewFeeds = useFetchViewFeeds();
-  const revalidateView = useRevalidateView();
   const updateViewFilter = useUpdateViewFilter();
 
   return useMutation(
@@ -29,7 +28,6 @@ export function useCreateViewMutation() {
         await fetchViewFeeds();
 
         if (createdView) {
-          await revalidateView(createdView.id);
           updateViewFilter(createdView.id, viewsStore.getState().views);
         }
         await refreshNavigationSnapshotSafely();

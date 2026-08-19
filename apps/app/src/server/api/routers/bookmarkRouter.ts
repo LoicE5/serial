@@ -14,7 +14,7 @@ import {
   publishBookmarkDeletion,
   publishBookmarkUpsert,
   publishBookmarkUpsertBatch,
-} from "~/server/mixed-content/sync";
+} from "~/server/mixed-content/events";
 import { loadApplicationBookmarksById } from "~/server/mixed-content/projection";
 import { ALL_CONTENT_STATUS_KEYS } from "~/lib/reconciliation";
 
