@@ -10,6 +10,7 @@ import {
   SendIcon,
   Trash2Icon,
 } from "lucide-react";
+import { getBookmarkPostedAt } from "./itemDate";
 import type { ApplicationBookmark } from "~/server/mixed-content/projection";
 import { KeyboardShortcutDisplay } from "~/components/ButtonWithShortcut";
 import { Button } from "~/components/ui/button";
@@ -35,12 +36,6 @@ import { contentDestination } from "~/lib/data/content-items/resolver";
 import { REMOTE_IMAGE_PROPS } from "~/lib/remoteMedia";
 
 export type ItemSize = "standard" | "large";
-
-export function getBookmarkPostedAt(
-  bookmark: Pick<ApplicationBookmark, "createdAt" | "publishedAt">,
-) {
-  return bookmark.publishedAt ?? bookmark.createdAt;
-}
 
 // Typography components for consistent styling across layouts
 

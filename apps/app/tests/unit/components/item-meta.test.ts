@@ -1,10 +1,8 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  getBookmarkPostedAt,
-  ItemMeta,
-} from "~/components/feed/view-lists/ItemDisplay";
+import { ItemMeta } from "~/components/feed/view-lists/ItemDisplay";
+import { getBookmarkPostedAt } from "~/components/feed/view-lists/itemDate";
 
 const NOW = new Date("2026-08-19T12:00:00.000Z");
 
