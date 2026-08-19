@@ -42,6 +42,53 @@ export function retainedMixedReferenceKeys(
   return new Set(pages.flatMap((page) => page.value.referenceKeys));
 }
 
+export function retainedMixedBookmarkIds(
+  pages: Array<RetainedCursorPage<MixedPageRetentionValue>>,
+) {
+  const bookmarkPrefix = "bookmark:";
+  return new Set(
+    pages.flatMap((page) =>
+      page.value.referenceKeys.flatMap((key) =>
+        key.startsWith(bookmarkPrefix)
+          ? [key.slice(bookmarkPrefix.length)]
+          : [],
+      ),
+    ),
+  );
+}
+
+export function replaceRetainedMixedRootPage(
+  pages: Array<RetainedCursorPage<MixedPageRetentionValue>>,
+  page: MixedContentPage,
+) {
+  const rootIndex = pages.findIndex(
+    (candidate) => candidate.requestCursorKey === "root",
+  );
+  if (rootIndex < 0) {
+    return mergeRetainedMixedPage({
+      pages,
+      page,
+      requestCursor: null,
+      replacesScope: false,
+    });
+  }
+
+  const previousRoot = pages[rootIndex]!;
+  const nextCursorKey = cursorRetentionKey(page.cursor);
+  const value = { referenceKeys: page.references.map(mixedReferenceKey) };
+  const nextPages = [...pages];
+  nextPages[rootIndex] = {
+    key: `root->${nextCursorKey}`,
+    requestCursorKey: "root",
+    nextCursorKey,
+    entityIds: page.references.map((reference) => reference.entityId),
+    value,
+    byteSize: estimateRetainedBytes(value),
+    sequence: previousRoot.sequence,
+  };
+  return nextPages;
+}
+
 export function mergeRetainedMixedPage({
   pages,
   page,

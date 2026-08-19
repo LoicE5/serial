@@ -527,12 +527,115 @@ describe("reconciliation coordinator", () => {
         eventId: "scope-first",
         payload: "scope-first",
       },
+    ]);
+    expect(
+      harness.send({
+        type: "live-event-applied",
+        eventId: "scope-first",
+      }),
+    ).toEqual([
       {
         type: "apply-live-event",
         eventId: "scope-second",
         payload: "scope-second",
       },
     ]);
+  });
+
+  it("withholds trust and same-target authority while a buffered live event applies", () => {
+    const harness = coordinatorHarness();
+    harness.send({ type: "cache-usable", at: 1 });
+    harness.send({ type: "active-scope-changed", target: ACTIVE_SCOPE });
+    for (const domain of [
+      "organization",
+      "active-scope",
+      "navigation",
+    ] satisfies ReconciliationHydrationDomain[]) {
+      harness.send({ type: "hydration-complete", domain });
+    }
+
+    const fullRequest = startedRequest(
+      harness.send({
+        type: "request-reconciliation",
+        intent: { type: "full", selectedScope: ACTIVE_SCOPE },
+      }),
+    );
+    for (const target of requiredTargets()) {
+      harness.send({
+        type: "authoritative-received",
+        reconciliationId: fullRequest.reconciliationId,
+        target,
+        requiresHydration: hydrationFor(target),
+        payload: `initial:${getReconciliationTargetKey(target)}`,
+      });
+      harness.send({
+        type: "authoritative-applied",
+        reconciliationId: fullRequest.reconciliationId,
+        target,
+        at: 2,
+      });
+    }
+    harness.send({
+      type: "request-settled",
+      reconciliationId: fullRequest.reconciliationId,
+      at: 3,
+      epochComplete: true,
+    });
+    harness.send({ type: "sse-connection-changed", connected: true });
+    expect(harness.state.trustedUpToDate).toBe(true);
+
+    harness.send({
+      type: "live-event-received",
+      eventId: "buffered-membership-change",
+      targets: [ACTIVE_SCOPE],
+      requiresHydration: ["bookmarks"],
+      payload: "newer-live-state",
+    });
+    expect(harness.state.trustedUpToDate).toBe(false);
+
+    const targetedRequest = startedRequest(
+      harness.send({
+        type: "request-reconciliation",
+        intent: { type: "targeted", targets: [ACTIVE_SCOPE] },
+      }),
+    );
+    harness.send({
+      type: "authoritative-received",
+      reconciliationId: targetedRequest.reconciliationId,
+      target: ACTIVE_SCOPE,
+      requiresHydration: ["active-scope"],
+      payload: "older-authoritative-page",
+    });
+
+    expect(
+      harness.send({ type: "hydration-complete", domain: "bookmarks" }),
+    ).toEqual([
+      {
+        type: "apply-live-event",
+        eventId: "buffered-membership-change",
+        payload: "newer-live-state",
+      },
+    ]);
+    expect(harness.state.bufferedApplications).toEqual([
+      expect.objectContaining({
+        type: "authoritative",
+        payload: "older-authoritative-page",
+      }),
+    ]);
+    expect(harness.state.trustedUpToDate).toBe(false);
+
+    harness.send({ type: "targets-dirtied", targets: [ACTIVE_SCOPE] });
+    expect(
+      harness.send({
+        type: "live-event-applied",
+        eventId: "buffered-membership-change",
+      }),
+    ).toEqual([]);
+    expect(harness.state.bufferedApplications).toEqual([]);
+    expect(harness.state.trailingIntent).toEqual({
+      type: "targeted",
+      targets: [ACTIVE_SCOPE],
+    });
   });
 
   it("marks an inactive target dirty without eagerly scheduling repair", () => {

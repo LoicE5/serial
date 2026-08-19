@@ -7,7 +7,7 @@ import {
 } from "~/lib/data/mixed-content/store";
 import { feedItemsStore } from "~/lib/data/store";
 import { loadingActor } from "~/lib/data/loading-machine";
-import { advanceFeedItemMembershipRevision } from "~/lib/data/feed-items/membershipRevision";
+import { advanceMixedContentMembershipRevision } from "~/lib/data/mixed-content/membershipRevision";
 
 const mocks = vi.hoisted(() => ({
   invalidateQueries: vi.fn(),
@@ -124,7 +124,7 @@ describe("direct request transport", () => {
       scope,
       contentStatus,
     );
-    advanceFeedItemMembershipRevision();
+    advanceMixedContentMembershipRevision();
     resolvePage?.({
       references: [],
       bookmarks: [],

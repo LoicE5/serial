@@ -1,7 +1,11 @@
 import { bookmarksStore } from "./bookmarks/store";
 import { feedCategoriesStore } from "./feed-categories/store";
 import { feedItemsStore } from "./store";
-import { getMixedScopeKey, mixedContentStore } from "./mixed-content/store";
+import {
+  getMixedScopeKey,
+  hasBookmarkBodyOwner,
+  mixedContentStore,
+} from "./mixed-content/store";
 import { viewsStore } from "./views/store";
 import { isBookmarkProjectionChange } from "./mixed-content/bookmarkProjection";
 import { refreshNavigationSnapshotSafely } from "./navigation/store";
@@ -99,6 +103,12 @@ export function applyPublishedChunks(
     if (payload.source !== "bookmark") continue;
     const { chunk } = payload;
     if (chunk.type === "bookmark-upsert") {
+      if (
+        !hasBookmarkBodyOwner(chunk.bookmark.id) &&
+        chunk.affectsListProjection === false
+      ) {
+        continue;
+      }
       const previousBookmark = bookmarksStore
         .getState()
         .getBookmark(chunk.bookmark.id);
@@ -121,14 +131,17 @@ export function applyPublishedChunks(
       continue;
     }
     if (chunk.type === "bookmark-upsert-batch") {
+      const retainedBookmarks = chunk.bookmarks.filter((bookmark) =>
+        hasBookmarkBodyOwner(bookmark.id),
+      );
       const previousBookmarks = new Map(
-        chunk.bookmarks.map((bookmark) => [
+        retainedBookmarks.map((bookmark) => [
           bookmark.id,
           bookmarksStore.getState().getBookmark(bookmark.id),
         ]),
       );
-      bookmarksStore.getState().upsertMany(chunk.bookmarks);
-      for (const bookmark of chunk.bookmarks) {
+      bookmarksStore.getState().upsertMany(retainedBookmarks);
+      for (const bookmark of retainedBookmarks) {
         navigationSnapshotChanged ||= isBookmarkProjectionChange(
           previousBookmarks.get(bookmark.id),
           bookmark,

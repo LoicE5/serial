@@ -1,16 +1,20 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import type {
+  ApplicationBookmark,
   MixedContentCursor,
   MixedContentReference,
 } from "~/server/mixed-content/projection";
+import { bookmarksStore } from "~/lib/data/bookmarks/store";
 import {
   clearRetainedEntityPins,
+  cursorRetentionKey,
   setRetainedEntityPins,
 } from "~/lib/data/page-retention";
 import {
   getMixedScopeKey,
   mixedContentStore,
+  synchronizeBookmarkBodyRetention,
 } from "~/lib/data/mixed-content/store";
 import { CONTENT_STATUS_FILTERS } from "~/lib/content-status";
 
@@ -34,6 +38,56 @@ function references(pageIndex: number): MixedContentReference[] {
   }));
 }
 
+function bookmark(id: string): ApplicationBookmark {
+  const now = new Date(Date.UTC(2026, 0, 1));
+  return {
+    id,
+    userId: "user-one",
+    sourceUrl: `https://example.com/${id}`,
+    effectiveUrl: `https://example.com/${id}`,
+    canonicalUrl: `https://example.com/${id}`,
+    platform: "website",
+    contentType: "text",
+    orientation: null,
+    contentId: null,
+    classificationSource: "url",
+    classifierVersion: 1,
+    isSaved: true,
+    isRead: false,
+    progress: 0,
+    duration: 0,
+    savedUpdatedAt: now,
+    readUpdatedAt: now,
+    progressUpdatedAt: now,
+    createdAt: now,
+    updatedAt: now,
+    title: id,
+    description: null,
+    author: null,
+    siteName: "example.com",
+    publishedAt: null,
+    iconUrl: null,
+    thumbnailUrl: null,
+    previewSource: "url",
+    captureHash: null,
+    capturedAt: null,
+    viewIds: [],
+    tagIds: [],
+  };
+}
+
+function bookmarkReference(
+  id: string,
+  pageIndex: number,
+): MixedContentReference {
+  return {
+    entityKind: "bookmark",
+    entityId: id,
+    sectionPlacement: null,
+    normalizedAt: new Date(Date.UTC(2026, 0, 1, 0, pageIndex)),
+  };
+}
+
 function applyPages(count: number) {
   for (let pageIndex = 0; pageIndex < count; pageIndex++) {
     mixedContentStore.getState().applyPage({
@@ -53,6 +107,7 @@ function applyPages(count: number) {
 
 afterEach(() => {
   mixedContentStore.getState().reset();
+  bookmarksStore.getState().reset();
   clearRetainedEntityPins("reader:test");
 });
 
@@ -171,5 +226,132 @@ describe("mixed-content page retention", () => {
       1,
     );
     expect(mixedContentStore.getState().scopes[scopeKey]?.hasMore).toBe(false);
+  });
+
+  it("updates first-page pagination authority while retaining an unchanged provisional tail", () => {
+    applyPages(3);
+    const contentStatus = {
+      saveStatus: "inbox",
+      archiveStatus: "unread",
+    } as const;
+    const scopeKey = getMixedScopeKey(SCOPE, contentStatus);
+    const nextCursor = cursor(20);
+
+    expect(
+      mixedContentStore.getState().reconcileFirstPage({
+        scope: SCOPE,
+        contentStatus,
+        page: {
+          references: references(0),
+          bookmarks: [],
+          feedItems: [],
+          cursor: nextCursor,
+          hasMore: false,
+        },
+      }),
+    ).toEqual({ firstPageChanged: false });
+
+    const scope = mixedContentStore.getState().scopes[scopeKey];
+    expect(scope?.references).toHaveLength(90);
+    expect(scope?.cursor).toEqual(nextCursor);
+    expect(scope?.hasMore).toBe(false);
+    expect(
+      scope?.pages.filter((page) => page.requestCursorKey === "root"),
+    ).toHaveLength(1);
+    expect(
+      scope?.pages.find((page) => page.requestCursorKey === "root")
+        ?.nextCursorKey,
+    ).toBe(cursorRetentionKey(nextCursor));
+  });
+
+  it("evicts Bookmark bodies after their last retained page or pin releases them", () => {
+    const contentStatus = {
+      saveStatus: "inbox",
+      archiveStatus: "unread",
+    } as const;
+    const sharedBookmark = bookmark("shared-bookmark");
+    const pinnedBookmark = bookmark("pinned-bookmark");
+    bookmarksStore.getState().upsert(pinnedBookmark);
+    setRetainedEntityPins("reader:test", {
+      bookmarkIds: [pinnedBookmark.id],
+    });
+
+    for (let pageIndex = 0; pageIndex < 9; pageIndex++) {
+      const pageBookmark = bookmark(`page-${pageIndex}-bookmark`);
+      const pageBookmarks = [
+        pageBookmark,
+        ...(pageIndex === 0 || pageIndex === 8 ? [sharedBookmark] : []),
+      ];
+      bookmarksStore.getState().upsertMany(pageBookmarks);
+      mixedContentStore.getState().applyPage({
+        scope: SCOPE,
+        contentStatus,
+        page: {
+          references: pageBookmarks.map((item) =>
+            bookmarkReference(item.id, pageIndex),
+          ),
+          bookmarks: pageBookmarks,
+          feedItems: [],
+          cursor: cursor(pageIndex),
+          hasMore: true,
+        },
+        replacesScope: pageIndex === 0,
+      });
+    }
+
+    expect(
+      bookmarksStore.getState().getBookmark("page-0-bookmark"),
+    ).toBeUndefined();
+    expect(bookmarksStore.getState().getBookmark(sharedBookmark.id)).toBe(
+      sharedBookmark,
+    );
+    expect(bookmarksStore.getState().getBookmark(pinnedBookmark.id)).toBe(
+      pinnedBookmark,
+    );
+
+    clearRetainedEntityPins("reader:test");
+    expect(
+      bookmarksStore.getState().getBookmark(pinnedBookmark.id),
+    ).toBeUndefined();
+  });
+
+  it("does not retain a Bookmark upsert with no loaded page or pin owner", () => {
+    const orphan = bookmark("orphan-bookmark");
+    bookmarksStore.getState().upsert(orphan);
+
+    expect(
+      mixedContentStore.getState().reprojectUpsert({
+        bookmark: orphan,
+        previousBookmark: undefined,
+        views: [],
+      }),
+    ).toEqual([]);
+    expect(bookmarksStore.getState().getBookmark(orphan.id)).toBeUndefined();
+  });
+
+  it("prunes bodies restored after mixed-page ownership is already known", () => {
+    const owned = bookmark("owned-bookmark");
+    const stale = bookmark("late-hydration-orphan");
+    mixedContentStore.getState().applyPage({
+      scope: SCOPE,
+      contentStatus: { saveStatus: "saved", archiveStatus: "unread" },
+      page: {
+        references: [bookmarkReference(owned.id, 0)],
+        bookmarks: [owned],
+        feedItems: [],
+        cursor: null,
+        hasMore: false,
+      },
+      replacesScope: true,
+    });
+
+    bookmarksStore.getState().replace({
+      [owned.id]: owned,
+      [stale.id]: stale,
+    });
+    synchronizeBookmarkBodyRetention();
+
+    expect(bookmarksStore.getState().getBookmark(owned.id)).toBe(owned);
+    expect(bookmarksStore.getState().getBookmark(stale.id)).toBeUndefined();
   });
 });

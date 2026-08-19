@@ -611,6 +611,32 @@ describe("client reconciliation runtime", () => {
     expect(test.liveApplications).toEqual([["newer-live-state"]]);
   });
 
+  it("withholds established trust until a buffered live event finishes", async () => {
+    const test = harness((request) => completeEpoch(request.reconciliationId));
+    test.setSelection(ACTIVE_SCOPE);
+    for (const domain of [
+      "organization",
+      "active-scope",
+      "navigation",
+    ] as const) {
+      test.runtime.hydrationComplete(domain);
+    }
+    test.runtime.cacheUsable();
+    test.runtime.sseConnectionChanged(true);
+    test.runtime.start();
+    await vi.waitFor(() =>
+      expect(test.runtime.getState().trustedUpToDate).toBe(true),
+    );
+
+    test.runtime.receiveLiveEvent(["membership-change"]);
+    expect(test.runtime.getState().trustedUpToDate).toBe(false);
+    expect(test.liveApplications).toEqual([]);
+
+    test.runtime.hydrationComplete("bookmarks");
+    expect(test.liveApplications).toEqual([["membership-change"]]);
+    expect(test.runtime.getState().trustedUpToDate).toBe(true);
+  });
+
   it("keeps RSS detail events repair-silent and schedules one summary repair", async () => {
     const test = harness(
       (request) =>

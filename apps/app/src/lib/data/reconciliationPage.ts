@@ -1,6 +1,6 @@
 import { getDefaultStore } from "jotai";
 import { bookmarksStore } from "./bookmarks/store";
-import { getFeedItemMembershipRevision } from "./feed-items/membershipRevision";
+import { getMixedContentMembershipRevision } from "./mixed-content/membershipRevision";
 import { getMixedScopeKey, mixedContentStore } from "./mixed-content/store";
 import { feedItemsStore } from "./store";
 import { viewsStore } from "./views/store";
@@ -35,7 +35,9 @@ function removeFeedItem(id: string) {
 }
 
 export function applyReconciliationFirstPage(page: ActiveFirstPageResult) {
-  if (page.membershipRevision !== getFeedItemMembershipRevision()) return false;
+  if (page.membershipRevision !== getMixedContentMembershipRevision()) {
+    return false;
+  }
 
   const feedItemUpserts: ApplicationFeedItem[] = [];
   for (const diff of page.feedItemDiffs) {

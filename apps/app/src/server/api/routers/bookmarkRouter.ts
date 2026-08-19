@@ -150,6 +150,8 @@ export const updateState = protectedProcedure
       userId: context.user.id,
       bookmarkId: bookmark.id,
       previousBookmark,
+      affectsListProjection:
+        input.isSaved !== undefined || input.isRead !== undefined,
     });
     return applicationBookmark ?? bookmark;
   });

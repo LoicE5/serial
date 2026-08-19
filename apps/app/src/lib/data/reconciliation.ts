@@ -4,7 +4,7 @@ import { useSyncExternalStore } from "react";
 import { bookmarksStore } from "./bookmarks/store";
 import { contentCategoriesStore } from "./content-categories/store";
 import { feedCategoriesStore } from "./feed-categories/store";
-import { getFeedItemMembershipRevision } from "./feed-items/membershipRevision";
+import { getMixedContentMembershipRevision } from "./mixed-content/membershipRevision";
 import { feedsStore } from "./feeds/store";
 import { loadingActor, updateRefreshCooldown } from "./loading-machine";
 import { getMixedScopeKey, mixedContentStore } from "./mixed-content/store";
@@ -146,7 +146,7 @@ function buildInput(
         selection: {
           type: "cold",
           contentStatus: request.intent.coldContentStatus,
-          membershipRevision: getFeedItemMembershipRevision(),
+          membershipRevision: getMixedContentMembershipRevision(),
         },
       };
     }
@@ -159,7 +159,7 @@ function buildInput(
         scope: selectedScope.scope,
         contentStatus: selectedScope.contentStatus,
         pageManifest: firstPageManifest(selectedScope),
-        membershipRevision: getFeedItemMembershipRevision(),
+        membershipRevision: getMixedContentMembershipRevision(),
       },
     };
   }
@@ -172,7 +172,7 @@ function buildInput(
         return {
           target,
           pageManifest: firstPageManifest(target),
-          membershipRevision: getFeedItemMembershipRevision(),
+          membershipRevision: getMixedContentMembershipRevision(),
         };
       }
       return target.type === "organization"

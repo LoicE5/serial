@@ -479,10 +479,13 @@ function measure(operation: () => number): ClientAuditOperation {
   };
 }
 
-function bookmarkUpsertPayload(bookmark: ApplicationBookmark): PublishedChunk {
+function bookmarkUpsertPayload(
+  bookmark: ApplicationBookmark,
+  affectsListProjection = true,
+): PublishedChunk {
   return {
     source: "bookmark",
-    chunk: { type: "bookmark-upsert", bookmark },
+    chunk: { type: "bookmark-upsert", bookmark, affectsListProjection },
   };
 }
 
@@ -649,7 +652,7 @@ export function runClientAuditProfile(
   const bookmarkProgressEvent = measure(
     () =>
       processPublishedChunks([
-        bookmarkUpsertPayload(updatedBookmark(baseBookmark, 1)),
+        bookmarkUpsertPayload(updatedBookmark(baseBookmark, 1), false),
       ]).length,
   );
 
@@ -658,13 +661,16 @@ export function runClientAuditProfile(
   const bookmarkCaptureEvent = measure(
     () =>
       processPublishedChunks([
-        bookmarkUpsertPayload({
-          ...captureBookmark,
-          title: "Updated capture title",
-          captureHash: "updated-capture-hash",
-          capturedAt: new Date(FIXTURE_TIME.getTime() + 1),
-          updatedAt: new Date(FIXTURE_TIME.getTime() + 1),
-        }),
+        bookmarkUpsertPayload(
+          {
+            ...captureBookmark,
+            title: "Updated capture title",
+            captureHash: "updated-capture-hash",
+            capturedAt: new Date(FIXTURE_TIME.getTime() + 1),
+            updatedAt: new Date(FIXTURE_TIME.getTime() + 1),
+          },
+          false,
+        ),
       ]).length,
   );
 
@@ -724,6 +730,7 @@ export function runClientAuditProfile(
         fixture.bookmarks[index % fixture.bookmarks.length]!,
         index,
       ),
+      false,
     ),
   );
   const bookmarkBurstSingleFrame = measure(

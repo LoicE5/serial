@@ -267,6 +267,7 @@ export function createReconciliationRuntime<TLiveEvent>(
             requiresHydration: [],
           });
         }
+        send({ type: "live-event-applied", eventId: command.eventId });
         continue;
       }
       const applied = dependencies.applyAuthoritative(command.payload, {

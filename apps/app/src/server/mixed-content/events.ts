@@ -13,7 +13,11 @@ import { buildBookmarkInvalidationSummary } from "~/lib/reconciliation";
 type MixedContentDatabase = typeof defaultDatabase;
 
 export type BookmarkPublishedChunk =
-  | { type: "bookmark-upsert"; bookmark: ApplicationBookmark }
+  | {
+      type: "bookmark-upsert";
+      bookmark: ApplicationBookmark;
+      affectsListProjection?: boolean;
+    }
   | { type: "bookmark-upsert-batch"; bookmarks: ApplicationBookmark[] }
   | { type: "bookmark-delete"; id: string; canonicalUrl: string };
 
@@ -36,12 +40,17 @@ export async function publishBookmarkUpsert(input: {
   previousBookmark?: BookmarkInvalidationState | null;
   contentStatusKeys?: ContentStatusKey[];
   invalidation?: ReconciliationInvalidationSummary;
+  affectsListProjection?: boolean;
 }) {
   const bookmark = await loadApplicationBookmark(input);
   if (!bookmark) return null;
   await publisher.publish(getUserChannel(input.userId), {
     source: "bookmark",
-    chunk: { type: "bookmark-upsert", bookmark },
+    chunk: {
+      type: "bookmark-upsert",
+      bookmark,
+      affectsListProjection: input.affectsListProjection,
+    },
     invalidation:
       input.invalidation ??
       buildBookmarkInvalidationSummary({
