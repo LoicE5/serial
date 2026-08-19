@@ -17,6 +17,7 @@ import {
 import { viewsStore } from "~/lib/data/views/store";
 import { feedCategoriesStore } from "~/lib/data/feed-categories/store";
 import { bookmarksStore } from "~/lib/data/bookmarks/store";
+import { getMixedContentMembershipRevision } from "~/lib/data/mixed-content/membershipRevision";
 
 function makeItem(
   overrides: Partial<ApplicationFeedItem> = {},
@@ -108,7 +109,6 @@ describe("optimistic feed item mutations", () => {
         hasMore: false,
       },
       replacesScope: true,
-      feedItems: feedItemsStore.getState().feedItemsDict,
     });
 
     applyOptimisticWatchLaterValue(item.id, true);
@@ -128,9 +128,16 @@ describe("optimistic feed item mutations", () => {
     feedItemsStore
       .getState()
       .setFeedItem(previousFeedItem.id, previousFeedItem);
+    const initialMembershipRevision = getMixedContentMembershipRevision();
     const context = applyOptimisticWatchedValue(previousFeedItem.id, true);
+    expect(getMixedContentMembershipRevision()).toBe(
+      initialMembershipRevision + 1,
+    );
 
     rollbackOptimisticWatchedValue(context);
+    expect(getMixedContentMembershipRevision()).toBe(
+      initialMembershipRevision + 2,
+    );
 
     const rolledBackItem =
       feedItemsStore.getState().feedItemsDict[previousFeedItem.id];

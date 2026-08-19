@@ -27,6 +27,8 @@ jobs:
 
       - name: Detect affected deployables
         id: affected
+        env:
+          TURBO_SCM_BASE: ${{ github.event.pull_request.base.sha }}
         run: |
           pnpm exec turbo run build:artifact --affected --dry=json > affected.json
           if jq -e '.tasks[] | select(.taskId == "@serial/app#build:artifact")' affected.json > /dev/null; then
@@ -63,6 +65,7 @@ jobs:
           WWW_STANDARD_SITE_PUBLICATION_URI: ${{ vars.WWW_STANDARD_SITE_PUBLICATION_URI }}
           WWW_UMAMI_WEBSITE_ID: ${{ vars.WWW_UMAMI_WEBSITE_ID }}
           WWW_UMAMI_SRC: ${{ vars.WWW_UMAMI_SRC }}
+          TURBO_SCM_BASE: ${{ github.event.pull_request.base.sha }}
 
       - name: Check formatting
         run: pnpm format

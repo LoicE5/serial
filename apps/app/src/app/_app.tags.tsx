@@ -26,7 +26,7 @@ import {
 import { useFeedCategories } from "~/lib/data/feed-categories";
 import { useFeeds } from "~/lib/data/feeds";
 import { useViews } from "~/lib/data/views";
-import { INBOX_VIEW_ID } from "~/lib/data/views/constants";
+import { UNCATEGORIZED_VIEW_ID } from "~/lib/data/views/constants";
 import { useShiftSelect } from "~/lib/hooks/useShiftSelect";
 import { useShortcut } from "~/lib/hooks/useShortcut";
 
@@ -99,7 +99,7 @@ function ManageTagsPage() {
   const tagViewsMap = useMemo(() => {
     const map = new Map<number, number[]>();
     views.forEach((v) => {
-      if (v.id === INBOX_VIEW_ID) return;
+      if (v.id === UNCATEGORIZED_VIEW_ID) return;
       v.categoryIds.forEach((categoryId) => {
         const existing = map.get(categoryId) ?? [];
         existing.push(v.id);
@@ -112,7 +112,7 @@ function ManageTagsPage() {
   const viewNamesMap = useMemo(() => {
     const map = new Map<number, string>();
     views
-      .filter((v) => v.id !== INBOX_VIEW_ID)
+      .filter((v) => v.id !== UNCATEGORIZED_VIEW_ID)
       .forEach((v) => {
         map.set(v.id, v.name);
       });

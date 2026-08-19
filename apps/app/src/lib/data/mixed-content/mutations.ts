@@ -6,7 +6,8 @@ import {
   clearRetainedEntityPins,
   setRetainedEntityPins,
 } from "../page-retention";
-import { refreshNavigationSnapshotSafely } from "../navigation/store";
+import { isBookmarkProjectionChange } from "./bookmarkProjection";
+import { advanceMixedContentMembershipRevision } from "./membershipRevision";
 import { mixedContentStore } from "./store";
 import type { MixedContentReference } from "~/server/mixed-content/projection";
 import { orpcRouterClient } from "~/lib/orpc";
@@ -38,6 +39,12 @@ export async function setMixedReadValue(input: {
     .map((id) => bookmarksStore.getState().getBookmark(id))
     .filter((bookmark) => bookmark !== undefined);
   const now = new Date();
+  const optimisticBookmarks = previousBookmarks.map((bookmark) => ({
+    ...bookmark,
+    isRead: input.isRead,
+    readUpdatedAt: now,
+    updatedAt: now,
+  }));
 
   for (const bookmarkId of targets.bookmarkIds) {
     setRetainedEntityPins(`optimistic:bookmark:${bookmarkId}`, {
@@ -45,18 +52,20 @@ export async function setMixedReadValue(input: {
     });
   }
 
-  for (const bookmark of previousBookmarks) {
-    const optimisticBookmark = {
-      ...bookmark,
-      isRead: input.isRead,
-      readUpdatedAt: now,
-      updatedAt: now,
-    };
+  if (
+    optimisticBookmarks.some((bookmark, index) =>
+      isBookmarkProjectionChange(previousBookmarks[index], bookmark),
+    )
+  ) {
+    advanceMixedContentMembershipRevision();
+  }
+
+  for (const [index, bookmark] of previousBookmarks.entries()) {
+    const optimisticBookmark = optimisticBookmarks[index]!;
     bookmarksStore.getState().upsert(optimisticBookmark);
     mixedContentStore.getState().reprojectUpsert({
       bookmark: optimisticBookmark,
       previousBookmark: bookmark,
-      feedItems: feedItemsStore.getState().feedItemsDict,
       views: viewsStore.getState().views,
     });
   }
@@ -76,8 +85,17 @@ export async function setMixedReadValue(input: {
           })
         : Promise.resolve(),
     ]);
-    await refreshNavigationSnapshotSafely();
   } catch (error) {
+    if (
+      previousBookmarks.some((bookmark) =>
+        isBookmarkProjectionChange(
+          bookmarksStore.getState().getBookmark(bookmark.id),
+          bookmark,
+        ),
+      )
+    ) {
+      advanceMixedContentMembershipRevision();
+    }
     for (const bookmark of previousBookmarks) {
       const optimisticBookmark = bookmarksStore
         .getState()
@@ -86,7 +104,6 @@ export async function setMixedReadValue(input: {
       mixedContentStore.getState().reprojectUpsert({
         bookmark,
         previousBookmark: optimisticBookmark,
-        feedItems: feedItemsStore.getState().feedItemsDict,
         views: viewsStore.getState().views,
       });
     }

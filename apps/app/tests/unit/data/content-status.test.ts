@@ -2,29 +2,20 @@ import { describe, expect, it } from "vitest";
 import {
   buildContentStatusKey,
   CONTENT_STATUS_FILTERS,
-  contentStatusAvailabilityKey,
   contentStatusFilterSchema,
-  contentStatusFromScopeKey,
-  contentStatusFromVisibilityFilter,
   contentStatusOrderDimension,
   contentStatusUsesSectionOrder,
   isContentStatusAvailable,
   selectContentStatusOrderValue,
-  upgradeLegacyContentStatusScopeKey,
 } from "~/lib/content-status";
 
 describe("content status contract", () => {
-  it("defines four collision-free status cells and flat availability keys", () => {
-    expect(
-      CONTENT_STATUS_FILTERS.map((filter) => ({
-        key: buildContentStatusKey(filter),
-        availability: contentStatusAvailabilityKey(filter),
-      })),
-    ).toEqual([
-      { key: "inbox:unread", availability: "unread" },
-      { key: "inbox:archived", availability: "read" },
-      { key: "saved:unread", availability: "later" },
-      { key: "saved:archived", availability: "savedArchived" },
+  it("defines four collision-free status cells", () => {
+    expect(CONTENT_STATUS_FILTERS.map(buildContentStatusKey)).toEqual([
+      "inbox:unread",
+      "inbox:archived",
+      "saved:unread",
+      "saved:archived",
     ]);
   });
 
@@ -38,12 +29,10 @@ describe("content status contract", () => {
     expect(() => contentStatusFilterSchema.parse("later")).toThrow();
   });
 
-  it("maps every status to main's flat availability snapshot", () => {
+  it("maps every status to nested availability", () => {
     const availability = {
-      unread: false,
-      read: true,
-      later: false,
-      savedArchived: true,
+      inbox: { unread: false, archived: true },
+      saved: { unread: false, archived: true },
     };
 
     expect(
@@ -75,35 +64,5 @@ describe("content status contract", () => {
       true,
       false,
     ]);
-  });
-
-  it("keeps the legacy three-state control compatible without inventing the fourth cell", () => {
-    expect(contentStatusFromVisibilityFilter("unread")).toEqual(
-      CONTENT_STATUS_FILTERS[0],
-    );
-    expect(contentStatusFromVisibilityFilter("read")).toEqual(
-      CONTENT_STATUS_FILTERS[1],
-    );
-    expect(contentStatusFromVisibilityFilter("later")).toEqual(
-      CONTENT_STATUS_FILTERS[2],
-    );
-  });
-
-  it("upgrades retained legacy keys in place without a cache version change", () => {
-    expect(upgradeLegacyContentStatusScopeKey("view:7:unread")).toBe(
-      "view:7:inbox:unread",
-    );
-    expect(upgradeLegacyContentStatusScopeKey("mixed:tag:4:later")).toBe(
-      "mixed:tag:4:saved:unread",
-    );
-    expect(upgradeLegacyContentStatusScopeKey("view:7:saved:archived")).toBe(
-      "view:7:saved:archived",
-    );
-    expect(contentStatusFromScopeKey("view:7:saved:archived")).toEqual(
-      CONTENT_STATUS_FILTERS[3],
-    );
-    expect(upgradeLegacyContentStatusScopeKey("view:7:unknown")).toBe(
-      "view:7:unknown",
-    );
   });
 });

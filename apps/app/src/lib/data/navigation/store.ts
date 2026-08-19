@@ -1,14 +1,18 @@
 import { createStore } from "zustand";
 import { createSelectorHooks } from "../createSelectorHooks";
-import { viewsStore } from "../views/store";
 import type {
   NavigationAvailability,
   NavigationSnapshot,
 } from "~/server/navigation/snapshot";
+import type { ContentAvailability } from "~/lib/content-status";
 import { orpcRouterClient } from "~/lib/orpc";
 
+const EMPTY_CONTENT_AVAILABILITY: ContentAvailability = {
+  inbox: { unread: false, archived: false },
+  saved: { unread: false, archived: false },
+};
+
 const EMPTY_SNAPSHOT: NavigationSnapshot = {
-  views: {},
   tags: {},
   feeds: {},
   viewFeeds: {},
@@ -36,7 +40,6 @@ const vanillaNavigationSnapshotStore = createStore<NavigationSnapshotStore>()(
       set({ snapshot: EMPTY_SNAPSHOT, fetchStatus: "idle" });
     },
     set: (snapshot) => {
-      viewsStore.getState().setViewAvailability(snapshot.views);
       set({ snapshot, fetchStatus: "success" });
     },
     fetch: async () => {
@@ -80,14 +83,7 @@ export function getNavigationAvailability(
   availability: Record<number, NavigationAvailability>,
   id: number,
 ): NavigationAvailability {
-  return (
-    availability[id] ?? {
-      unread: false,
-      read: false,
-      later: false,
-      savedArchived: false,
-    }
-  );
+  return availability[id] ?? EMPTY_CONTENT_AVAILABILITY;
 }
 
 export const {

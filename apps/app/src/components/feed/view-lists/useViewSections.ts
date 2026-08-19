@@ -12,7 +12,7 @@ import { useFeedCategories } from "~/lib/data/feed-categories";
 import { createFeedItemFilterIndex } from "~/lib/data/feed-items";
 import { useFeeds } from "~/lib/data/feeds";
 import { useFeedItemsListProjection } from "~/lib/data/store";
-import { INBOX_VIEW_ID } from "~/lib/data/views/constants";
+import { UNCATEGORIZED_VIEW_ID } from "~/lib/data/views/constants";
 import {
   VIEW_LAYOUT,
   VIEW_LAYOUT_ITEM_TYPE,
@@ -45,7 +45,7 @@ export function useViewSections(
     [feedCategories.feedCategories],
   );
 
-  const isUncategorized = currentView?.id === INBOX_VIEW_ID;
+  const isUncategorized = currentView?.id === UNCATEGORIZED_VIEW_ID;
 
   const baseLayout = useMemo(() => {
     const parsed = viewLayoutSchema.safeParse(currentView?.layout);

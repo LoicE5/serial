@@ -10,7 +10,6 @@ import {
 } from "./database";
 import { seedBenchmarkFixture } from "./fixtures";
 import { BENCHMARK_PROFILES, distribution } from "./model";
-import { evaluateNavigationViewAvailabilityPlan } from "./navigation-plan";
 import type { BenchmarkProfileName } from "./model";
 import { queryNavigationSnapshot as queryCandidate } from "~/server/navigation/snapshot";
 
@@ -29,7 +28,6 @@ type RunnerOptions = {
 type Sample = {
   operation: Operation;
   fullDurationMs: number;
-  viewStatementDurationMs: number;
   statementCount: number;
   resultBytes: number;
 };
@@ -92,11 +90,9 @@ async function measure(input: {
   const evidence = input.session.instrumentation.snapshot();
   return {
     result,
-    viewAvailabilitySql: evidence.statements[0]!.sql,
     sample: {
       operation: input.operation,
       fullDurationMs,
-      viewStatementDurationMs: evidence.statements[0]!.durationMs,
       statementCount: evidence.statementCount,
       resultBytes: Buffer.byteLength(JSON.stringify(result)),
     } satisfies Sample,
@@ -109,14 +105,21 @@ function summarize(samples: Sample[]) {
     fullDurationMs: distribution(
       samples.map((sample) => sample.fullDurationMs),
     ),
-    viewStatementDurationMs: distribution(
-      samples.map((sample) => sample.viewStatementDurationMs),
-    ),
     statementCount: distribution(
       samples.map((sample) => sample.statementCount),
     ),
     resultBytes: distribution(samples.map((sample) => sample.resultBytes)),
   };
+}
+
+function comparableSnapshot(result: unknown) {
+  if (!result || typeof result !== "object") return result;
+  const { views: _removedViewProjection, ...snapshot } = result as Record<
+    string,
+    unknown
+  >;
+  void _removedViewProjection;
+  return snapshot;
 }
 
 async function main() {
@@ -151,7 +154,6 @@ async function main() {
     };
     const samples: Sample[] = [];
     let expectedResult: string | undefined;
-    let candidateSql: string | undefined;
     for (let index = 0; index < warmups + repetitions; index += 1) {
       const operations: Operation[] = baseline
         ? index % 2 === 0
@@ -165,13 +167,12 @@ async function main() {
           session,
           userId,
         });
-        const serializedResult = JSON.stringify(measured.result);
+        const serializedResult = JSON.stringify(
+          comparableSnapshot(measured.result),
+        );
         expectedResult ??= serializedResult;
         if (serializedResult !== expectedResult) {
           throw new Error("Baseline and candidate navigation snapshots differ");
-        }
-        if (operation === "candidate") {
-          candidateSql = measured.viewAvailabilitySql;
         }
         if (index >= warmups) samples.push(measured.sample);
       }
@@ -192,24 +193,6 @@ async function main() {
             candidate.fullDurationMs.p95 / baselineSummary.fullDurationMs.p95,
         }
       : undefined;
-    const plan = await session.baseClient.execute({
-      sql: `EXPLAIN QUERY PLAN ${candidateSql!}`,
-      args: Array.from(
-        { length: candidateSql!.match(/\?/g)?.length ?? 0 },
-        () => null,
-      ),
-    });
-    const planDetails = plan.rows.map((row) => String(row.detail));
-    const planEvaluation = evaluateNavigationViewAvailabilityPlan(planDetails);
-    if (
-      planEvaluation.missingIndexScans.length > 0 ||
-      !planEvaluation.membershipFirst
-    ) {
-      throw new Error(
-        "Custom-View availability did not use indexed membership-first plans",
-      );
-    }
-
     const artifact = {
       schemaVersion: 1,
       generatedAt: new Date().toISOString(),
@@ -226,7 +209,6 @@ async function main() {
       baseline: baselineSummary,
       candidate,
       ratios,
-      plan: { ...planEvaluation, details: planDetails },
       rawSamples: samples,
     };
     if (options.outputPath) {
@@ -246,7 +228,7 @@ async function main() {
         `; baseline median ${baselineSummary.fullDurationMs.median.toFixed(2)} ms, p95 ${baselineSummary.fullDurationMs.p95.toFixed(2)} ms; ratios ${ratios.median.toFixed(3)}x/${ratios.p95.toFixed(3)}x`,
       );
     }
-    process.stdout.write("; indexed membership-first plan PASS\n");
+    process.stdout.write("; bounded navigation snapshot PASS\n");
     if (options.outputPath) {
       process.stdout.write(`Artifact: ${resolve(options.outputPath)}\n`);
     }

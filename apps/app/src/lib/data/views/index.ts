@@ -8,11 +8,14 @@ import {
   viewFilterIdAtom,
   viewsAtom,
 } from "../atoms";
-import { INBOX_VIEW_ID, INBOX_VIEW_PLACEMENT } from "./constants";
-import { useViewAvailability, useViewsFetchStatus } from "./store";
+import {
+  UNCATEGORIZED_VIEW_ID,
+  UNCATEGORIZED_VIEW_PLACEMENT,
+} from "./constants";
+import { useViewsFetchStatus } from "./store";
 import type { ApplicationView } from "~/server/db/schema";
 
-export { INBOX_VIEW_ID, INBOX_VIEW_PLACEMENT };
+export { UNCATEGORIZED_VIEW_ID, UNCATEGORIZED_VIEW_PLACEMENT };
 
 export function useDeselectViewFilter() {
   const setViewFilter = useSetAtom(viewFilterIdAtom);
@@ -29,32 +32,28 @@ export function useUpdateViewFilter() {
   const setDateFilter = useSetAtom(dateFilterAtom);
   const setCategoryFilter = useSetAtom(categoryFilterAtom);
 
-  const updateViewFilter = (
-    viewId: number,
-    updatedViews?: ApplicationView[],
-  ) => {
-    const _views = updatedViews ?? views;
-    const view = _views.find((v) => v.id === viewId);
+  return useCallback(
+    (viewId: number, updatedViews?: ApplicationView[]) => {
+      const _views = updatedViews ?? views;
+      const view = _views.find((v) => v.id === viewId);
 
-    if (!view) return;
+      if (!view) return;
 
-    setFeedFilter(-1);
-    setCategoryFilter(-1);
-    setDateFilter(view.daysWindow);
-    setViewFilter(view.id);
-  };
-
-  return updateViewFilter;
+      setFeedFilter(-1);
+      setCategoryFilter(-1);
+      setDateFilter(view.daysWindow);
+      setViewFilter(view.id);
+    },
+    [setCategoryFilter, setDateFilter, setFeedFilter, setViewFilter, views],
+  );
 }
 
 export function useViews() {
   const views = useAtomValue(viewsAtom);
   const fetchStatus = useViewsFetchStatus();
-  const viewAvailability = useViewAvailability();
 
   return {
     views,
-    viewAvailability,
     hasFetchedViews: fetchStatus === "success",
   };
 }
@@ -67,7 +66,7 @@ export function useCustomViewsData() {
   const views = useAtomValue(viewsAtom);
 
   const customViews = useMemo(() => {
-    return views.filter((v) => v.id !== INBOX_VIEW_ID);
+    return views.filter((v) => v.id !== UNCATEGORIZED_VIEW_ID);
   }, [views]);
 
   const customViewCategoryIds = useMemo(() => {

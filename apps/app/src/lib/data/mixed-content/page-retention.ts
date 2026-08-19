@@ -28,14 +28,8 @@ export type LoadedMixedScope = {
   hasMore: boolean;
 };
 
-export type SuppressedReferences = Record<
-  string,
-  Record<string, MixedContentReference[]>
->;
-
 export type PersistedMixedContentState = {
   scopes: Record<string, LoadedMixedScope>;
-  suppressedReferences: SuppressedReferences;
 };
 
 export function mixedReferenceKey(reference: MixedContentReference) {
@@ -46,6 +40,53 @@ export function retainedMixedReferenceKeys(
   pages: Array<RetainedCursorPage<MixedPageRetentionValue>>,
 ) {
   return new Set(pages.flatMap((page) => page.value.referenceKeys));
+}
+
+export function retainedMixedBookmarkIds(
+  pages: Array<RetainedCursorPage<MixedPageRetentionValue>>,
+) {
+  const bookmarkPrefix = "bookmark:";
+  return new Set(
+    pages.flatMap((page) =>
+      page.value.referenceKeys.flatMap((key) =>
+        key.startsWith(bookmarkPrefix)
+          ? [key.slice(bookmarkPrefix.length)]
+          : [],
+      ),
+    ),
+  );
+}
+
+export function replaceRetainedMixedRootPage(
+  pages: Array<RetainedCursorPage<MixedPageRetentionValue>>,
+  page: MixedContentPage,
+) {
+  const rootIndex = pages.findIndex(
+    (candidate) => candidate.requestCursorKey === "root",
+  );
+  if (rootIndex < 0) {
+    return mergeRetainedMixedPage({
+      pages,
+      page,
+      requestCursor: null,
+      replacesScope: false,
+    });
+  }
+
+  const previousRoot = pages[rootIndex]!;
+  const nextCursorKey = cursorRetentionKey(page.cursor);
+  const value = { referenceKeys: page.references.map(mixedReferenceKey) };
+  const nextPages = [...pages];
+  nextPages[rootIndex] = {
+    key: `root->${nextCursorKey}`,
+    requestCursorKey: "root",
+    nextCursorKey,
+    entityIds: page.references.map((reference) => reference.entityId),
+    value,
+    byteSize: estimateRetainedBytes(value),
+    sequence: previousRoot.sequence,
+  };
+  return nextPages;
 }
 
 export function mergeRetainedMixedPage({
@@ -154,42 +195,8 @@ export function getMixedRetentionPins() {
   ]);
 }
 
-export function filterSuppressedReferences(
-  suppressedReferences: SuppressedReferences,
-  retainedKeysByScope: Record<string, ReadonlySet<string>>,
-  pinnedEntityIds: ReadonlySet<string> = new Set(),
-) {
-  return Object.fromEntries(
-    Object.entries(suppressedReferences).flatMap(
-      ([bookmarkId, referencesByScope]) => {
-        const nextReferencesByScope = Object.fromEntries(
-          Object.entries(referencesByScope).flatMap(
-            ([scopeKey, references]) => {
-              const retainedKeys = retainedKeysByScope[scopeKey];
-              const retainedReferences = retainedKeys
-                ? references.filter(
-                    (reference) =>
-                      retainedKeys.has(mixedReferenceKey(reference)) ||
-                      pinnedEntityIds.has(reference.entityId),
-                  )
-                : references;
-              return retainedReferences.length > 0
-                ? [[scopeKey, retainedReferences]]
-                : [];
-            },
-          ),
-        );
-        return Object.keys(nextReferencesByScope).length > 0
-          ? [[bookmarkId, nextReferencesByScope]]
-          : [];
-      },
-    ),
-  );
-}
-
 export function getPersistedMixedContentState(state: {
   scopes: Record<string, LoadedMixedScope>;
-  suppressedReferences: SuppressedReferences;
 }): PersistedMixedContentState {
   const scopes = Object.fromEntries(
     Object.entries(state.scopes).map(([key, scope]) => {
@@ -207,17 +214,5 @@ export function getPersistedMixedContentState(state: {
       ];
     }),
   );
-  const retainedKeysByScope = Object.fromEntries(
-    Object.entries(scopes).map(([key, scope]) => [
-      key,
-      retainedMixedReferenceKeys(scope.pages),
-    ]),
-  );
-  return {
-    scopes,
-    suppressedReferences: filterSuppressedReferences(
-      state.suppressedReferences,
-      retainedKeysByScope,
-    ),
-  };
+  return { scopes };
 }

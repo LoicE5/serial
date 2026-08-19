@@ -100,15 +100,20 @@ test.describe("import categorization modes", () => {
 
     await importSectionedOpml(page, "views");
 
-    const importedViews = await getViewsForUser(
-      SELF_HOSTED_TURSO_PORT,
-      testEmail,
-    );
-    expect(
-      importedViews
-        .filter((view) => ["Music", "Tech"].includes(view.name))
-        .map((view) => view.layout),
-    ).toEqual(["large-list", "large-list"]);
+    await expect
+      .poll(
+        async () => {
+          const importedViews = await getViewsForUser(
+            SELF_HOSTED_TURSO_PORT,
+            testEmail,
+          );
+          return importedViews
+            .filter((view) => ["Music", "Tech"].includes(view.name))
+            .map((view) => view.layout);
+        },
+        { timeout: 10_000 },
+      )
+      .toEqual(["large-list", "large-list"]);
 
     // Go home and open the sidebar so we can inspect Views and Tags groups
     await page.goto("/");

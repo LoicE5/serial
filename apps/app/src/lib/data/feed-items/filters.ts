@@ -1,6 +1,6 @@
 import { and, eq, gte, inArray } from "drizzle-orm";
 
-import { INBOX_VIEW_ID } from "../views/constants";
+import { UNCATEGORIZED_VIEW_ID } from "../views/constants";
 import type { SQL } from "drizzle-orm";
 import type { ContentStatusFilter } from "~/lib/content-status";
 import type {
@@ -93,7 +93,7 @@ export function buildViewCategoryFilter(
   ];
 
   // For Uncategorized view, also include uncategorized feeds, but exclude feeds in custom views
-  if (viewFilter.id === INBOX_VIEW_ID) {
+  if (viewFilter.id === UNCATEGORIZED_VIEW_ID) {
     const categorizedFeedIds = new Set(feedCategories.map((fc) => fc.feedId));
     const uncategorizedFeedIds = allFeedIds.filter(
       (id) => !categorizedFeedIds.has(id),
@@ -109,7 +109,7 @@ export function buildViewCategoryFilter(
     // Also exclude feeds directly assigned to any custom view, but only if
     // the assigned view's content type is compatible with the feed's platform
     // (otherwise the feed would be orphaned: filtered out of the custom view
-    // by the content-type filter, and excluded from Inbox here too).
+    // by the content-type filter, and excluded from Uncategorized here too).
     if (customViewFeedIds && customViews) {
       for (const feedId of customViewFeedIds) {
         const feed = feedsById.get(feedId);

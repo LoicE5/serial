@@ -1,12 +1,9 @@
 import { and, desc, eq, inArray, lt, or } from "drizzle-orm";
 import { z } from "zod";
-import { getClientChannel } from "../channels";
 import { verifyFeedsOwnedByUser } from "./feed-router/utils";
 import type { ApplicationFeedItem } from "~/server/db/schema";
 import type { FetchFeedsStatus } from "~/server/rss/fetchFeeds";
 import { prepareArrayChunks } from "~/lib/iterators";
-import { publisher } from "~/server/api/publisher";
-
 import { feedItems, feeds } from "~/server/db/schema";
 import { protectedProcedure } from "~/server/orpc/base";
 import { fetchAndInsertFeedData } from "~/server/rss/fetchFeeds";
@@ -14,6 +11,12 @@ import {
   deduplicateByLastValue,
   MAX_BULK_MUTATION_ITEMS,
 } from "~/lib/schemas/bulk";
+import {
+  ALL_CONTENT_STATUS_KEYS,
+  buildFeedInvalidationSummary,
+  contentStatusKeysAroundChange,
+} from "~/lib/reconciliation";
+import { publishReconciliationInvalidation } from "~/server/reconciliation/invalidation";
 
 type FeedItemsChunk =
   | {
@@ -34,7 +37,6 @@ export const setWatchedValue = protectedProcedure
       id: z.string(),
       feedId: z.number(),
       isWatched: z.boolean(),
-      clientId: z.string().optional(),
     }),
   )
   .handler(async ({ context, input }) => {
@@ -90,30 +92,16 @@ export const setWatchedValue = protectedProcedure
       return updatedItem;
     });
 
-    if (input.clientId) {
-      const [feedRow] = await context.db
-        .select({ platform: feeds.platform })
-        .from(feeds)
-        .where(eq(feeds.id, input.feedId));
-
-      void publisher.publish(
-        getClientChannel(context.user.id, input.clientId),
-        {
-          source: "initial",
-          chunk: {
-            type: "feed-items",
-            refreshNavigationSnapshot: true,
-            feedItems: [
-              {
-                ...result,
-                content: "",
-                platform: feedRow?.platform ?? "youtube",
-              } as ApplicationFeedItem,
-            ],
-          },
-        },
-      );
-    }
+    await publishReconciliationInvalidation(
+      context.user.id,
+      buildFeedInvalidationSummary({
+        feedIds: [input.feedId],
+        contentStatusKeys: contentStatusKeysAroundChange({
+          saveStatuses: [result.isWatchLater ? "saved" : "inbox"],
+          archiveStatuses: ["unread", "archived"],
+        }),
+      }),
+    );
 
     return {
       id: result.id,
@@ -147,7 +135,7 @@ export const setBulkWatchedValue = protectedProcedure
     if (input.items.length === 0) return;
 
     const updatedAt = new Date();
-    return context.db.transaction(async (tx) => {
+    const result = await context.db.transaction(async (tx) => {
       // Extract unique feedIds and verify ownership
       const feedIds = [...new Set(input.items.map((item) => item.feedId))];
 
@@ -180,6 +168,14 @@ export const setBulkWatchedValue = protectedProcedure
           updatedAt: feedItems.updatedAt,
         });
     });
+    await publishReconciliationInvalidation(
+      context.user.id,
+      buildFeedInvalidationSummary({
+        feedIds: input.items.map(({ feedId }) => feedId),
+        contentStatusKeys: ALL_CONTENT_STATUS_KEYS,
+      }),
+    );
+    return result;
   });
 
 export const setWatchLaterValue = protectedProcedure
@@ -188,7 +184,6 @@ export const setWatchLaterValue = protectedProcedure
       id: z.string(),
       feedId: z.number(),
       isWatchLater: z.boolean(),
-      clientId: z.string().optional(),
     }),
   )
   .handler(async ({ context, input }) => {
@@ -244,30 +239,16 @@ export const setWatchLaterValue = protectedProcedure
       return updatedItem;
     });
 
-    if (input.clientId) {
-      const [feedRow] = await context.db
-        .select({ platform: feeds.platform })
-        .from(feeds)
-        .where(eq(feeds.id, input.feedId));
-
-      void publisher.publish(
-        getClientChannel(context.user.id, input.clientId),
-        {
-          source: "initial",
-          chunk: {
-            type: "feed-items",
-            refreshNavigationSnapshot: true,
-            feedItems: [
-              {
-                ...result,
-                content: "",
-                platform: feedRow?.platform ?? "youtube",
-              } as ApplicationFeedItem,
-            ],
-          },
-        },
-      );
-    }
+    await publishReconciliationInvalidation(
+      context.user.id,
+      buildFeedInvalidationSummary({
+        feedIds: [input.feedId],
+        contentStatusKeys: contentStatusKeysAroundChange({
+          saveStatuses: ["inbox", "saved"],
+          archiveStatuses: [result.isWatched ? "archived" : "unread"],
+        }),
+      }),
+    );
 
     return {
       id: result.id,

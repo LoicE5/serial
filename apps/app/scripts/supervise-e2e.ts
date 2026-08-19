@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -31,12 +31,36 @@ function isMissingProcess(error: unknown) {
   return (error as NodeJS.ErrnoException).code === "ESRCH";
 }
 
+function isPermissionDenied(error: unknown) {
+  return (error as NodeJS.ErrnoException).code === "EPERM";
+}
+
+function getProcessGroupMembers(processGroupId: number) {
+  const result = spawnSync("ps", ["-axo", "pid=,pgid="], {
+    encoding: "utf8",
+  });
+  if (result.status !== 0) {
+    throw new Error(
+      `Failed to inspect E2E process group ${processGroupId}: ${result.stderr}`,
+    );
+  }
+  return result.stdout
+    .split("\n")
+    .map((line) => line.trim().split(/\s+/).map(Number))
+    .flatMap(([processId, groupId]) =>
+      processId && groupId === processGroupId ? [processId] : [],
+    );
+}
+
 function isProcessGroupAlive(processGroupId: number) {
   try {
     process.kill(-processGroupId, 0);
     return true;
   } catch (error) {
     if (isMissingProcess(error)) return false;
+    if (isPermissionDenied(error)) {
+      return getProcessGroupMembers(processGroupId).length > 0;
+    }
     throw error;
   }
 }
@@ -45,7 +69,15 @@ function signalProcessGroup(processGroupId: number, signal: NodeJS.Signals) {
   try {
     process.kill(-processGroupId, signal);
   } catch (error) {
-    if (!isMissingProcess(error)) throw error;
+    if (isMissingProcess(error)) return;
+    if (!isPermissionDenied(error)) throw error;
+    for (const processId of getProcessGroupMembers(processGroupId)) {
+      try {
+        process.kill(processId, signal);
+      } catch (memberError) {
+        if (!isMissingProcess(memberError)) throw memberError;
+      }
+    }
   }
 }
 

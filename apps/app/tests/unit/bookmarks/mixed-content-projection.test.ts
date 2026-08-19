@@ -2,7 +2,7 @@ import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createBookmarkTestDatabase } from "./database";
 import type { MixedContentCursor } from "~/server/mixed-content/projection";
-import { INBOX_VIEW_ID } from "~/lib/data/views/constants";
+import { UNCATEGORIZED_VIEW_ID } from "~/lib/data/views/constants";
 import {
   bookmarks,
   bookmarkTags,
@@ -279,7 +279,7 @@ describe("mixed-content projection", () => {
     const inbox = await queryMixedContentPage({
       database,
       userId: "user-one",
-      scope: { type: "view", viewId: INBOX_VIEW_ID },
+      scope: { type: "view", viewId: UNCATEGORIZED_VIEW_ID },
       contentStatus: { saveStatus: "inbox", archiveStatus: "unread" },
       limit: 20,
     });
@@ -320,7 +320,7 @@ describe("mixed-content projection", () => {
     const inbox = await queryMixedContentPage({
       database,
       userId: "user-one",
-      scope: { type: "view", viewId: INBOX_VIEW_ID },
+      scope: { type: "view", viewId: UNCATEGORIZED_VIEW_ID },
       contentStatus: { saveStatus: "saved", archiveStatus: "unread" },
       limit: 20,
     });
@@ -329,7 +329,7 @@ describe("mixed-content projection", () => {
     ]);
   });
 
-  it("suppresses every canonical Feed item before mixed membership while preserving Feed-only access and independent deletion", async () => {
+  it("keeps matching Bookmarks and Feed items as independent mixed rows", async () => {
     await seedFeed(1);
     await seedFeed(2);
     await seedView(10, "Feed view");
@@ -353,10 +353,14 @@ describe("mixed-content projection", () => {
       feedId: 1,
       url: "https://example.com/other",
     });
-    await seedBookmark({ id: "bookmark-match", canonicalUrl });
+    await seedBookmark({
+      id: "bookmark-match",
+      canonicalUrl,
+      isSaved: false,
+    });
     await database
       .insert(bookmarkViews)
-      .values({ bookmarkId: "bookmark-match", viewId: 11 });
+      .values({ bookmarkId: "bookmark-match", viewId: 10 });
 
     const mixedFeedView = await queryMixedContentPage({
       database,
@@ -367,7 +371,15 @@ describe("mixed-content projection", () => {
     });
     expect(
       mixedFeedView.references.map((reference) => reference.entityId),
-    ).toEqual(["feed-other"]);
+    ).toEqual(
+      expect.arrayContaining([
+        "bookmark-match",
+        "feed-match-one",
+        "feed-match-two",
+        "feed-other",
+      ]),
+    );
+    expect(mixedFeedView.references).toHaveLength(4);
 
     const feedOnlyItems = await database
       .select()
@@ -380,6 +392,18 @@ describe("mixed-content projection", () => {
 
     await database.delete(feeds).where(eq(feeds.id, 1));
     expect(await database.select().from(bookmarks)).toHaveLength(1);
+
+    const beforeBookmarkDeletion = await queryMixedContentPage({
+      database,
+      userId: "user-one",
+      scope: { type: "view", viewId: 10 },
+      contentStatus: { saveStatus: "inbox", archiveStatus: "unread" },
+      limit: 20,
+    });
+    expect(
+      beforeBookmarkDeletion.references.map((reference) => reference.entityId),
+    ).toEqual(expect.arrayContaining(["bookmark-match", "feed-match-two"]));
+
     await database.delete(bookmarks).where(eq(bookmarks.id, "bookmark-match"));
 
     const restored = await queryMixedContentPage({
@@ -449,7 +473,7 @@ describe("mixed-content projection", () => {
     const uncategorized = await queryMixedContentPage({
       database,
       userId: "user-one",
-      scope: { type: "view", viewId: INBOX_VIEW_ID },
+      scope: { type: "view", viewId: UNCATEGORIZED_VIEW_ID },
       contentStatus: { saveStatus: "saved", archiveStatus: "unread" },
       limit: 20,
     });

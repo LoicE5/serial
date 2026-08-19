@@ -5,6 +5,10 @@ import { verifyFeedsOwnedByUser } from "./feed-router/utils";
 import { protectedProcedure } from "~/server/orpc/base";
 import { contentCategories, feedCategories } from "~/server/db/schema";
 import { boundedNumberIdsSchema } from "~/lib/schemas/bulk";
+import {
+  organizationInvalidationSummary,
+  publishReconciliationInvalidation,
+} from "~/server/reconciliation/invalidation";
 
 export const getAll = protectedProcedure.handler(async ({ context }) => {
   const contentCategoriesList = await context.db
@@ -44,6 +48,10 @@ export const assignToFeed = protectedProcedure
         categoryId: input.categoryId,
       });
     });
+    await publishReconciliationInvalidation(
+      context.user.id,
+      organizationInvalidationSummary(),
+    );
   });
 
 export const removeFromFeed = protectedProcedure
@@ -69,6 +77,10 @@ export const removeFromFeed = protectedProcedure
           ),
         );
     });
+    await publishReconciliationInvalidation(
+      context.user.id,
+      organizationInvalidationSummary(),
+    );
   });
 
 export const bulkAssignToFeeds = protectedProcedure
@@ -99,6 +111,10 @@ export const bulkAssignToFeeds = protectedProcedure
         )
         .onConflictDoNothing();
     });
+    await publishReconciliationInvalidation(
+      context.user.id,
+      organizationInvalidationSummary(),
+    );
   });
 
 export const bulkRemoveFromFeeds = protectedProcedure
@@ -128,4 +144,8 @@ export const bulkRemoveFromFeeds = protectedProcedure
           ),
         );
     });
+    await publishReconciliationInvalidation(
+      context.user.id,
+      organizationInvalidationSummary(),
+    );
   });

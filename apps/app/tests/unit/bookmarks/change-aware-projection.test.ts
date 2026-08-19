@@ -16,6 +16,7 @@ import {
 } from "~/lib/data/mixed-content/store";
 import { viewsStore } from "~/lib/data/views/store";
 import { processPublishedChunks } from "~/lib/data/subscriptionCoordinator";
+import { getMixedContentMembershipRevision } from "~/lib/data/mixed-content/membershipRevision";
 import {
   buildContentStatusKey,
   CONTENT_STATUS_FILTERS,
@@ -117,14 +118,20 @@ function loadScope(
     contentStatus,
     page: page(references),
     replacesScope: true,
-    feedItems: feedItemsStore.getState().feedItemsDict,
   });
 }
 
-function upsertPayload(nextBookmark: ApplicationBookmark): PublishedChunk {
+function upsertPayload(
+  nextBookmark: ApplicationBookmark,
+  affectsListProjection?: boolean,
+): PublishedChunk {
   return {
     source: "bookmark",
-    chunk: { type: "bookmark-upsert", bookmark: nextBookmark },
+    chunk: {
+      type: "bookmark-upsert",
+      bookmark: nextBookmark,
+      affectsListProjection,
+    },
   };
 }
 
@@ -154,29 +161,37 @@ describe("change-aware Bookmark projection", () => {
 
     let mixedNotifications = 0;
     const unsubscribe = mixedContentStore.subscribe(() => mixedNotifications++);
+    const membershipRevision = getMixedContentMembershipRevision();
     const progressAt = new Date(NOW.getTime() + 1);
     const progressResult = processPublishedChunks([
-      upsertPayload({
-        ...saved,
-        progress: 8,
-        progressUpdatedAt: progressAt,
-        updatedAt: progressAt,
-      }),
+      upsertPayload(
+        {
+          ...saved,
+          progress: 8,
+          progressUpdatedAt: progressAt,
+          updatedAt: progressAt,
+        },
+        false,
+      ),
     ]);
     const captureAt = new Date(NOW.getTime() + 2);
     const captureResult = processPublishedChunks([
-      upsertPayload({
-        ...bookmarksStore.getState().getBookmark(saved.id)!,
-        title: "Fresh capture",
-        captureHash: "fresh-hash",
-        capturedAt: captureAt,
-        updatedAt: captureAt,
-      }),
+      upsertPayload(
+        {
+          ...bookmarksStore.getState().getBookmark(saved.id)!,
+          title: "Fresh capture",
+          captureHash: "fresh-hash",
+          capturedAt: captureAt,
+          updatedAt: captureAt,
+        },
+        false,
+      ),
     ]);
     unsubscribe();
 
     expect(progressResult).toEqual([]);
     expect(captureResult).toEqual([]);
+    expect(getMixedContentMembershipRevision()).toBe(membershipRevision);
     expect(mixedNotifications).toBe(0);
     expect(bookmarksStore.getState().getBookmark(saved.id)).toMatchObject({
       progress: 8,

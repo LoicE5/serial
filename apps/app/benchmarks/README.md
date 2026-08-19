@@ -34,12 +34,12 @@ pnpm benchmark:navigation --profile representative \
   --output benchmarks/results/navigation-representative.json
 ```
 
-The runner alternates which implementation executes first, verifies identical
-snapshot results, and reports full-snapshot median/p95 latency. It also fails if
-the custom-View statement does not start from indexed direct or Tag-derived
-membership before seeking Feed items. Profiles are `small`, `representative`,
-`stress`, and `adversarial`; the last uses the stress-size fixture with every
-Feed directly assigned to every View and only Unread content.
+The runner alternates which implementation executes first, compares the shared
+Tag, Feed, and per-View Feed snapshot contract (ignoring a baseline's removed
+View-availability field), and reports full-snapshot median/p95 latency and
+statement counts. Profiles are `small`, `representative`, `stress`, and
+`adversarial`; the last uses the stress-size fixture with every Feed directly
+assigned to every View and only Unread content.
 
 Run the full local measurement without turning a known failure into a command
 failure:
@@ -57,6 +57,21 @@ pnpm benchmark:app:gate
 
 `benchmark:app:gate` exits nonzero for any latency or structural failure. The
 same calculation is used for local, scheduled, and production-like artifacts.
+
+For the startup View first-page matrix, run the dedicated stress gate:
+
+```sh
+pnpm benchmark:view-matrix:gate
+```
+
+It pairs the resolved page builder used by reconciliation with ordinary
+`queryMixedContentPage` calls for per-page latency, and separately interleaves
+the end-to-end reconciliation stream with the ordinary 26-View/104-cell matrix.
+Both comparisons enforce the 1.5× median and p95 limits. The gate then applies
+the emitted chunks through the production client page reducer and enforces a
+50 ms maximum incremental task, 32 MiB startup heap growth, and 32 MiB
+serialized normalized persisted state. Its generated JSON is written under the
+ignored `benchmarks/results/` directory.
 
 ## Fixtures and paired method
 
@@ -88,11 +103,11 @@ The initial executable pair uses the unassigned all-content View:
 - `feed-view-page`: the existing production View prerequisite loads, bounded
   Feed-item SQL query, row materialization, and application projection.
 - `mixed-view-page`: `queryMixedContentPage`, including all SQL, row
-  materialization, canonical suppression, membership and visibility filtering,
-  sorting, cursoring, and projection.
+  materialization, independent Bookmark and Feed-item membership and visibility
+  filtering, sorting, cursoring, and projection.
 
-The page size is 30. Operations return equivalent visible scopes; a Bookmark
-may suppress a colliding Feed item under the approved mixed-content semantics.
+The page size is 30. Matching Bookmark and Feed-item rows remain independent;
+either or both may appear when eligible for the visible scope.
 
 ## Measurements and exact pass/fail rule
 

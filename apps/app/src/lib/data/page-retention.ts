@@ -38,6 +38,23 @@ type RetentionPins = {
 };
 
 const pinsByOwner = new Map<string, RetentionPins>();
+const pinReleaseListeners = new Set<
+  (releasedBookmarkIds: ReadonlySet<string>) => void
+>();
+
+function notifyReleasedBookmarkPins(
+  previousPins: RetentionPins | undefined,
+  nextPins: RetentionPins | undefined,
+) {
+  if (!previousPins) return;
+  const releasedBookmarkIds = new Set(
+    [...previousPins.bookmarkIds].filter(
+      (id) => !nextPins?.bookmarkIds.has(id),
+    ),
+  );
+  if (releasedBookmarkIds.size === 0) return;
+  for (const listener of pinReleaseListeners) listener(releasedBookmarkIds);
+}
 
 function sortedPages<T>(pages: Array<RetainedCursorPage<T>>) {
   return [...pages].sort(
@@ -159,14 +176,26 @@ export function setRetainedEntityPins(
     bookmarkIds?: Iterable<string>;
   },
 ) {
-  pinsByOwner.set(owner, {
+  const previousPins = pinsByOwner.get(owner);
+  const nextPins = {
     feedItemIds: new Set(pins.feedItemIds),
     bookmarkIds: new Set(pins.bookmarkIds),
-  });
+  };
+  pinsByOwner.set(owner, nextPins);
+  notifyReleasedBookmarkPins(previousPins, nextPins);
 }
 
 export function clearRetainedEntityPins(owner: string) {
+  const previousPins = pinsByOwner.get(owner);
   pinsByOwner.delete(owner);
+  notifyReleasedBookmarkPins(previousPins, undefined);
+}
+
+export function onBookmarkRetentionPinsReleased(
+  listener: (releasedBookmarkIds: ReadonlySet<string>) => void,
+) {
+  pinReleaseListeners.add(listener);
+  return () => pinReleaseListeners.delete(listener);
 }
 
 export function getRetainedEntityPins(kind: "feed-item" | "bookmark") {

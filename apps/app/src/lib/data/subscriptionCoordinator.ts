@@ -1,83 +1,71 @@
 import { bookmarksStore } from "./bookmarks/store";
 import { feedCategoriesStore } from "./feed-categories/store";
 import { feedItemsStore } from "./store";
-import { getMixedScopeKey, mixedContentStore } from "./mixed-content/store";
+import {
+  getMixedScopeKey,
+  hasBookmarkBodyOwner,
+  mixedContentStore,
+} from "./mixed-content/store";
 import { viewsStore } from "./views/store";
 import { isBookmarkProjectionChange } from "./mixed-content/bookmarkProjection";
+import { advanceMixedContentMembershipRevision } from "./mixed-content/membershipRevision";
 import { refreshNavigationSnapshotSafely } from "./navigation/store";
 import { hasFeedItemListProjectionChanged } from "./feed-items/listProjection";
 import type { LoadedMixedScope } from "./mixed-content/store";
 import type { PublishedChunk } from "~/server/api/publisher";
-import type { BookmarkSyncBucketPage } from "~/server/mixed-content/sync";
-
-const pendingBookmarkSyncBuckets = new Map<
-  number,
-  { version: string; bookmarks: BookmarkSyncBucketPage["bookmarks"] }
->();
+import type {
+  MixedContentPage,
+  MixedContentScope,
+} from "~/server/mixed-content/projection";
+import type { ContentStatusFilter } from "~/lib/content-status";
 
 function incomingFeedItemIds(payloads: PublishedChunk[]) {
   const ids = new Set<string>();
   for (const payload of payloads) {
-    if (payload.source === "bookmark" || payload.source === "mixed") continue;
+    if (payload.source !== "rss") continue;
     const chunk = payload.chunk;
-    if ("feedItems" in chunk) {
+    if (chunk.type === "feed-items") {
       for (const item of chunk.feedItems) ids.add(item.id);
-    }
-    if ("items" in chunk) {
-      for (const item of chunk.items) ids.add(item.id);
-    }
-    if ("diff" in chunk) {
-      for (const entry of chunk.diff) {
-        if (entry.status === "new" || entry.status === "updated") {
-          ids.add(entry.item.id);
-        }
-      }
     }
   }
   return [...ids];
 }
 
-function completeBookmarkSyncPages(payloads: PublishedChunk[]) {
-  const completed: BookmarkSyncBucketPage[] = [];
-  for (const payload of payloads) {
-    if (
-      payload.source !== "bookmark" ||
-      payload.chunk.type !== "bookmark-sync-bucket"
-    ) {
-      continue;
-    }
-    const page = payload.chunk;
-    if (page.replacesBucket) {
-      pendingBookmarkSyncBuckets.set(page.bucket, {
-        version: page.version,
-        bookmarks: [],
-      });
-    }
-    const pending = pendingBookmarkSyncBuckets.get(page.bucket);
-    if (!pending || pending.version !== page.version) continue;
-    pending.bookmarks.push(...page.bookmarks);
-    if (page.completesBucket) {
-      completed.push({
-        ...page,
-        bookmarks: pending.bookmarks,
-        replacesBucket: true,
-        completesBucket: true,
-      });
-      pendingBookmarkSyncBuckets.delete(page.bucket);
-    }
-  }
-  return completed;
+export function applyRequestedMixedContentPage(input: {
+  scope: MixedContentScope;
+  contentStatus: ContentStatusFilter;
+  page: MixedContentPage;
+  replacesScope: boolean;
+}) {
+  const scopeKey = getMixedScopeKey(input.scope, input.contentStatus);
+  const requestCursor = input.replacesScope
+    ? null
+    : mixedContentStore.getState().scopes[scopeKey]?.cursor;
+  bookmarksStore.getState().upsertMany(input.page.bookmarks);
+  feedItemsStore.getState().setFeedItems(input.page.feedItems, {
+    scopeKey: `mixed:${scopeKey}`,
+    itemIds: input.page.feedItems.map((item) => item.id),
+    requestCursor,
+    nextCursor: input.page.cursor,
+    replacesScope: input.replacesScope,
+  });
+  mixedContentStore.getState().applyPage(input);
 }
 
-export function processPublishedChunks(payloads: PublishedChunk[]) {
+export function applyPublishedChunks(
+  payloads: PublishedChunk[],
+  options: { refreshNavigation?: boolean } = {},
+) {
   const affectedScopes = new Map<string, LoadedMixedScope>();
+  let bookmarkProjectionChanged = false;
   let navigationSnapshotChanged = payloads.some(
     ({ chunk }) =>
       "refreshNavigationSnapshot" in chunk &&
       chunk.refreshNavigationSnapshot === true,
   );
   const feedPayloads = payloads.filter(
-    (payload) => payload.source !== "bookmark" && payload.source !== "mixed",
+    (payload) =>
+      payload.source !== "bookmark" && payload.source !== "invalidation",
   );
   if (feedPayloads.length > 0) {
     const incomingItemIds = incomingFeedItemIds(feedPayloads);
@@ -101,7 +89,6 @@ export function processPublishedChunks(payloads: PublishedChunk[]) {
       itemIds: incomingItemIds,
       previousFeedItems,
       feedItems: feedItemsStore.getState().feedItemsDict,
-      bookmarks: bookmarksStore.getState().snapshot(),
       views: viewsStore.getState().views,
       feedCategories: feedCategoriesStore.getState().feedCategories,
     });
@@ -113,85 +100,31 @@ export function processPublishedChunks(payloads: PublishedChunk[]) {
     }
   }
 
-  const bookmarkSyncPages = completeBookmarkSyncPages(payloads);
-  const bookmarkSyncDelta = bookmarksStore
-    .getState()
-    .applySyncPages(bookmarkSyncPages);
-  for (const { bookmark, previousBookmark } of bookmarkSyncDelta.upserts) {
-    navigationSnapshotChanged ||= isBookmarkProjectionChange(
-      previousBookmark,
-      bookmark,
-    );
-    const affected = mixedContentStore.getState().reprojectUpsert({
-      bookmark,
-      previousBookmark,
-      feedItems: feedItemsStore.getState().feedItemsDict,
-      views: viewsStore.getState().views,
-    });
-    for (const scope of affected) {
-      affectedScopes.set(
-        JSON.stringify([scope.scope, scope.contentStatus]),
-        scope,
-      );
-    }
-  }
-  for (const bookmark of bookmarkSyncDelta.deletions) {
-    navigationSnapshotChanged = true;
-    const affected = mixedContentStore.getState().reprojectDeletion({
-      bookmarkId: bookmark.id,
-      feedItems: feedItemsStore.getState().feedItemsDict,
-    });
-    for (const scope of affected) {
-      affectedScopes.set(
-        JSON.stringify([scope.scope, scope.contentStatus]),
-        scope,
-      );
-    }
-  }
-
   for (const payload of payloads) {
-    if (payload.source === "mixed") {
-      const { chunk } = payload;
-      const scopeKey = getMixedScopeKey(chunk.scope, chunk.contentStatus);
-      const requestCursor =
-        chunk.replacesScope === true
-          ? null
-          : mixedContentStore.getState().scopes[scopeKey]?.cursor;
-      bookmarksStore.getState().upsertMany(chunk.page.bookmarks);
-      feedItemsStore.getState().setFeedItems(chunk.page.feedItems, {
-        scopeKey: `mixed:${scopeKey}`,
-        itemIds: chunk.page.feedItems.map((item) => item.id),
-        requestCursor,
-        nextCursor: chunk.page.cursor,
-        replacesScope: chunk.replacesScope,
-      });
-      mixedContentStore.getState().applyPage({
-        scope: chunk.scope,
-        contentStatus: chunk.contentStatus,
-        page: chunk.page,
-        replacesScope: chunk.replacesScope,
-        feedItems: feedItemsStore.getState().feedItemsDict,
-      });
-      continue;
-    }
+    if (payload.source === "invalidation") continue;
     if (payload.source !== "bookmark") continue;
     const { chunk } = payload;
-    if (chunk.type === "bookmark-sync-bucket") {
-      continue;
-    }
     if (chunk.type === "bookmark-upsert") {
+      if (
+        !hasBookmarkBodyOwner(chunk.bookmark.id) &&
+        chunk.affectsListProjection === false
+      ) {
+        continue;
+      }
       const previousBookmark = bookmarksStore
         .getState()
         .getBookmark(chunk.bookmark.id);
-      bookmarksStore.getState().upsert(chunk.bookmark);
-      navigationSnapshotChanged ||= isBookmarkProjectionChange(
+      const projectionChanged = isBookmarkProjectionChange(
         previousBookmark,
         chunk.bookmark,
       );
+      bookmarkProjectionChanged ||=
+        chunk.affectsListProjection !== false && projectionChanged;
+      bookmarksStore.getState().upsert(chunk.bookmark);
+      navigationSnapshotChanged ||= projectionChanged;
       const affected = mixedContentStore.getState().reprojectUpsert({
         bookmark: chunk.bookmark,
         previousBookmark,
-        feedItems: feedItemsStore.getState().feedItemsDict,
         views: viewsStore.getState().views,
       });
       for (const scope of affected) {
@@ -203,14 +136,25 @@ export function processPublishedChunks(payloads: PublishedChunk[]) {
       continue;
     }
     if (chunk.type === "bookmark-upsert-batch") {
+      const retainedBookmarks = chunk.bookmarks.filter((bookmark) =>
+        hasBookmarkBodyOwner(bookmark.id),
+      );
       const previousBookmarks = new Map(
-        chunk.bookmarks.map((bookmark) => [
+        retainedBookmarks.map((bookmark) => [
           bookmark.id,
           bookmarksStore.getState().getBookmark(bookmark.id),
         ]),
       );
-      bookmarksStore.getState().upsertMany(chunk.bookmarks);
-      for (const bookmark of chunk.bookmarks) {
+      bookmarkProjectionChanged ||=
+        retainedBookmarks.length < chunk.bookmarks.length ||
+        retainedBookmarks.some((bookmark) =>
+          isBookmarkProjectionChange(
+            previousBookmarks.get(bookmark.id),
+            bookmark,
+          ),
+        );
+      bookmarksStore.getState().upsertMany(retainedBookmarks);
+      for (const bookmark of retainedBookmarks) {
         navigationSnapshotChanged ||= isBookmarkProjectionChange(
           previousBookmarks.get(bookmark.id),
           bookmark,
@@ -218,7 +162,6 @@ export function processPublishedChunks(payloads: PublishedChunk[]) {
         const affected = mixedContentStore.getState().reprojectUpsert({
           bookmark,
           previousBookmark: previousBookmarks.get(bookmark.id),
-          feedItems: feedItemsStore.getState().feedItemsDict,
           views: viewsStore.getState().views,
         });
         for (const scope of affected) {
@@ -230,11 +173,11 @@ export function processPublishedChunks(payloads: PublishedChunk[]) {
       }
       continue;
     }
+    bookmarkProjectionChanged = true;
     navigationSnapshotChanged = true;
     bookmarksStore.getState().remove(chunk.id);
     const affected = mixedContentStore.getState().reprojectDeletion({
       bookmarkId: chunk.id,
-      feedItems: feedItemsStore.getState().feedItemsDict,
     });
     for (const scope of affected) {
       affectedScopes.set(
@@ -243,8 +186,21 @@ export function processPublishedChunks(payloads: PublishedChunk[]) {
       );
     }
   }
-  if (navigationSnapshotChanged) {
+  if (bookmarkProjectionChanged) {
+    advanceMixedContentMembershipRevision();
+  }
+  if (navigationSnapshotChanged && options.refreshNavigation !== false) {
     void refreshNavigationSnapshotSafely();
   }
-  return [...affectedScopes.values()];
+  return {
+    affectedScopes: [...affectedScopes.values()],
+    navigationSnapshotChanged,
+  };
+}
+
+export function processPublishedChunks(
+  payloads: PublishedChunk[],
+  options: { refreshNavigation?: boolean } = {},
+) {
+  return applyPublishedChunks(payloads, options).affectedScopes;
 }

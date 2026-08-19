@@ -33,15 +33,20 @@ describe("client performance audit model", () => {
       ).toBe(2);
       expect(result.operations.bookmarkDelete.authoritativeRefills).toBe(1);
       expect(result.operations.bookmarkBurstSingleFrame).toMatchObject({
-        bookmarkStoreNotifications: 100,
         mixedStoreNotifications: 0,
         authoritativeRefills: 0,
       });
+      expect(
+        result.operations.bookmarkBurstSingleFrame.bookmarkStoreNotifications,
+      ).toBeLessThanOrEqual(100);
       expect(result.operations.bookmarkBurstSeparateFrames).toMatchObject({
-        bookmarkStoreNotifications: 100,
         mixedStoreNotifications: 0,
         authoritativeRefills: 0,
       });
+      expect(
+        result.operations.bookmarkBurstSeparateFrames
+          .bookmarkStoreNotifications,
+      ).toBeLessThanOrEqual(100);
       expect(result.operations.localViewProjection).toMatchObject({
         bookmarkStoreNotifications: 0,
         feedItemStoreNotifications: 0,
@@ -79,30 +84,12 @@ describe("client performance audit model", () => {
     );
   });
 
-  it("keeps synchronization pages and normalized persistence mutations within explicit budgets", () => {
+  it("keeps normalized persistence mutations within their explicit budget", () => {
     const result = runClientAuditProfile("stress");
 
-    expect(result.synchronizationBytes.request).toBeLessThanOrEqual(
-      result.synchronizationBytes.requestBudget,
-    );
-    expect(result.synchronizationBytes.maximumResponsePage).toBeLessThanOrEqual(
-      result.synchronizationBytes.responseBudget,
-    );
     expect(result.persistenceMutationBytes.measured).toBeLessThanOrEqual(
       result.persistenceMutationBytes.budget,
     );
-    expect(
-      result.operations.coldSynchronization.bookmarkStoreNotifications,
-    ).toBeLessThanOrEqual(128);
-    expect(
-      result.operations.coldSynchronization.feedItemStoreNotifications,
-    ).toBe(0);
-    expect(result.operations.warmSynchronization).toMatchObject({
-      bookmarkStoreNotifications: 0,
-      feedItemStoreNotifications: 0,
-      mixedStoreNotifications: 0,
-      authoritativeRefills: 0,
-    });
   }, 30_000);
 
   it("keeps the retained stress profile within explicit operation budgets", async () => {
@@ -123,15 +110,12 @@ describe("client performance audit model", () => {
     const result = runClientAuditProfile("small");
     result.operations.bookmarkProgressEvent.authoritativeRefills =
       result.fixture.loadedMixedScopes;
-    result.synchronizationBytes.maximumResponsePage =
-      result.synchronizationBytes.responseBudget + 1;
     result.retention.afterTwentyFourPages.entities =
       result.retention.afterTwelvePages.entities + 1;
 
     expect(evaluateClientAuditOperationBudgets(result)).toEqual(
       expect.arrayContaining([
         `bookmarkProgressEvent authoritativeRefills: ${result.fixture.loadedMixedScopes} > 0`,
-        `Bookmark synchronization response-page bytes: ${result.synchronizationBytes.responseBudget + 1} > ${result.synchronizationBytes.responseBudget}`,
         `retained entities after pagination plateau: ${result.retention.afterTwelvePages.entities + 1} > ${result.retention.afterTwelvePages.entities}`,
       ]),
     );

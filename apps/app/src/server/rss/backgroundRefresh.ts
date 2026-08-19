@@ -1,31 +1,28 @@
-import { and, asc, count, eq, gt, isNull, lte, or } from "drizzle-orm";
+import { and, asc, gt, isNull, lte, or } from "drizzle-orm";
 import { refreshUserFeeds } from "./refreshUserFeeds";
+import { addRefreshStats, emptyRefreshStats, rssAttemptSummary } from "./stats";
+import { countDueFeeds, getDueFeedPage, RSS_FEED_PAGE_SIZE } from "./dueFeeds";
+import { automaticRssOwnerForPlan } from "./automaticOwnership";
 import type { PlanId } from "~/server/subscriptions/plans";
 import type { DatabaseFeed } from "~/server/db/schema";
 import type { db as Database } from "~/server/db";
-import type { RefreshStats } from "./refreshUserFeeds";
-import type { NavigationSnapshot } from "~/server/navigation/snapshot";
+import type { RefreshStats } from "./stats";
+import type { RssAttemptOutcome, RssPublishedChunk } from "~/lib/rss";
 import {
   checkUserRefreshEligibilityForPlan,
   getUserPlanId,
 } from "~/server/subscriptions/helpers";
-import { feeds, user } from "~/server/db/schema";
+import { user } from "~/server/db/schema";
 import { workerPool } from "~/lib/workerPool";
-import { queryNavigationSnapshot } from "~/server/navigation/snapshot";
 
 export const BACKGROUND_USER_PAGE_SIZE = 25;
-export const BACKGROUND_FEED_PAGE_SIZE = 50;
+export const BACKGROUND_FEED_PAGE_SIZE = RSS_FEED_PAGE_SIZE;
 export const BACKGROUND_PLAN_CONCURRENCY = 4;
 
 type UserCandidate = {
   id: string;
   role: string | null;
 };
-
-type RefreshLifecycleChunk =
-  | { type: "refresh-start"; totalFeeds: number; nextRefreshAt: Date }
-  | { type: "navigation-snapshot"; snapshot: NavigationSnapshot }
-  | { type: "refresh-complete" };
 
 type RefreshEligibility =
   | { eligible: true; nextRefreshAt: Date }
@@ -43,7 +40,7 @@ type BackgroundRefreshDependencies = {
     isAdmin: boolean;
   }) => Promise<RefreshEligibility>;
   getPlanId?: (userId: string) => Promise<PlanId>;
-  publish: (channel: string, chunk: RefreshLifecycleChunk) => Promise<void>;
+  publish: (channel: string, chunk: RssPublishedChunk) => Promise<void>;
   refreshFeedPage?: (input: {
     db: typeof Database;
     feedsList: DatabaseFeed[];
@@ -61,22 +58,6 @@ export type BackgroundRefreshMetrics = RefreshStats & {
   maximumFeedPageSize: number;
   planConcurrency: number;
 };
-
-const EMPTY_STATS: RefreshStats = {
-  refreshedCount: 0,
-  skippedCount: 0,
-  emptyCount: 0,
-  errorCount: 0,
-  totalRowsWritten: 0,
-};
-
-function addRefreshStats(target: RefreshStats, source: RefreshStats) {
-  target.refreshedCount += source.refreshedCount;
-  target.skippedCount += source.skippedCount;
-  target.emptyCount += source.emptyCount;
-  target.errorCount += source.errorCount;
-  target.totalRowsWritten += source.totalRowsWritten;
-}
 
 async function getDueUserPage(
   db: typeof Database,
@@ -114,46 +95,11 @@ async function getDueUserPage(
     .all();
 }
 
-async function countDueFeeds(db: typeof Database, userId: string, now: Date) {
-  const result = await db
-    .select({ value: count() })
-    .from(feeds)
-    .where(
-      and(
-        eq(feeds.userId, userId),
-        eq(feeds.isActive, true),
-        or(lte(feeds.nextFetchAt, now), isNull(feeds.nextFetchAt)),
-      ),
-    )
-    .get();
-  return result?.value ?? 0;
-}
-
-async function getDueFeedPage(
-  db: typeof Database,
-  input: { userId: string; afterFeedId?: number; now: Date },
-) {
-  return db
-    .select()
-    .from(feeds)
-    .where(
-      and(
-        eq(feeds.userId, input.userId),
-        eq(feeds.isActive, true),
-        or(lte(feeds.nextFetchAt, input.now), isNull(feeds.nextFetchAt)),
-        input.afterFeedId ? gt(feeds.id, input.afterFeedId) : undefined,
-      ),
-    )
-    .orderBy(asc(feeds.id))
-    .limit(BACKGROUND_FEED_PAGE_SIZE)
-    .all();
-}
-
 export async function runBackgroundFeedRefresh(
   dependencies: BackgroundRefreshDependencies,
 ): Promise<BackgroundRefreshMetrics> {
   const metrics: BackgroundRefreshMetrics = {
-    ...EMPTY_STATS,
+    ...emptyRefreshStats(),
     userPages: 0,
     feedPages: 0,
     usersClaimed: 0,
@@ -207,10 +153,20 @@ export async function runBackgroundFeedRefresh(
         );
 
     for await (const { candidate, planId } of planCandidates) {
-      if (dependencies.billingEnabled && planId === "free") continue;
+      if (
+        automaticRssOwnerForPlan({
+          backgroundRefreshEnabled: true,
+          planId,
+          isAdmin: candidate.role === "admin",
+        }) !== "background-task"
+      ) {
+        continue;
+      }
 
       const channel = `user:${candidate.id}`;
       let refreshStarted = false;
+      let outcome: RssAttemptOutcome = "completed";
+      const userStats = emptyRefreshStats();
       try {
         const dueFeedCount = await countDueFeeds(
           dependencies.db,
@@ -256,23 +212,21 @@ export async function runBackgroundFeedRefresh(
             feedsList: feedPage,
             channel,
           });
+          addRefreshStats(userStats, pageStats);
           addRefreshStats(metrics, pageStats);
         }
-
-        await dependencies.publish(channel, {
-          type: "navigation-snapshot",
-          snapshot: await queryNavigationSnapshot({
-            database: dependencies.db,
-            userId: candidate.id,
-          }),
-        });
+        outcome = userStats.errorCount > 0 ? "partial" : "completed";
       } catch (error) {
+        outcome = "failed";
         metrics.errorCount++;
         dependencies.onUserError?.(error, candidate.id);
       } finally {
         if (refreshStarted) {
           try {
-            await dependencies.publish(channel, { type: "refresh-complete" });
+            await dependencies.publish(channel, {
+              type: "rss-attempt-complete",
+              ...rssAttemptSummary(userStats, outcome),
+            });
           } catch (error) {
             metrics.errorCount++;
             dependencies.onUserError?.(error, candidate.id);

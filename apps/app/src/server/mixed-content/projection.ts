@@ -8,16 +8,19 @@ import {
   queryFeedCandidates,
 } from "./projection/candidates";
 import { loadScopeData } from "./projection/scope";
+import type { ScopeData } from "./projection/scope";
 import type { ContentStatusFilter } from "~/lib/content-status";
 import type { db as defaultDatabase } from "~/server/db";
 import type { ApplicationFeedItem, DatabaseBookmark } from "~/server/db/schema";
-import { INBOX_VIEW_ID } from "~/lib/data/views/constants";
+import { UNCATEGORIZED_VIEW_ID } from "~/lib/data/views/constants";
 import { contentStatusUsesSectionOrder } from "~/lib/content-status";
 
 type MixedContentDatabase = typeof defaultDatabase;
 
 export type MixedContentScope =
-  { type: "view"; viewId: number } | { type: "tag"; tagId: number };
+  | { type: "view"; viewId: number }
+  | { type: "feed"; feedId: number }
+  | { type: "tag"; tagId: number };
 
 export type MixedContentEntityKind = "bookmark" | "feed-item";
 
@@ -65,6 +68,20 @@ export async function queryMixedContentPage(input: {
     throw new Error("Mixed-content page limit must be between 1 and 500");
   }
   const scopeData = await loadScopeData(input);
+  return queryResolvedMixedContentPage({ ...input, scopeData });
+}
+
+export async function queryResolvedMixedContentPage(input: {
+  database: MixedContentDatabase;
+  userId: string;
+  scope: MixedContentScope;
+  scopeData: ScopeData;
+  contentStatus: ContentStatusFilter;
+  sectionPlacement?: number | null;
+  cursor?: MixedContentCursor;
+  limit: number;
+}): Promise<MixedContentPage> {
+  const { scopeData } = input;
   if (!scopeData.valid) {
     return {
       references: [],
@@ -76,7 +93,7 @@ export async function queryMixedContentPage(input: {
   }
   const hasConfiguredSections =
     input.scope.type === "view" &&
-    input.scope.viewId !== INBOX_VIEW_ID &&
+    input.scope.viewId !== UNCATEGORIZED_VIEW_ID &&
     scopeData.sections.length > 0;
   const usesSectionOrder =
     hasConfiguredSections && contentStatusUsesSectionOrder(input.contentStatus);

@@ -21,7 +21,6 @@ import { useFeedItemValue } from "~/lib/data/store";
 import { useMediaQuery } from "~/lib/hooks/use-media-query";
 import { useShortcut } from "~/lib/hooks/useShortcut";
 import { SHORTCUT_KEYS } from "~/lib/constants/shortcuts";
-import { getDataSubscriptionClientId } from "~/lib/data/clientChannel";
 
 export function ContentActions({ contentID }: { contentID: string }) {
   const { view } = useView();
@@ -48,7 +47,6 @@ export function ContentActions({ contentID }: { contentID: string }) {
       id: video.id,
       feedId: video.feedId,
       isWatchLater: !video.isWatchLater,
-      clientId: getDataSubscriptionClientId(),
     });
   };
 
@@ -62,7 +60,6 @@ export function ContentActions({ contentID }: { contentID: string }) {
       id: video.id,
       feedId: video.feedId,
       isWatched: !video.isWatched,
-      clientId: getDataSubscriptionClientId(),
     });
   };
 

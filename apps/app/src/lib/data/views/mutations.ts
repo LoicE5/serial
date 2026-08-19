@@ -1,9 +1,13 @@
 import { useMutation } from "@tanstack/react-query";
 import { useFetchViews, useSetViews, viewsStore } from "./store";
-import { INBOX_VIEW_ID, INBOX_VIEW_PLACEMENT, useUpdateViewFilter } from ".";
+import {
+  UNCATEGORIZED_VIEW_ID,
+  UNCATEGORIZED_VIEW_PLACEMENT,
+  useUpdateViewFilter,
+} from ".";
 import type { ApplicationView } from "~/server/db/schema";
 import { orpc } from "~/lib/orpc";
-import { feedItemsStore, useRevalidateView } from "~/lib/data/store";
+import { feedItemsStore } from "~/lib/data/store";
 import { useFetchViewFeeds } from "~/lib/data/view-feeds/store";
 import { mixedContentStore } from "~/lib/data/mixed-content/store";
 import { bookmarksStore } from "~/lib/data/bookmarks/store";
@@ -14,7 +18,6 @@ export function useCreateViewMutation() {
   const setViews = useSetViews();
   const fetchViews = useFetchViews();
   const fetchViewFeeds = useFetchViewFeeds();
-  const revalidateView = useRevalidateView();
   const updateViewFilter = useUpdateViewFilter();
 
   return useMutation(
@@ -25,7 +28,6 @@ export function useCreateViewMutation() {
         await fetchViewFeeds();
 
         if (createdView) {
-          await revalidateView(createdView.id);
           updateViewFilter(createdView.id, viewsStore.getState().views);
         }
         await refreshNavigationSnapshotSafely();
@@ -68,7 +70,6 @@ export function useEditViewMutation() {
           mixedContentStore.getState().reprojectUpsert({
             bookmark,
             previousBookmark: undefined,
-            feedItems: feedItemsStore.getState().feedItemsDict,
             views: nextViews,
           });
         }
@@ -76,7 +77,6 @@ export function useEditViewMutation() {
         mixedContentStore.getState().reprojectFeedItems({
           itemIds: Object.keys(feedItems),
           feedItems,
-          bookmarks: bookmarksStore.getState().snapshot(),
           views: nextViews,
           feedCategories: feedCategoriesStore.getState().feedCategories,
         });
@@ -98,7 +98,7 @@ export function useDeleteViewMutation() {
         setViews([]);
         await fetchViews();
         await fetchViewFeeds();
-        updateViewFilter(INBOX_VIEW_ID, viewsStore.getState().views);
+        updateViewFilter(UNCATEGORIZED_VIEW_ID, viewsStore.getState().views);
         await refreshNavigationSnapshotSafely();
       },
     }),
@@ -106,12 +106,14 @@ export function useDeleteViewMutation() {
 }
 
 export function calculateViewsPlacement(views: ApplicationView[]) {
-  const inboxIndex = views.findIndex((view) => view.id === INBOX_VIEW_ID);
-  if (inboxIndex === -1) return views;
+  const uncategorizedIndex = views.findIndex(
+    (view) => view.id === UNCATEGORIZED_VIEW_ID,
+  );
+  if (uncategorizedIndex === -1) return views;
 
   return views.map((view, viewIndex) => ({
     ...view,
-    placement: inboxIndex - viewIndex + INBOX_VIEW_PLACEMENT,
+    placement: uncategorizedIndex - viewIndex + UNCATEGORIZED_VIEW_PLACEMENT,
   }));
 }
 

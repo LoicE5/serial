@@ -2,7 +2,6 @@
 
 import { Link } from "@tanstack/react-router";
 import clsx from "clsx";
-import { useAtomValue } from "jotai";
 import {
   ArchiveIcon,
   BookmarkCheckIcon,
@@ -11,14 +10,11 @@ import {
   SendIcon,
   Trash2Icon,
 } from "lucide-react";
+import { getBookmarkAddedAt } from "./itemDate";
 import type { ApplicationBookmark } from "~/server/mixed-content/projection";
-import type { ContentStatusFilter } from "~/lib/content-status";
-import { CONTENT_TYPE } from "~/lib/content/descriptor";
 import { KeyboardShortcutDisplay } from "~/components/ButtonWithShortcut";
 import { Button } from "~/components/ui/button";
-import { contentStatusFilterAtom } from "~/lib/data/atoms";
 import { useFeedItemsSetWatchLaterValueMutation } from "~/lib/data/feed-items/mutations";
-import { getDataSubscriptionClientId } from "~/lib/data/clientChannel";
 import { useFeeds as useFeedsArray } from "~/lib/data/feeds/store";
 import {
   useSaveToInstapaperMutation,
@@ -38,30 +34,8 @@ import {
 import { useDialogStore } from "~/components/feed/dialogStore";
 import { contentDestination } from "~/lib/data/content-items/resolver";
 import { REMOTE_IMAGE_PROPS } from "~/lib/remoteMedia";
-import {
-  contentStatusOrderDimension,
-  selectContentStatusOrderValue,
-} from "~/lib/content-status";
 
 export type ItemSize = "standard" | "large";
-type WatchedDatePrefix = "read" | "watched";
-
-function feedItemDatePresentation(
-  item: {
-    postedAt: Date;
-    isWatchLaterUpdatedAt?: Date | null;
-  },
-  contentStatus: ContentStatusFilter,
-) {
-  const orderDimension = contentStatusOrderDimension(contentStatus);
-  return {
-    displayDate:
-      orderDimension === "saved"
-        ? (item.isWatchLaterUpdatedAt ?? item.postedAt)
-        : item.postedAt,
-    shouldShowWatchedDate: orderDimension === "archived",
-  };
-}
 
 // Typography components for consistent styling across layouts
 
@@ -101,35 +75,16 @@ interface ItemMetaProps {
   author: string | undefined;
   feedName: string | undefined;
   postedAt: Date;
-  watchedAt?: Date | null;
-  showWatchedDate?: boolean;
-  watchedDatePrefix?: WatchedDatePrefix;
   className?: string;
 }
 
-function ItemMeta({
+export function ItemMeta({
   author,
   feedName,
   postedAt,
-  watchedAt,
-  showWatchedDate = false,
-  watchedDatePrefix = "watched",
   className,
 }: ItemMetaProps) {
-  const shouldUseWatchedDate = showWatchedDate && !!watchedAt;
-  const primaryDate = shouldUseWatchedDate ? watchedAt : postedAt;
-  const watchedDateLabel = watchedDatePrefix === "read" ? "Read" : "Watched";
-  const primaryDateText = shouldUseWatchedDate
-    ? `${watchedDateLabel} ${timeAgo(primaryDate)}`
-    : timeAgo(primaryDate);
-  const postedDateText = shouldUseWatchedDate
-    ? `Posted ${timeAgo(postedAt)}`
-    : undefined;
-  const metadataParts = [
-    author || feedName,
-    primaryDateText,
-    postedDateText,
-  ].filter(Boolean);
+  const metadataParts = [author || feedName, timeAgo(postedAt)].filter(Boolean);
 
   return (
     <p
@@ -144,12 +99,6 @@ function ItemMeta({
 }
 
 // Thumbnail components for consistent styling across layouts
-
-function getWatchedDatePrefix(item: {
-  contentType: "text" | "video";
-}): WatchedDatePrefix {
-  return item.contentType === CONTENT_TYPE.TEXT ? "read" : "watched";
-}
 
 type ThumbnailType =
   "horizontal-video" | "vertical-video" | "article" | "icon" | "none";
@@ -381,7 +330,6 @@ function ItemActions({
       id: item.id,
       feedId: item.feedId,
       isWatchLater: !item.isWatchLater,
-      clientId: getDataSubscriptionClientId(),
     });
   };
 
@@ -641,18 +589,13 @@ function BookmarkItemDisplay({
   onSelect?: () => void;
   grid: boolean;
 }) {
-  const contentStatusFilter = useAtomValue(contentStatusFilterAtom);
   const destination = contentDestination({
     entityKind: "bookmark",
     entity: bookmark,
   });
   const href = destination.href;
   const isLarge = size === "large";
-  const date = selectContentStatusOrderValue(contentStatusFilter, {
-    published: bookmark.publishedAt || bookmark.createdAt,
-    saved: bookmark.savedUpdatedAt,
-    archived: bookmark.readUpdatedAt,
-  });
+  const postedAt = getBookmarkAddedAt(bookmark);
 
   if (grid) {
     return (
@@ -687,7 +630,7 @@ function BookmarkItemDisplay({
               feedName={
                 bookmark.siteName ?? new URL(bookmark.sourceUrl).hostname
               }
-              postedAt={date}
+              postedAt={postedAt}
               className="pt-0.5"
             />
           </div>
@@ -744,7 +687,7 @@ function BookmarkItemDisplay({
           <ItemMeta
             author={bookmark.author ?? undefined}
             feedName={bookmark.siteName ?? new URL(bookmark.sourceUrl).hostname}
-            postedAt={date}
+            postedAt={postedAt}
           />
         </div>
       </Link>
@@ -773,7 +716,6 @@ function FeedItemDisplay({
   sectionItemType,
 }: ItemDisplayProps) {
   const feeds = useFeedsArray();
-  const contentStatusFilter = useAtomValue(contentStatusFilterAtom);
   const item = useFeedItemValue(contentId);
 
   if (!item) return null;
@@ -794,11 +736,6 @@ function FeedItemDisplay({
   const rel = shouldOpenInSerial ? undefined : "noopener noreferrer";
 
   const isLarge = size === "large";
-  const { displayDate, shouldShowWatchedDate } = feedItemDatePresentation(
-    item,
-    contentStatusFilter,
-  );
-  const watchedDatePrefix = getWatchedDatePrefix(item);
 
   return (
     <article
@@ -843,10 +780,7 @@ function FeedItemDisplay({
               <ItemMeta
                 author={item.author}
                 feedName={feed?.name}
-                postedAt={displayDate}
-                watchedAt={item.isWatchedUpdatedAt}
-                showWatchedDate={shouldShowWatchedDate}
-                watchedDatePrefix={watchedDatePrefix}
+                postedAt={item.postedAt}
                 className="pt-1"
               />
             </div>
@@ -863,10 +797,7 @@ function FeedItemDisplay({
               <ItemMeta
                 author={item.author}
                 feedName={feed?.name}
-                postedAt={displayDate}
-                watchedAt={item.isWatchedUpdatedAt}
-                showWatchedDate={shouldShowWatchedDate}
-                watchedDatePrefix={watchedDatePrefix}
+                postedAt={item.postedAt}
               />
             </div>
           </>
@@ -898,7 +829,6 @@ function FeedGridItemDisplay({
   sectionItemType,
 }: GridItemDisplayProps) {
   const feeds = useFeedsArray();
-  const contentStatusFilter = useAtomValue(contentStatusFilterAtom);
   const item = useFeedItemValue(contentId);
 
   if (!item) return null;
@@ -916,11 +846,6 @@ function FeedGridItemDisplay({
   const rel = shouldOpenInSerial ? undefined : "noopener noreferrer";
 
   const isLarge = size === "large";
-  const { displayDate, shouldShowWatchedDate } = feedItemDatePresentation(
-    item,
-    contentStatusFilter,
-  );
-  const watchedDatePrefix = getWatchedDatePrefix(item);
 
   return (
     <article
@@ -955,10 +880,7 @@ function FeedGridItemDisplay({
           <ItemMeta
             author={item.author}
             feedName={feed?.name}
-            postedAt={displayDate}
-            watchedAt={item.isWatchedUpdatedAt}
-            showWatchedDate={shouldShowWatchedDate}
-            watchedDatePrefix={watchedDatePrefix}
+            postedAt={item.postedAt}
             className="pt-0.5"
           />
         </div>

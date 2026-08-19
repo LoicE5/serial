@@ -4,11 +4,12 @@ import type { ApplicationBookmark } from "~/server/mixed-content/projection";
 import type { ContentStatusFilter } from "~/lib/content-status";
 import type { FeedItemListProjection } from "~/lib/data/feed-items/listProjection";
 import { contentStatusOrderDimension } from "~/lib/content-status";
+import { selectFeedItemOrderCoordinate } from "~/lib/data/feed-items/orderCoordinate";
 import { compareDescendingIds } from "~/lib/sortOrder";
 
 type ArchivedFeedItem = Pick<
   FeedItemListProjection,
-  "isWatchedUpdatedAt" | "postedAt"
+  "isWatchedUpdatedAt" | "isWatchLaterUpdatedAt" | "postedAt"
 >;
 
 type ArchivedBookmark = Pick<ApplicationBookmark, "readUpdatedAt">;
@@ -30,13 +31,21 @@ export function arrangeArchivedViewSection(input: {
     const rightFeedItem = input.feedItemsById[rightId];
     const leftArchivedAt =
       input.bookmarksById[leftId]?.readUpdatedAt.getTime() ??
-      leftFeedItem?.isWatchedUpdatedAt?.getTime() ??
-      leftFeedItem?.postedAt.getTime() ??
+      (leftFeedItem
+        ? selectFeedItemOrderCoordinate(
+            input.contentStatusFilter,
+            leftFeedItem,
+          ).getTime()
+        : undefined) ??
       0;
     const rightArchivedAt =
       input.bookmarksById[rightId]?.readUpdatedAt.getTime() ??
-      rightFeedItem?.isWatchedUpdatedAt?.getTime() ??
-      rightFeedItem?.postedAt.getTime() ??
+      (rightFeedItem
+        ? selectFeedItemOrderCoordinate(
+            input.contentStatusFilter,
+            rightFeedItem,
+          ).getTime()
+        : undefined) ??
       0;
 
     if (leftArchivedAt !== rightArchivedAt) {

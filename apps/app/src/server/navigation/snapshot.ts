@@ -2,7 +2,7 @@ import { and, eq, exists, inArray, not, or, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import type { db as defaultDatabase } from "~/server/db";
 import type {
-  ContentStatusAvailabilityKey,
+  ContentAvailability,
   ContentStatusFilter,
 } from "~/lib/content-status";
 import {
@@ -11,7 +11,7 @@ import {
   SAVED_ARCHIVED_CONTENT_STATUS,
   SAVED_UNREAD_CONTENT_STATUS,
 } from "~/lib/content-status";
-import { INBOX_VIEW_ID } from "~/lib/data/views/constants";
+import { UNCATEGORIZED_VIEW_ID } from "~/lib/data/views/constants";
 import { VIDEO_PLATFORMS } from "~/lib/data/feed-items/filters";
 import {
   CONTENT_FILTER_OPTION,
@@ -21,31 +21,22 @@ import {
 import {
   bookmarks,
   bookmarkTags,
-  bookmarkViews,
   contentCategories,
   feedCategories,
   feedItems,
   feeds,
-  user,
   viewCategories,
   viewFeeds,
   views,
 } from "~/server/db/schema";
-import {
-  bookmarkScopeCondition,
-  feedScopeCondition,
-} from "~/server/mixed-content/projection/scope";
+import { feedScopeCondition } from "~/server/mixed-content/projection/scope";
 
 type NavigationDatabase = typeof defaultDatabase;
 type SqlColumn = Parameters<typeof eq>[0];
 
-export type NavigationAvailability = Record<
-  ContentStatusAvailabilityKey,
-  boolean
->;
+export type NavigationAvailability = ContentAvailability;
 
 export type NavigationSnapshot = {
-  views: Record<number, NavigationAvailability>;
   tags: Record<number, NavigationAvailability>;
   feeds: Record<number, NavigationAvailability>;
   viewFeeds: Record<number, Record<number, NavigationAvailability>>;
@@ -53,9 +44,9 @@ export type NavigationSnapshot = {
 
 type AvailabilityRow = {
   id: number;
-  unread: number;
-  read: number;
-  later: number;
+  inboxUnread: number;
+  inboxArchived: number;
+  savedUnread: number;
   savedArchived: number;
 };
 
@@ -79,50 +70,33 @@ function hasAny(condition: SQL | undefined) {
   return sql<number>`CASE WHEN ${condition ?? sql`0`} THEN 1 ELSE 0 END`;
 }
 
-function availabilityProjection(
-  existsFor: (contentStatus: ContentStatusFilter) => SQL | undefined,
+function availabilitySelection(
+  contentStatusExists: (contentStatus: ContentStatusFilter) => SQL | undefined,
 ) {
   return {
-    unread: hasAny(existsFor(INBOX_UNREAD_CONTENT_STATUS)),
-    read: hasAny(existsFor(INBOX_ARCHIVED_CONTENT_STATUS)),
-    later: hasAny(existsFor(SAVED_UNREAD_CONTENT_STATUS)),
-    savedArchived: hasAny(existsFor(SAVED_ARCHIVED_CONTENT_STATUS)),
-  };
-}
-
-function normalizeAvailabilityRow(
-  row: Pick<AvailabilityRow, ContentStatusAvailabilityKey>,
-): NavigationAvailability {
-  return {
-    unread: Boolean(row.unread),
-    read: Boolean(row.read),
-    later: Boolean(row.later),
-    savedArchived: Boolean(row.savedArchived),
+    inboxUnread: hasAny(contentStatusExists(INBOX_UNREAD_CONTENT_STATUS)),
+    inboxArchived: hasAny(contentStatusExists(INBOX_ARCHIVED_CONTENT_STATUS)),
+    savedUnread: hasAny(contentStatusExists(SAVED_UNREAD_CONTENT_STATUS)),
+    savedArchived: hasAny(contentStatusExists(SAVED_ARCHIVED_CONTENT_STATUS)),
   };
 }
 
 function availabilityRecord(rows: AvailabilityRow[]) {
   return Object.fromEntries(
-    rows.map((row) => [row.id, normalizeAvailabilityRow(row)]),
+    rows.map((row) => [
+      row.id,
+      {
+        inbox: {
+          unread: Boolean(row.inboxUnread),
+          archived: Boolean(row.inboxArchived),
+        },
+        saved: {
+          unread: Boolean(row.savedUnread),
+          archived: Boolean(row.savedArchived),
+        },
+      },
+    ]),
   ) as Record<number, NavigationAvailability>;
-}
-
-function canonicalBookmarkExists(database: NavigationDatabase, userId: string) {
-  const normalizedFeedUrl = sql<string>`COALESCE(
-    ${feedItems.normalizedUrl},
-    ${feedItems.url}
-  )`;
-  return exists(
-    database
-      .select({ value: sql<number>`1` })
-      .from(bookmarks)
-      .where(
-        and(
-          eq(bookmarks.userId, userId),
-          eq(bookmarks.canonicalUrl, normalizedFeedUrl),
-        ),
-      ),
-  );
 }
 
 function feedCompatibleWithView() {
@@ -180,215 +154,9 @@ function feedExistsForViewFeed(input: {
             isRead: feedItems.isWatched,
             isSaved: feedItems.isWatchLater,
           }),
-          not(canonicalBookmarkExists(input.database, input.userId)),
         ),
       ),
   );
-}
-
-function feedExistsForView(input: {
-  database: NavigationDatabase;
-  userId: string;
-  contentStatus: ContentStatusFilter;
-  now: Date;
-}) {
-  const nowSeconds = Math.floor(input.now.getTime() / 1000);
-  const insideTimeWindow = or(
-    eq(views.daysWindow, 0),
-    sql`${feedItems.postedAt} >= (${nowSeconds} - (${views.daysWindow} * 86400))`,
-  );
-  const eligibleFeedItem = and(
-    eq(feeds.userId, input.userId),
-    contentFilterColumnAllowsDescriptor({
-      filter: views.contentFilter,
-      contentType: feedItems.contentType,
-      orientation: feedItems.orientation,
-    }),
-    insideTimeWindow,
-    contentStatusCondition({
-      contentStatus: input.contentStatus,
-      isRead: feedItems.isWatched,
-      isSaved: feedItems.isWatchLater,
-    }),
-    not(canonicalBookmarkExists(input.database, input.userId)),
-  );
-
-  const directMembershipItem = exists(
-    input.database
-      .select({ value: sql<number>`1` })
-      .from(viewFeeds)
-      // CROSS JOIN preserves the membership-first loop order in SQLite.
-      .crossJoin(feeds)
-      .crossJoin(feedItems)
-      .where(
-        and(
-          eq(viewFeeds.viewId, views.id),
-          eq(feeds.id, viewFeeds.feedId),
-          eq(feedItems.feedId, feeds.id),
-          eligibleFeedItem,
-        ),
-      ),
-  );
-  const tagMembershipItem = exists(
-    input.database
-      .select({ value: sql<number>`1` })
-      .from(viewCategories)
-      .crossJoin(feedCategories)
-      .crossJoin(feeds)
-      .crossJoin(feedItems)
-      .where(
-        and(
-          eq(viewCategories.viewId, views.id),
-          eq(feedCategories.categoryId, viewCategories.categoryId),
-          eq(feeds.id, feedCategories.feedId),
-          eq(feedItems.feedId, feeds.id),
-          eligibleFeedItem,
-        ),
-      ),
-  );
-
-  return or(directMembershipItem, tagMembershipItem);
-}
-
-function bookmarkExistsForView(input: {
-  database: NavigationDatabase;
-  userId: string;
-  contentStatus: ContentStatusFilter;
-  now: Date;
-}) {
-  const directMembership = exists(
-    input.database
-      .select({ value: sql<number>`1` })
-      .from(bookmarkViews)
-      .where(
-        and(
-          eq(bookmarkViews.viewId, views.id),
-          eq(bookmarkViews.bookmarkId, bookmarks.id),
-        ),
-      ),
-  );
-  const tagMembership = exists(
-    input.database
-      .select({ value: sql<number>`1` })
-      .from(bookmarkTags)
-      .innerJoin(
-        viewCategories,
-        eq(viewCategories.categoryId, bookmarkTags.tagId),
-      )
-      .where(
-        and(
-          eq(viewCategories.viewId, views.id),
-          eq(bookmarkTags.bookmarkId, bookmarks.id),
-        ),
-      ),
-  );
-  const nowSeconds = Math.floor(input.now.getTime() / 1000);
-  const insideTimeWindow = or(
-    eq(views.daysWindow, 0),
-    sql`${bookmarks.createdAt} >= (${nowSeconds} - (${views.daysWindow} * 86400))`,
-  );
-
-  return exists(
-    input.database
-      .select({ value: sql<number>`1` })
-      .from(bookmarks)
-      .where(
-        and(
-          eq(bookmarks.userId, input.userId),
-          or(directMembership, tagMembership),
-          contentFilterColumnAllowsDescriptor({
-            filter: views.contentFilter,
-            contentType: bookmarks.contentType,
-            orientation: bookmarks.orientation,
-          }),
-          insideTimeWindow,
-          contentStatusCondition({
-            contentStatus: input.contentStatus,
-            isRead: bookmarks.isRead,
-            isSaved: bookmarks.isSaved,
-          }),
-        ),
-      ),
-  );
-}
-
-async function queryViewAvailability(input: {
-  database: NavigationDatabase;
-  userId: string;
-  now: Date;
-}) {
-  const contentStatusExists = (contentStatus: ContentStatusFilter) =>
-    or(
-      feedExistsForView({ ...input, contentStatus }),
-      bookmarkExistsForView({ ...input, contentStatus }),
-    );
-  const customViewRows = await input.database
-    .select({
-      id: views.id,
-      ...availabilityProjection(contentStatusExists),
-    })
-    .from(views)
-    .where(eq(views.userId, input.userId));
-
-  const inboxScope = {
-    database: input.database,
-    userId: input.userId,
-    scope: { type: "view" as const, viewId: INBOX_VIEW_ID },
-    scopeData: {
-      valid: true,
-      targetView: null,
-      categoryIds: [],
-      directFeedIds: [],
-      sections: [],
-    },
-  };
-  const inboxContentStatusExists = (contentStatus: ContentStatusFilter) =>
-    or(
-      exists(
-        input.database
-          .select({ value: sql<number>`1` })
-          .from(feedItems)
-          .innerJoin(feeds, eq(feeds.id, feedItems.feedId))
-          .where(
-            and(
-              eq(feeds.userId, input.userId),
-              feedScopeCondition(inboxScope),
-              contentStatusCondition({
-                contentStatus,
-                isRead: feedItems.isWatched,
-                isSaved: feedItems.isWatchLater,
-              }),
-              not(canonicalBookmarkExists(input.database, input.userId)),
-            ),
-          ),
-      ),
-      exists(
-        input.database
-          .select({ value: sql<number>`1` })
-          .from(bookmarks)
-          .where(
-            and(
-              eq(bookmarks.userId, input.userId),
-              bookmarkScopeCondition(inboxScope),
-              contentStatusCondition({
-                contentStatus,
-                isRead: bookmarks.isRead,
-                isSaved: bookmarks.isSaved,
-              }),
-            ),
-          ),
-      ),
-    );
-  const inboxRows = await input.database
-    .select({
-      id: sql<number>`${INBOX_VIEW_ID}`,
-      ...availabilityProjection(inboxContentStatusExists),
-    })
-    .from(user)
-    .where(eq(user.id, input.userId))
-    .limit(1);
-
-  return availabilityRecord([...customViewRows, ...inboxRows]);
 }
 
 async function queryTagAvailability(input: {
@@ -411,7 +179,6 @@ async function queryTagAvailability(input: {
               isRead: feedItems.isWatched,
               isSaved: feedItems.isWatchLater,
             }),
-            not(canonicalBookmarkExists(input.database, input.userId)),
           ),
         ),
     );
@@ -439,11 +206,22 @@ async function queryTagAvailability(input: {
   const rows = await input.database
     .select({
       id: contentCategories.id,
-      ...availabilityProjection(contentStatusExists),
+      ...availabilitySelection(contentStatusExists),
     })
     .from(contentCategories)
     .where(eq(contentCategories.userId, input.userId));
   return availabilityRecord(rows);
+}
+
+async function queryViewIds(input: {
+  database: NavigationDatabase;
+  userId: string;
+}) {
+  const rows = await input.database
+    .select({ id: views.id })
+    .from(views)
+    .where(eq(views.userId, input.userId));
+  return [UNCATEGORIZED_VIEW_ID, ...rows.map(({ id }) => id)];
 }
 
 async function queryFeedAvailability(input: {
@@ -469,18 +247,18 @@ async function queryFeedAvailability(input: {
   const rows = await input.database
     .select({
       id: feeds.id,
-      ...availabilityProjection(contentStatusExists),
+      ...availabilitySelection(contentStatusExists),
     })
     .from(feeds)
     .where(eq(feeds.userId, input.userId));
   return availabilityRecord(rows);
 }
 
-function buildInboxScope(database: NavigationDatabase, userId: string) {
+function buildUncategorizedScope(database: NavigationDatabase, userId: string) {
   return {
     database,
     userId,
-    scope: { type: "view" as const, viewId: INBOX_VIEW_ID },
+    scope: { type: "view" as const, viewId: UNCATEGORIZED_VIEW_ID },
     scopeData: {
       valid: true,
       targetView: null,
@@ -548,18 +326,21 @@ async function queryCustomViewFeedAvailability(input: {
       id: feeds.id,
       viewId: views.id,
       feedId: feeds.id,
-      ...availabilityProjection(contentStatusExists),
+      ...availabilitySelection(contentStatusExists),
     })
     .from(views)
     .innerJoin(feeds, and(eq(feeds.userId, input.userId), belongsToView))
     .where(eq(views.userId, input.userId));
 }
 
-async function queryInboxViewFeedAvailability(input: {
+async function queryUncategorizedViewFeedAvailability(input: {
   database: NavigationDatabase;
   userId: string;
 }) {
-  const inboxScope = buildInboxScope(input.database, input.userId);
+  const uncategorizedScope = buildUncategorizedScope(
+    input.database,
+    input.userId,
+  );
   const contentStatusExists = (contentStatus: ContentStatusFilter) =>
     exists(
       input.database
@@ -573,7 +354,6 @@ async function queryInboxViewFeedAvailability(input: {
               isRead: feedItems.isWatched,
               isSaved: feedItems.isWatchLater,
             }),
-            not(canonicalBookmarkExists(input.database, input.userId)),
           ),
         ),
     );
@@ -581,12 +361,17 @@ async function queryInboxViewFeedAvailability(input: {
   return input.database
     .select({
       id: feeds.id,
-      viewId: sql<number>`${INBOX_VIEW_ID}`,
+      viewId: sql<number>`${UNCATEGORIZED_VIEW_ID}`,
       feedId: feeds.id,
-      ...availabilityProjection(contentStatusExists),
+      ...availabilitySelection(contentStatusExists),
     })
     .from(feeds)
-    .where(and(eq(feeds.userId, input.userId), feedScopeCondition(inboxScope)));
+    .where(
+      and(
+        eq(feeds.userId, input.userId),
+        feedScopeCondition(uncategorizedScope),
+      ),
+    );
 }
 
 function viewFeedAvailabilityRecord(
@@ -600,7 +385,16 @@ function viewFeedAvailabilityRecord(
 
   for (const row of rows) {
     result[row.viewId] ??= {};
-    result[row.viewId]![row.feedId] = normalizeAvailabilityRow(row);
+    result[row.viewId]![row.feedId] = {
+      inbox: {
+        unread: Boolean(row.inboxUnread),
+        archived: Boolean(row.inboxArchived),
+      },
+      saved: {
+        unread: Boolean(row.savedUnread),
+        archived: Boolean(row.savedArchived),
+      },
+    };
   }
   return result;
 }
@@ -612,25 +406,24 @@ export async function queryNavigationSnapshot(input: {
 }): Promise<NavigationSnapshot> {
   const now = input.now ?? new Date();
   const [
-    viewAvailability,
+    viewIds,
     tagAvailability,
     feedAvailability,
     customViewFeedAvailability,
-    inboxViewFeedAvailability,
+    uncategorizedViewFeedAvailability,
   ] = await Promise.all([
-    queryViewAvailability({ ...input, now }),
+    queryViewIds(input),
     queryTagAvailability(input),
     queryFeedAvailability(input),
     queryCustomViewFeedAvailability({ ...input, now }),
-    queryInboxViewFeedAvailability(input),
+    queryUncategorizedViewFeedAvailability(input),
   ]);
   return {
-    views: viewAvailability,
     tags: tagAvailability,
     feeds: feedAvailability,
-    viewFeeds: viewFeedAvailabilityRecord(
-      Object.keys(viewAvailability).map(Number),
-      [...customViewFeedAvailability, ...inboxViewFeedAvailability],
-    ),
+    viewFeeds: viewFeedAvailabilityRecord(viewIds, [
+      ...customViewFeedAvailability,
+      ...uncategorizedViewFeedAvailability,
+    ]),
   };
 }

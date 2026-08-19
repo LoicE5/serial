@@ -45,7 +45,7 @@ import {
   useBulkRemoveViewFeedMutation,
 } from "~/lib/data/view-feeds/mutations";
 import { useViews } from "~/lib/data/views";
-import { INBOX_VIEW_ID } from "~/lib/data/views/constants";
+import { UNCATEGORIZED_VIEW_ID } from "~/lib/data/views/constants";
 import { useQuickCreateViewMutation } from "~/lib/data/views/mutations";
 import { IS_DEMO_INSTANCE } from "~/lib/demo";
 import { useShiftSelect } from "~/lib/hooks/useShiftSelect";
@@ -152,7 +152,7 @@ function ManageFeedsPage() {
   const viewNamesMap = useMemo(() => {
     const map = new Map<number, string>();
     views
-      .filter((v) => v.id !== INBOX_VIEW_ID)
+      .filter((v) => v.id !== UNCATEGORIZED_VIEW_ID)
       .forEach((v) => {
         map.set(v.id, v.name);
       });
@@ -161,7 +161,7 @@ function ManageFeedsPage() {
 
   const customViewOptions = useMemo(() => {
     return views
-      .filter((v) => v.id !== INBOX_VIEW_ID)
+      .filter((v) => v.id !== UNCATEGORIZED_VIEW_ID)
       .map((v) => ({ id: v.id, label: v.name }));
   }, [views]);
 

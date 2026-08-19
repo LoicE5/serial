@@ -6,12 +6,11 @@ import { assign, createActor, setup } from "xstate";
 // ---------------------------------------------------------------------------
 
 type LoadingMachineEvent =
-  // Initial load (app opens, SSE delivers metadata + items)
+  // Initial reconciliation
   | { type: "INITIAL_LOAD_START" }
-  | { type: "METADATA_LOADED" }
-  | { type: "INITIAL_DATA_COMPLETE" }
+  | { type: "RECONCILIATION_COMPLETE" }
 
-  // Background RSS refresh (server fetches RSS after initial-data-complete)
+  // Background RSS refresh
   | { type: "BACKGROUND_REFRESH_START"; totalFeeds: number }
   | { type: "BACKGROUND_REFRESH_COMPLETE" }
 
@@ -27,6 +26,7 @@ type LoadingMachineEvent =
 
   // Import (OPML / CSV feed import)
   | { type: "IMPORT_START"; totalFeeds: number }
+  | { type: "IMPORT_COMPLETE" }
   | { type: "IMPORT_FEED_ERROR"; feedUrl: string }
   | {
       type: "IMPORT_LIMIT_WARNING";
@@ -167,7 +167,7 @@ export const loadingMachine = setup({
     // -----------------------------------------------------------------
     initialLoad: {
       on: {
-        INITIAL_DATA_COMPLETE: { target: "idle" },
+        RECONCILIATION_COMPLETE: { target: "idle" },
         // Import can interrupt initial load
         IMPORT_START: {
           target: "importing",
@@ -213,12 +213,12 @@ export const loadingMachine = setup({
 
     // -----------------------------------------------------------------
     // Manual refresh — user clicked the refresh button.
-    // Waits for metadata + diffs (INITIAL_DATA_COMPLETE → idle), then
+    // Waits for reconciliation parity, then
     // if RSS is eligible the server sends BACKGROUND_REFRESH_START.
     // -----------------------------------------------------------------
     manualRefresh: {
       on: {
-        INITIAL_DATA_COMPLETE: { target: "idle" },
+        RECONCILIATION_COMPLETE: { target: "idle" },
         BACKGROUND_REFRESH_START: {
           target: "backgroundRefresh",
           actions: assign({
@@ -277,7 +277,7 @@ export const loadingMachine = setup({
             importMaxActiveFeeds: ({ event }) => event.maxActiveFeeds,
           }),
         },
-        INITIAL_DATA_COMPLETE: { target: "idle" },
+        IMPORT_COMPLETE: { target: "idle" },
         RESET: { target: "idle" },
       },
     },
@@ -289,6 +289,18 @@ export const loadingMachine = setup({
 // ---------------------------------------------------------------------------
 
 export const loadingActor = createActor(loadingMachine).start();
+
+export function updateRefreshCooldown(nextRefreshAt: Date | null) {
+  const raw = nextRefreshAt?.getTime();
+  const millisecondsPerMinute = 60_000;
+  loadingActor.send({
+    type: "REFRESH_COOLDOWN_UPDATE",
+    nextRefreshAt:
+      raw === undefined
+        ? null
+        : Math.ceil(raw / millisecondsPerMinute) * millisecondsPerMinute,
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Discriminated union consumed by UI components

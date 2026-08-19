@@ -1,26 +1,22 @@
 import { MemoryPublisher } from "@orpc/experimental-publisher/memory";
-import type {
-  GetByViewChunk,
-  GetItemsByCategoryIdChunk,
-  GetItemsByContentStatusChunk,
-  GetItemsByFeedChunk,
-  RevalidateViewChunk,
-} from "./routers/initialRouter";
-import type {
-  BookmarkSyncChunk,
-  MixedContentChunk,
-} from "~/server/mixed-content/sync";
+import type { BookmarkPublishedChunk } from "~/server/mixed-content/events";
+import type { RssPublishedChunk } from "~/lib/rss";
+import type { ReconciliationInvalidationSummary } from "~/lib/reconciliation";
 import { env } from "~/env";
 import { logError, logMessage } from "~/server/logger";
 
+type DataPublishedChunk =
+  | { source: "bookmark"; chunk: BookmarkPublishedChunk }
+  | { source: "rss"; chunk: RssPublishedChunk };
+
 export type PublishedChunk =
-  | { source: "initial"; chunk: GetByViewChunk }
-  | { source: "revalidate"; chunk: RevalidateViewChunk }
-  | { source: "content-status"; chunk: GetItemsByContentStatusChunk }
-  | { source: "feed"; chunk: GetItemsByFeedChunk }
-  | { source: "category"; chunk: GetItemsByCategoryIdChunk }
-  | { source: "bookmark"; chunk: BookmarkSyncChunk }
-  | { source: "mixed"; chunk: MixedContentChunk };
+  | (DataPublishedChunk & {
+      invalidation?: ReconciliationInvalidationSummary;
+    })
+  | {
+      source: "invalidation";
+      chunk: ReconciliationInvalidationSummary;
+    };
 
 const RESUME_RETENTION_SECONDS = 60 * 2;
 const REDIS_KEY_PREFIX = "serial:pub:";

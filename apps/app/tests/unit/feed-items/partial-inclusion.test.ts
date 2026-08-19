@@ -16,7 +16,7 @@ import {
   buildViewCategoryFilter,
   isFeedCompatibleWithContentFilter,
 } from "~/lib/data/feed-items/filters";
-import { INBOX_VIEW_ID } from "~/lib/data/views/constants";
+import { UNCATEGORIZED_VIEW_ID } from "~/lib/data/views/constants";
 
 // ---------- buildViewCategoryFilter (server) ----------
 
@@ -106,7 +106,7 @@ function makeView(
   } as unknown as ApplicationView;
 }
 
-const uncategorizedView = makeView(INBOX_VIEW_ID);
+const uncategorizedView = makeView(UNCATEGORIZED_VIEW_ID);
 
 // Convenience wrapper that supplies sensible defaults for the production
 // filter. Callers may still pass `feeds` for fixture clarity (e.g. to make
@@ -205,7 +205,7 @@ describe("doesFeedItemPassFilters – Uncategorized View", () => {
     // Realistic Uncategorized View: carries the set of unassigned category ids,
     // i.e. categories NOT assigned to any custom view. Category 100 is in
     // customView, so it is not in Uncategorized's categoryIds.
-    const realisticUncategorized = makeView(INBOX_VIEW_ID, {
+    const realisticUncategorized = makeView(UNCATEGORIZED_VIEW_ID, {
       categoryIds: [200],
     });
 
@@ -448,7 +448,7 @@ describe("buildViewCategoryFilter – server", () => {
 
   describe("Uncategorized View", () => {
     it("includes uncategorized feeds and excludes feeds visible in a compatible custom view", () => {
-      const inbox = makeView(INBOX_VIEW_ID, { categoryIds: [200] });
+      const inbox = makeView(UNCATEGORIZED_VIEW_ID, { categoryIds: [200] });
       const customView = makeView(10, {
         categoryIds: [100],
         contentFilter: 7,
@@ -476,7 +476,7 @@ describe("buildViewCategoryFilter – server", () => {
     });
 
     it("excludes feeds directly assigned to a compatible custom view", () => {
-      const inbox = makeView(INBOX_VIEW_ID, { categoryIds: [200] });
+      const inbox = makeView(UNCATEGORIZED_VIEW_ID, { categoryIds: [200] });
       const customView = makeView(10, { feedIds: [1], contentFilter: 7 });
       const feeds = [makeFeed(1, "youtube"), makeFeed(2, "website")];
       const sql = buildViewCategoryFilter(
@@ -495,7 +495,7 @@ describe("buildViewCategoryFilter – server", () => {
 
     it("does NOT exclude feeds directly assigned to an incompatible custom view (regression: #2)", () => {
       // Website Feed assigned to a video-only View should stay in Uncategorized.
-      const inbox = makeView(INBOX_VIEW_ID, { categoryIds: [200] });
+      const inbox = makeView(UNCATEGORIZED_VIEW_ID, { categoryIds: [200] });
       const videoView = makeView(10, {
         feedIds: [1],
         contentFilter: 2,
@@ -514,7 +514,7 @@ describe("buildViewCategoryFilter – server", () => {
     });
 
     it("excludes a directly-assigned feed when at least one assigning view is compatible", () => {
-      const inbox = makeView(INBOX_VIEW_ID, { categoryIds: [200] });
+      const inbox = makeView(UNCATEGORIZED_VIEW_ID, { categoryIds: [200] });
       const incompatible = makeView(10, {
         feedIds: [1],
         contentFilter: 4,

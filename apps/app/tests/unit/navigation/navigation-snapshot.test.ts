@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createBookmarkTestDatabase } from "../bookmarks/database";
-import { INBOX_VIEW_ID } from "~/lib/data/views/constants";
+import { UNCATEGORIZED_VIEW_ID } from "~/lib/data/views/constants";
 import {
   bookmarks,
   bookmarkTags,
@@ -87,7 +87,58 @@ beforeEach(async () => {
 afterEach(() => cleanup());
 
 describe("navigation snapshot", () => {
-  it("reports complete View, Tag, global Feed, and per-View Feed availability without loading content pages", async () => {
+  it("keeps Feed availability when a matching Bookmark has different status", async () => {
+    await seedFeed(1);
+    await database.insert(views).values({
+      id: 20,
+      userId: "navigation-user",
+      name: "Independent rows",
+      contentFilter: 3,
+      daysWindow: 0,
+      layout: "list",
+    });
+    await database.insert(viewFeeds).values({ viewId: 20, feedId: 1 });
+    await database.insert(feedItems).values({
+      id: "matching-feed-item",
+      feedId: 1,
+      contentId: "matching-feed-item",
+      contentType: "text",
+      title: "Matching Feed item",
+      author: "Author",
+      url: "https://items.example/shared",
+      normalizedUrl: "https://items.example/shared",
+      postedAt: NOW,
+      createdAt: NOW,
+      updatedAt: NOW,
+      isWatched: false,
+      isWatchLater: false,
+    });
+    await database.insert(bookmarks).values({
+      id: "matching-bookmark",
+      userId: "navigation-user",
+      sourceUrl: "https://items.example/shared",
+      canonicalUrl: "https://items.example/shared",
+      title: "Matching Bookmark",
+      contentType: "text",
+      isSaved: true,
+      isRead: true,
+      createdAt: NOW,
+      savedUpdatedAt: NOW,
+      readUpdatedAt: NOW,
+      progressUpdatedAt: NOW,
+      updatedAt: NOW,
+    });
+
+    const snapshot = await queryNavigationSnapshot({
+      database,
+      userId: "navigation-user",
+      now: NOW,
+    });
+
+    expect(snapshot.viewFeeds[20]?.[1]?.inbox.unread).toBe(true);
+  });
+
+  it("reports Tag, global Feed, and per-View Feed availability without loading content pages", async () => {
     await Promise.all([
       seedFeed(1),
       seedFeed(2),
@@ -161,54 +212,57 @@ describe("navigation snapshot", () => {
       now: NOW,
     });
 
-    expect(snapshot.views[21]).toEqual({
-      unread: true,
-      read: true,
-      later: false,
-      savedArchived: false,
-    });
-    expect(snapshot.views[22]).toEqual({
-      unread: false,
-      read: false,
-      later: false,
-      savedArchived: false,
-    });
-    expect(snapshot.views[INBOX_VIEW_ID]).toEqual({
-      unread: true,
-      read: false,
-      later: true,
-      savedArchived: false,
-    });
+    expect(snapshot).not.toHaveProperty("views");
     expect(snapshot.tags[11]).toEqual({
-      unread: true,
-      read: true,
-      later: false,
-      savedArchived: false,
+      inbox: { unread: true, archived: true },
+      saved: { unread: false, archived: false },
     });
     expect(snapshot.tags[12]).toEqual({
-      unread: false,
-      read: false,
-      later: false,
-      savedArchived: false,
+      inbox: { unread: false, archived: false },
+      saved: { unread: false, archived: false },
     });
     expect(snapshot.feeds).toEqual({
-      1: { unread: true, read: false, later: false, savedArchived: false },
-      2: { unread: false, read: true, later: false, savedArchived: false },
-      3: { unread: false, read: false, later: true, savedArchived: false },
-      4: { unread: false, read: false, later: false, savedArchived: false },
+      1: {
+        inbox: { unread: true, archived: false },
+        saved: { unread: false, archived: false },
+      },
+      2: {
+        inbox: { unread: false, archived: true },
+        saved: { unread: false, archived: false },
+      },
+      3: {
+        inbox: { unread: false, archived: false },
+        saved: { unread: true, archived: false },
+      },
+      4: {
+        inbox: { unread: false, archived: false },
+        saved: { unread: false, archived: false },
+      },
     });
     expect(snapshot.viewFeeds[21]).toEqual({
-      2: { unread: false, read: true, later: false, savedArchived: false },
-      4: { unread: false, read: false, later: false, savedArchived: false },
+      2: {
+        inbox: { unread: false, archived: true },
+        saved: { unread: false, archived: false },
+      },
+      4: {
+        inbox: { unread: false, archived: false },
+        saved: { unread: false, archived: false },
+      },
     });
     expect(snapshot.viewFeeds[22]).toEqual({});
-    expect(snapshot.viewFeeds[INBOX_VIEW_ID]).toEqual({
-      1: { unread: true, read: false, later: false, savedArchived: false },
-      3: { unread: false, read: false, later: true, savedArchived: false },
+    expect(snapshot.viewFeeds[UNCATEGORIZED_VIEW_ID]).toEqual({
+      1: {
+        inbox: { unread: true, archived: false },
+        saved: { unread: false, archived: false },
+      },
+      3: {
+        inbox: { unread: false, archived: false },
+        saved: { unread: true, archived: false },
+      },
     });
   });
 
-  it("applies each View's time and content filters while keeping Feed availability global", async () => {
+  it("keeps Feed availability global while preserving per-View Feed filters", async () => {
     await seedFeed(1);
     await database.update(feeds).set({ platform: "youtube" });
     await database.insert(feedItems).values([
@@ -289,13 +343,10 @@ describe("navigation snapshot", () => {
       now: NOW,
     });
 
-    expect(snapshot.views[30]?.unread).toBe(false);
-    expect(snapshot.views[32]?.unread).toBe(true);
-    expect(snapshot.views[33]?.unread).toBe(true);
-    expect(snapshot.feeds[1]?.unread).toBe(true);
+    expect(snapshot.feeds[1]?.inbox.unread).toBe(true);
   });
 
-  it("derives View availability from direct and Tag memberships without leaking ownership or duplicate paths", async () => {
+  it("omits the former View projection without ownership leaks", async () => {
     await database.insert(user).values({
       id: "other-user",
       name: "Other User",
@@ -419,36 +470,9 @@ describe("navigation snapshot", () => {
       now: NOW,
     });
 
-    expect(snapshot.views[40]).toEqual({
-      unread: true,
-      read: true,
-      later: true,
-      savedArchived: true,
-    });
-    expect(snapshot.views[41]).toEqual({
-      unread: true,
-      read: false,
-      later: false,
-      savedArchived: true,
-    });
-    expect(snapshot.views[42]).toEqual({
-      unread: true,
-      read: false,
-      later: false,
-      savedArchived: true,
-    });
-    expect(snapshot.views[43]).toEqual({
-      unread: false,
-      read: false,
-      later: false,
-      savedArchived: false,
-    });
-    expect(snapshot.views[44]).toEqual({
-      unread: false,
-      read: false,
-      later: false,
-      savedArchived: false,
-    });
+    expect(snapshot).not.toHaveProperty("views");
+    expect(snapshot.viewFeeds[40]?.[40]?.inbox.unread).toBe(true);
+    expect(snapshot.viewFeeds[44]?.[44]).toBeUndefined();
   });
 
   it("reports Saved availability independently for unread and archived content", async () => {
@@ -494,10 +518,10 @@ describe("navigation snapshot", () => {
       now: NOW,
     });
 
-    expect(snapshot.views[31]?.later).toBe(false);
-    expect(snapshot.views[31]?.savedArchived).toBe(true);
-    expect(snapshot.viewFeeds[31]?.[1]?.later).toBe(false);
-    expect(snapshot.viewFeeds[31]?.[1]?.savedArchived).toBe(true);
+    expect(snapshot.viewFeeds[31]?.[1]?.saved).toEqual({
+      unread: false,
+      archived: true,
+    });
 
     await database
       .update(feedItems)
@@ -510,10 +534,10 @@ describe("navigation snapshot", () => {
       now: NOW,
     });
 
-    expect(snapshot.views[31]?.later).toBe(true);
-    expect(snapshot.views[31]?.savedArchived).toBe(true);
-    expect(snapshot.viewFeeds[31]?.[1]?.later).toBe(true);
-    expect(snapshot.viewFeeds[31]?.[1]?.savedArchived).toBe(false);
+    expect(snapshot.viewFeeds[31]?.[1]?.saved).toEqual({
+      unread: true,
+      archived: false,
+    });
 
     await database
       .update(feedItems)
@@ -530,9 +554,9 @@ describe("navigation snapshot", () => {
       now: NOW,
     });
 
-    expect(snapshot.views[31]?.later).toBe(true);
-    expect(snapshot.views[31]?.savedArchived).toBe(true);
-    expect(snapshot.viewFeeds[31]?.[1]?.later).toBe(false);
-    expect(snapshot.viewFeeds[31]?.[1]?.savedArchived).toBe(true);
+    expect(snapshot.viewFeeds[31]?.[1]?.saved).toEqual({
+      unread: false,
+      archived: true,
+    });
   });
 });

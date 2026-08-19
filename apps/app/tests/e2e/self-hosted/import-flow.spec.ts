@@ -378,8 +378,12 @@ test.describe("full user lifecycle", () => {
 
     await firstArticle.click();
 
-    // Verify article page loaded
-    await expect(page.locator("h1").first()).toBeVisible({ timeout: 10000 });
+    // Verify the reader route and its controls loaded. The article's h1 may be
+    // intentionally hidden when the extracted content begins with a title.
+    await expect(page).toHaveURL(/\/read\//, { timeout: 10000 });
+    await expect(page.getByRole("button", { name: "Archive" })).toBeVisible({
+      timeout: 10000,
+    });
 
     // Scroll to generate progress
     for (let i = 0; i < 5; i++) {

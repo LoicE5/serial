@@ -6,11 +6,7 @@ import {
   feedFilterAtom,
   viewFilterAtom,
 } from "../atoms";
-import {
-  feedItemsStore,
-  getFeedItemScopeKey,
-  useFeedItemsListProjection,
-} from "../store";
+import { feedItemsStore, useFeedItemsListProjection } from "../store";
 import { useFeedCategories } from "../feed-categories/store";
 import { useCustomViewsData, useViews } from "../views";
 import { getMixedScopeKey, mixedContentStore } from "../mixed-content/store";
@@ -19,18 +15,12 @@ import { projectLocalMixedContentOrder } from "../mixed-content/bookmarkProjecti
 import {
   createFeedItemFilterIndex,
   createFeedItemFilterPredicate,
-  getItemSectionPlacement,
 } from "./listProjection";
 import type { ApplicationFeedItem, ApplicationView } from "~/server/db/schema";
 import type { FeedItemFilterIndex } from "./listProjection";
-import type { PaginationCursor } from "~/server/api/routers/initialRouter";
 import type { ContentStatusFilter } from "~/lib/content-status";
+import { contentStatusOrderDimension } from "~/lib/content-status";
 import {
-  buildContentStatusKey,
-  contentStatusOrderDimension,
-} from "~/lib/content-status";
-import {
-  compareSavedOrderCoordinates,
   sortFeedItemsOrderByDate,
   sortFeedItemsOrderBySavedAt,
   sortFeedItemsOrderBySectionThenDate,
@@ -46,62 +36,6 @@ export {
   hasFeedItemListProjectionChanged,
 } from "./listProjection";
 export { mergeFeedItem } from "./mergeFeedItem";
-
-function isItemOlderThanCursor(
-  item: ApplicationFeedItem,
-  cursor: PaginationCursor,
-  contentStatusFilter: ContentStatusFilter,
-  sectionPlacement?: number,
-): boolean {
-  if (!cursor) return false;
-
-  const orderDimension = contentStatusOrderDimension(contentStatusFilter);
-
-  // Sectioned views are ordered by placement asc, then postedAt/id desc.
-  if (
-    orderDimension !== "archived" &&
-    cursor.placement !== undefined &&
-    sectionPlacement !== undefined
-  ) {
-    if (sectionPlacement > cursor.placement) {
-      return true;
-    }
-    if (sectionPlacement < cursor.placement) {
-      return false;
-    }
-  }
-
-  // Archived ordering takes precedence over save status.
-  if (orderDimension === "archived") {
-    const itemWatchedTime =
-      item.isWatchedUpdatedAt?.getTime() ?? item.postedAt.getTime();
-    const cursorWatchedTime =
-      cursor.isWatchedUpdatedAt?.getTime() ?? cursor.postedAt.getTime();
-
-    if (itemWatchedTime < cursorWatchedTime) {
-      return true;
-    }
-    if (itemWatchedTime === cursorWatchedTime) {
-      return item.id < cursor.id;
-    }
-    return false;
-  }
-
-  if (orderDimension === "saved") {
-    return compareSavedOrderCoordinates(item, cursor) > 0;
-  }
-
-  const itemTime = item.postedAt.getTime();
-  const cursorTime = cursor.postedAt.getTime();
-
-  if (itemTime < cursorTime) {
-    return true;
-  }
-  if (itemTime === cursorTime && item.id < cursor.id) {
-    return true;
-  }
-  return false;
-}
 
 function getActiveFeedItemsSort({
   feedItemsDict,
@@ -148,7 +82,6 @@ export const useFilteredFeedItemsOrder = () => {
   const categoryFilter = useAtomValue(categoryFilterAtom);
   const feedItemsOrder = feedItemsStore.useFeedItemsOrder();
   const feedItemsProjection = useFeedItemsListProjection();
-  const scopeFeedItemIds = feedItemsStore.useScopeFeedItemIds();
   const feedCategories = useFeedCategories();
   const feedFilter = useAtomValue(feedFilterAtom);
   const viewFilter = useAtomValue(viewFilterAtom);
@@ -164,51 +97,8 @@ export const useFilteredFeedItemsOrder = () => {
     [feedCategories, customViews, viewFilter],
   );
 
-  // Get pagination states for cursor-based filtering
-  const viewPaginationState = feedItemsStore.useViewPaginationState();
-  const feedPaginationState = feedItemsStore.useFeedPaginationState();
-  const categoryPaginationState = feedItemsStore.useCategoryPaginationState();
-  const contentStatusKey = buildContentStatusKey(contentStatusFilter);
-
-  // Determine active cursor based on filter priority: feed > category > view
-  const activeCursor: PaginationCursor | undefined = (() => {
-    if (feedFilter >= 0) {
-      return feedPaginationState[feedFilter]?.[contentStatusKey]?.cursor;
-    }
-    if (categoryFilter >= 0) {
-      return categoryPaginationState[categoryFilter]?.[contentStatusKey]
-        ?.cursor;
-    }
-    if (viewFilter?.id) {
-      return viewPaginationState[viewFilter.id]?.[contentStatusKey]?.cursor;
-    }
-    return undefined;
-  })();
-
-  const activeScopeKey: string | undefined = (() => {
-    if (feedFilter >= 0) {
-      return getFeedItemScopeKey("feed", feedFilter, contentStatusFilter);
-    }
-    if (categoryFilter >= 0) {
-      return getFeedItemScopeKey(
-        "category",
-        categoryFilter,
-        contentStatusFilter,
-      );
-    }
-    if (viewFilter?.id) {
-      return getFeedItemScopeKey("view", viewFilter.id, contentStatusFilter);
-    }
-    return undefined;
-  })();
-  const scopedFeedItemsOrder = activeScopeKey
-    ? scopeFeedItemIds[activeScopeKey]
-    : undefined;
-
   return useMemo(() => {
     const feedItemsDict = feedItemsProjection.getItems();
-    const baseFeedItemsOrder = scopedFeedItemsOrder ?? feedItemsOrder;
-    const shouldApplyCursorFilter = scopedFeedItemsOrder === undefined;
     const doesFeedItemPassFilters = createFeedItemFilterPredicate({
       contentStatusFilter,
       categoryFilter,
@@ -217,29 +107,9 @@ export const useFilteredFeedItemsOrder = () => {
       filterIndex,
     });
 
-    const filteredFeedItemsOrder = baseFeedItemsOrder.filter((id) => {
+    const filteredFeedItemsOrder = feedItemsOrder.filter((id) => {
       const item = feedItemsDict[id];
       if (!item) return false;
-
-      // Apply cursor filter - hide items older than cursor
-      const itemSectionPlacement = getItemSectionPlacement(
-        item,
-        viewFilter,
-        filterIndex,
-      );
-
-      if (
-        shouldApplyCursorFilter &&
-        activeCursor &&
-        isItemOlderThanCursor(
-          item,
-          activeCursor,
-          contentStatusFilter,
-          itemSectionPlacement,
-        )
-      ) {
-        return false;
-      }
 
       return doesFeedItemPassFilters(item);
     });
@@ -255,13 +125,11 @@ export const useFilteredFeedItemsOrder = () => {
       }),
     );
   }, [
-    activeCursor,
     categoryFilter,
     feedFilter,
     feedItemsProjection,
     feedItemsOrder,
     filterIndex,
-    scopedFeedItemsOrder,
     viewFilter,
     contentStatusFilter,
   ]);
@@ -284,13 +152,14 @@ export const useFilteredContentOrder = () => {
   }, [bookmarkRevision]);
 
   return useMemo(() => {
-    if (feedFilter >= 0) return feedItemsOrder;
     const scope =
-      categoryFilter >= 0
-        ? ({ type: "tag", tagId: categoryFilter } as const)
-        : viewFilter
-          ? ({ type: "view", viewId: viewFilter.id } as const)
-          : null;
+      feedFilter >= 0
+        ? ({ type: "feed", feedId: feedFilter } as const)
+        : categoryFilter >= 0
+          ? ({ type: "tag", tagId: categoryFilter } as const)
+          : viewFilter
+            ? ({ type: "view", viewId: viewFilter.id } as const)
+            : null;
     if (!scope) return feedItemsOrder;
     const loadedScope =
       mixedScopes[getMixedScopeKey(scope, contentStatusFilter)];

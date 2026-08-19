@@ -1,22 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { getDefaultStore } from "jotai";
 import { orpcRouterClient } from "../orpc";
-import { getDataSubscriptionClientId } from "./clientChannel";
 import { combineAbortSignals } from "./combineAbortSignals";
 import { loadingActor } from "./loading-machine";
-import { bookmarksStore } from "./bookmarks/store";
-import { processPublishedChunks } from "./subscriptionCoordinator";
 import { shouldAlwaysKeepSSEConnectionAlive } from "./atoms";
-import { getFeedItemMembershipRevision } from "./feed-items/membershipRevision";
 import { setDataSubscriptionConnected } from "./subscriptionConnection";
+import { dataReconciliation } from "./reconciliation";
 import type { PublishedChunk } from "~/server/api/publisher";
-import type { ContentStatusFilter } from "~/lib/content-status";
-import type {
-  ClientManifestEntry,
-  PaginationCursor,
-} from "~/server/api/routers/initialRouter";
 
 // Exponential backoff configuration
 const INITIAL_RETRY_DELAY = 1000; // 1 second
@@ -52,7 +44,6 @@ function waitForVisibilityChange(signal: AbortSignal) {
  * Handles connection lifecycle, auto-reconnection, and exposes request methods.
  */
 export function useDataSubscription() {
-  const [clientId] = useState(() => getDataSubscriptionClientId());
   const abortControllerRef = useRef<AbortController | null>(null);
   const retryDelayRef = useRef(INITIAL_RETRY_DELAY);
 
@@ -65,16 +56,8 @@ export function useDataSubscription() {
     const chunks = chunkBufferRef.current;
     if (chunks.length === 0) return;
     chunkBufferRef.current = [];
-    const affectedScopes = processPublishedChunks(chunks);
-    for (const scope of affectedScopes) {
-      void orpcRouterClient.mixedContent.requestPage({
-        clientId,
-        scope: scope.scope,
-        contentStatus: scope.contentStatus,
-        cursor: null,
-      });
-    }
-  }, [clientId]);
+    dataReconciliation.receivePublishedChunks(chunks);
+  }, []);
 
   // Cleanup aborts the stream and removes both direct subscriptions. The
   // subscription loop also combines its connection signal with this abort.
@@ -87,7 +70,6 @@ export function useDataSubscription() {
     // Per-connection controller — aborted on visibility change to force
     // a reconnect without tearing down the entire subscription lifecycle.
     let connectionController: AbortController | null = null;
-    let visibilityReconnect = false;
     let paused = false;
 
     async function runSubscriptionLoop() {
@@ -112,24 +94,11 @@ export function useDataSubscription() {
           // Each reconnect depends on the prior connection closing.
           // oxlint-disable-next-line react-doctor/async-await-in-loop
           const iterator = await orpcRouterClient.initial.subscribe(
-            { clientId },
+            {},
             { signal: connectionSignal },
           );
           setDataSubscriptionConnected(true);
-
-          // After reconnecting due to page refocus, re-request data so
-          // the server sends fresh metadata, diffs, and triggers a
-          // refresh if the cooldown elapsed while the tab was hidden.
-          if (visibilityReconnect) {
-            visibilityReconnect = false;
-            void Promise.all([
-              orpcRouterClient.initial.requestInitialData({ clientId }),
-              orpcRouterClient.mixedContent.synchronize({
-                clientId,
-                bookmarkManifest: bookmarksStore.getState().manifest(),
-              }),
-            ]);
-          }
+          dataReconciliation.sseConnectionChanged(true);
 
           for await (const payload of iterator as AsyncIterable<PublishedChunk>) {
             if (conn.signal.aborted) break;
@@ -142,6 +111,8 @@ export function useDataSubscription() {
           }
         } catch (error) {
           setDataSubscriptionConnected(false);
+          dataReconciliation.sseConnectionChanged(false);
+          dataReconciliation.subscriptionAttemptFailed();
 
           if (controller.signal.aborted) break;
 
@@ -160,6 +131,7 @@ export function useDataSubscription() {
           );
         } finally {
           setDataSubscriptionConnected(false);
+          dataReconciliation.sseConnectionChanged(false);
           cleanupConnectionSignal();
         }
       }
@@ -184,7 +156,6 @@ export function useDataSubscription() {
         (document.visibilityState === "hidden" && shouldStayAlive)
       ) {
         paused = false;
-        visibilityReconnect = true;
         // If the loop is waiting on the paused promise, the
         // visibilitychange listener inside it will resolve it.
         // If it's in a backoff sleep, the next iteration will
@@ -201,8 +172,12 @@ export function useDataSubscription() {
 
     const handleVisibilityChange = () => {
       updateConnectionState();
+      dataReconciliation.environmentChanged();
     };
     document.addEventListener("visibilitychange", handleVisibilityChange);
+    const handleNetworkChange = () => dataReconciliation.environmentChanged();
+    window.addEventListener("online", handleNetworkChange);
+    window.addEventListener("offline", handleNetworkChange);
 
     // Recompute connection logic when the keep-alive atom changes
     const unsubscribeAtom = getDefaultStore().sub(
@@ -216,9 +191,12 @@ export function useDataSubscription() {
 
     return () => {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("online", handleNetworkChange);
+      window.removeEventListener("offline", handleNetworkChange);
       unsubscribeAtom();
       controller.abort();
       setDataSubscriptionConnected(false);
+      dataReconciliation.sseConnectionChanged(false);
       // Cancel any pending RAF flush
       if (rafIdRef.current !== null) {
         cancelAnimationFrame(rafIdRef.current);
@@ -226,192 +204,9 @@ export function useDataSubscription() {
       }
       // Flush remaining chunks synchronously on unmount
       if (chunkBufferRef.current.length > 0) {
-        processPublishedChunks(chunkBufferRef.current);
+        dataReconciliation.receivePublishedChunks(chunkBufferRef.current);
         chunkBufferRef.current = [];
       }
     };
-  }, [clientId, flushBuffer]);
-
-  // Request methods that trigger data fetching via the publisher
-  const requestInitialData = useCallback(() => {
-    return Promise.all([
-      orpcRouterClient.initial.requestInitialData({ clientId }),
-      orpcRouterClient.mixedContent.synchronize({
-        clientId,
-        bookmarkManifest: bookmarksStore.getState().manifest(),
-      }),
-    ]);
-  }, [clientId]);
-
-  const requestFullTextForItems = useCallback(
-    (itemIds: string[]) => {
-      return orpcRouterClient.initial.requestFullTextForItems({
-        itemIds,
-        clientId,
-      });
-    },
-    [clientId],
-  );
-
-  const requestItemsByContentStatus = useCallback(
-    (
-      viewId: number,
-      contentStatusFilter: ContentStatusFilter,
-      cursor?: PaginationCursor,
-      limit?: number,
-      clientItems?: ClientManifestEntry[],
-    ) => {
-      return orpcRouterClient.initial.requestItemsByContentStatus({
-        viewId,
-        contentStatusFilter,
-        cursor,
-        limit,
-        clientItems,
-        membershipRevision: getFeedItemMembershipRevision(),
-        clientId,
-      });
-    },
-    [clientId],
-  );
-
-  const requestItemsByFeed = useCallback(
-    (
-      feedId: number,
-      contentStatusFilter: ContentStatusFilter,
-      cursor?: PaginationCursor,
-      limit?: number,
-    ) => {
-      return orpcRouterClient.initial.requestItemsByFeed({
-        feedId,
-        contentStatusFilter,
-        cursor,
-        limit,
-        clientId,
-      });
-    },
-    [clientId],
-  );
-
-  const requestItemsByCategoryId = useCallback(
-    (
-      categoryId: number,
-      contentStatusFilter: ContentStatusFilter,
-      cursor?: PaginationCursor,
-      limit?: number,
-    ) => {
-      return orpcRouterClient.initial.requestItemsByCategoryId({
-        categoryId,
-        contentStatusFilter,
-        cursor,
-        limit,
-        clientId,
-      });
-    },
-    [clientId],
-  );
-
-  return {
-    requestInitialData,
-    requestFullTextForItems,
-    requestItemsByContentStatus,
-    requestItemsByFeed,
-    requestItemsByCategoryId,
-  };
+  }, [flushBuffer]);
 }
-
-/**
- * Singleton context provider for the data subscription.
- * This allows accessing request methods from anywhere in the app.
- */
-export const dataSubscriptionActions = {
-  requestInitialData: () => {
-    const clientId = getDataSubscriptionClientId();
-    return Promise.all([
-      orpcRouterClient.initial.requestInitialData({ clientId }),
-      orpcRouterClient.mixedContent.synchronize({
-        clientId,
-        bookmarkManifest: bookmarksStore.getState().manifest(),
-      }),
-    ]);
-  },
-  requestMixedContentPage: (
-    scope: Parameters<
-      typeof orpcRouterClient.mixedContent.requestPage
-    >[0]["scope"],
-    contentStatus: ContentStatusFilter,
-    cursor?: Parameters<
-      typeof orpcRouterClient.mixedContent.requestPage
-    >[0]["cursor"],
-    limit?: number,
-  ) =>
-    orpcRouterClient.mixedContent.requestPage({
-      clientId: getDataSubscriptionClientId(),
-      scope,
-      contentStatus,
-      cursor,
-      limit,
-    }),
-  requestFullTextForItems: (itemIds: string[]) => {
-    return orpcRouterClient.initial.requestFullTextForItems({
-      itemIds,
-      clientId: getDataSubscriptionClientId(),
-    });
-  },
-  streamingImport: (
-    feeds: Array<{
-      feedUrl: string;
-      categories: string[];
-      categoryPaths?: Array<
-        Array<{
-          name: string;
-          type?: "view" | "tag" | "feed";
-          feedUrl?: string;
-        }>
-      >;
-      tagNames?: string[];
-    }>,
-    importMode?: "tags" | "views" | "ignore",
-  ) => orpcRouterClient.initial.streamingImport({ feeds, importMode }),
-  requestItemsByContentStatus: (
-    viewId: number,
-    contentStatusFilter: ContentStatusFilter,
-    cursor?: PaginationCursor,
-    limit?: number,
-    clientItems?: ClientManifestEntry[],
-  ) =>
-    orpcRouterClient.initial.requestItemsByContentStatus({
-      viewId,
-      contentStatusFilter,
-      cursor,
-      limit,
-      clientItems,
-      membershipRevision: getFeedItemMembershipRevision(),
-      clientId: getDataSubscriptionClientId(),
-    }),
-  requestItemsByFeed: (
-    feedId: number,
-    contentStatusFilter: ContentStatusFilter,
-    cursor?: PaginationCursor,
-    limit?: number,
-  ) =>
-    orpcRouterClient.initial.requestItemsByFeed({
-      feedId,
-      contentStatusFilter,
-      cursor,
-      limit,
-      clientId: getDataSubscriptionClientId(),
-    }),
-  requestItemsByCategoryId: (
-    categoryId: number,
-    contentStatusFilter: ContentStatusFilter,
-    cursor?: PaginationCursor,
-    limit?: number,
-  ) =>
-    orpcRouterClient.initial.requestItemsByCategoryId({
-      categoryId,
-      contentStatusFilter,
-      cursor,
-      limit,
-      clientId: getDataSubscriptionClientId(),
-    }),
-};

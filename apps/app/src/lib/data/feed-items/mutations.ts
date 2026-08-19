@@ -1,16 +1,15 @@
 import { useMutation } from "@tanstack/react-query";
 import { feedItemsStore, useFeedItemState } from "../store";
-import { bookmarksStore } from "../bookmarks/store";
 import { feedCategoriesStore } from "../feed-categories/store";
 import { mixedContentStore } from "../mixed-content/store";
+import { advanceMixedContentMembershipRevision } from "../mixed-content/membershipRevision";
 import { viewsStore } from "../views/store";
-import { refreshNavigationSnapshotSafely } from "../navigation/store";
 import {
   clearPendingFeedItemOverride,
   setPendingWatchedOverride,
   setPendingWatchLaterOverride,
 } from "./pendingMutations";
-import { advanceFeedItemMembershipRevision } from "./membershipRevision";
+import { hasFeedItemListProjectionChanged } from "./listProjection";
 import type { ApplicationFeedItem } from "~/server/db/schema";
 import { orpc, orpcRouterClient } from "~/lib/orpc";
 
@@ -46,12 +45,18 @@ function setFeedItemsWithMixedProjection(items: ApplicationFeedItem[]) {
   const previousFeedItems = Object.fromEntries(
     items.map((item) => [item.id, store.feedItemsDict[item.id]]),
   );
+  if (
+    items.some((item) =>
+      hasFeedItemListProjectionChanged(previousFeedItems[item.id], item),
+    )
+  ) {
+    advanceMixedContentMembershipRevision();
+  }
   store.setFeedItems(items);
   mixedContentStore.getState().reprojectFeedItems({
     itemIds: items.map((item) => item.id),
     previousFeedItems,
     feedItems: store.feedItemsDict,
-    bookmarks: bookmarksStore.getState().snapshot(),
     views: viewsStore.getState().views,
     feedCategories: feedCategoriesStore.getState().feedCategories,
   });
@@ -78,7 +83,6 @@ export function applyOptimisticWatchedValues(
     return [{ ...feedItem, isWatched, isWatchedUpdatedAt }];
   });
   if (updatedItems.length > 0) {
-    advanceFeedItemMembershipRevision();
     setFeedItemsWithMixedProjection(updatedItems);
   }
   return contexts;
@@ -105,7 +109,6 @@ export function applyOptimisticWatchLaterValue(
     isWatchLater,
     isWatchLaterUpdatedAt,
   );
-  advanceFeedItemMembershipRevision();
   setFeedItemsWithMixedProjection([
     { ...feedItem, isWatchLater, isWatchLaterUpdatedAt },
   ]);
@@ -231,7 +234,6 @@ export async function setBulkWatchedValue({
       isWatched,
     });
     settleOptimisticWatchedValues(contexts, serverItems ?? []);
-    await refreshNavigationSnapshotSafely();
   } catch (error) {
     rollbackOptimisticWatchedValues(contexts);
     throw error;
@@ -244,9 +246,8 @@ export function useFeedItemsSetWatchedValueMutation(contentId: string) {
       onMutate: ({ isWatched }) => {
         return applyOptimisticWatchedValue(contentId, isWatched);
       },
-      onSuccess: async (serverValue, _variables, context) => {
+      onSuccess: (serverValue, _variables, context) => {
         resolveOptimisticWatchedValue(context, serverValue);
-        await refreshNavigationSnapshotSafely();
       },
       onError: (_error, _variables, context) => {
         rollbackOptimisticWatchedValue(context);
@@ -261,9 +262,8 @@ export function useFeedItemsSetWatchLaterValueMutation(contentId: string) {
       onMutate: ({ isWatchLater }) => {
         return applyOptimisticWatchLaterValue(contentId, isWatchLater);
       },
-      onSuccess: async (serverValue, _variables, context) => {
+      onSuccess: (serverValue, _variables, context) => {
         resolveOptimisticWatchLaterValue(context, serverValue);
-        await refreshNavigationSnapshotSafely();
       },
       onError: (_error, _variables, context) => {
         rollbackOptimisticWatchLaterValue(context);
@@ -291,9 +291,8 @@ export function useBulkSetWatchedValueMutation() {
       onMutate: ({ items, isWatched }) => {
         return applyOptimisticWatchedValues(items, isWatched);
       },
-      onSuccess: async (serverItems, _variables, contexts) => {
+      onSuccess: (serverItems, _variables, contexts) => {
         settleOptimisticWatchedValues(contexts ?? [], serverItems ?? []);
-        await refreshNavigationSnapshotSafely();
       },
       onError: (_error, _variables, contexts) => {
         rollbackOptimisticWatchedValues(contexts ?? []);

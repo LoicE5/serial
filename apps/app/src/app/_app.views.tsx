@@ -18,7 +18,7 @@ import { ControlledResponsiveDialog } from "~/components/ui/responsive-dropdown"
 import { useContentCategories } from "~/lib/data/content-categories";
 import { useFeeds } from "~/lib/data/feeds";
 import { useViews } from "~/lib/data/views";
-import { INBOX_VIEW_ID } from "~/lib/data/views/constants";
+import { UNCATEGORIZED_VIEW_ID } from "~/lib/data/views/constants";
 import {
   useDeleteViewMutation,
   useEditViewMutation,
@@ -78,7 +78,7 @@ function ManageViewsPage() {
   }, []);
 
   const customViews = useMemo(
-    () => views.filter((v) => v.id !== INBOX_VIEW_ID),
+    () => views.filter((v) => v.id !== UNCATEGORIZED_VIEW_ID),
     [views],
   );
 

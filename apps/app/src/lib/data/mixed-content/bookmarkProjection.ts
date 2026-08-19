@@ -1,4 +1,4 @@
-import { INBOX_VIEW_ID } from "../views/constants";
+import { UNCATEGORIZED_VIEW_ID } from "../views/constants";
 import type {
   ApplicationFeedItem,
   ApplicationView,
@@ -17,6 +17,7 @@ import {
   contentStatusUsesSectionOrder,
   selectContentStatusOrderValue,
 } from "~/lib/content-status";
+import { selectFeedItemOrderCoordinate } from "~/lib/data/feed-items/orderCoordinate";
 import { contentFilterAllowsDescriptor } from "~/lib/views/contentFilter";
 import {
   compareDescendingIds,
@@ -34,8 +35,6 @@ export type LoadedMixedScope = {
 export type ProjectionIndexes = {
   bookmarkScopeKeys: Record<string, string[]>;
   feedItemScopeKeys: Record<string, string[]>;
-  canonicalByFeedItemId: Record<string, string>;
-  feedItemIdsByCanonical: Record<string, string[]>;
 };
 
 export function getMixedScopeKey(
@@ -45,7 +44,9 @@ export function getMixedScopeKey(
   const contentStatusKey = buildContentStatusKey(contentStatus);
   return scope.type === "view"
     ? `view:${scope.viewId}:${contentStatusKey}`
-    : `tag:${scope.tagId}:${contentStatusKey}`;
+    : scope.type === "feed"
+      ? `feed:${scope.feedId}:${contentStatusKey}`
+      : `tag:${scope.tagId}:${contentStatusKey}`;
 }
 
 function compareReferences(
@@ -115,27 +116,10 @@ export function referencesEqual(
   );
 }
 
-export function referenceRecordsEqual(
-  left: Record<string, MixedContentReference[]>,
-  right: Record<string, MixedContentReference[]>,
-) {
-  const leftKeys = Object.keys(left);
-  const rightKeys = Object.keys(right);
-  return (
-    leftKeys.length === rightKeys.length &&
-    leftKeys.every(
-      (key) =>
-        right[key] !== undefined && referencesEqual(left[key]!, right[key]),
-    )
-  );
-}
-
 export function emptyProjectionIndexes(): ProjectionIndexes {
   return {
     bookmarkScopeKeys: {},
     feedItemScopeKeys: {},
-    canonicalByFeedItemId: {},
-    feedItemIdsByCanonical: {},
   };
 }
 
@@ -160,18 +144,6 @@ function removeValue(
   else record[key] = nextValues;
 }
 
-export function canonicalize(url: string) {
-  try {
-    const parsed = new URL(url);
-    parsed.hash = "";
-    if (parsed.protocol === "http:" && parsed.port === "80") parsed.port = "";
-    if (parsed.protocol === "https:" && parsed.port === "443") parsed.port = "";
-    return parsed.toString();
-  } catch {
-    return url;
-  }
-}
-
 function removeScopeFromIndexes(
   indexes: ProjectionIndexes,
   scopeKey: string,
@@ -184,16 +156,6 @@ function removeScopeFromIndexes(
     }
 
     removeValue(indexes.feedItemScopeKeys, reference.entityId, scopeKey);
-    if (indexes.feedItemScopeKeys[reference.entityId] !== undefined) continue;
-    const canonicalUrl = indexes.canonicalByFeedItemId[reference.entityId];
-    delete indexes.canonicalByFeedItemId[reference.entityId];
-    if (canonicalUrl) {
-      removeValue(
-        indexes.feedItemIdsByCanonical,
-        canonicalUrl,
-        reference.entityId,
-      );
-    }
   }
 }
 
@@ -201,7 +163,6 @@ function addScopeToIndexes(
   indexes: ProjectionIndexes,
   scopeKey: string,
   references: MixedContentReference[],
-  feedItems: Record<string, ApplicationFeedItem>,
 ) {
   for (const reference of references) {
     if (reference.entityKind === "bookmark") {
@@ -210,23 +171,6 @@ function addScopeToIndexes(
     }
 
     addUniqueValue(indexes.feedItemScopeKeys, reference.entityId, scopeKey);
-    const item = feedItems[reference.entityId];
-    if (!item?.url) continue;
-    const canonicalUrl = canonicalize(item.url);
-    const previousCanonical = indexes.canonicalByFeedItemId[reference.entityId];
-    if (previousCanonical && previousCanonical !== canonicalUrl) {
-      removeValue(
-        indexes.feedItemIdsByCanonical,
-        previousCanonical,
-        reference.entityId,
-      );
-    }
-    indexes.canonicalByFeedItemId[reference.entityId] = canonicalUrl;
-    addUniqueValue(
-      indexes.feedItemIdsByCanonical,
-      canonicalUrl,
-      reference.entityId,
-    );
   }
 }
 
@@ -235,21 +179,18 @@ export function replaceScopeInIndexes(input: {
   scopeKey: string;
   previousReferences: MixedContentReference[];
   nextReferences: MixedContentReference[];
-  feedItems: Record<string, ApplicationFeedItem>;
 }) {
-  const { indexes, scopeKey, previousReferences, nextReferences, feedItems } =
-    input;
+  const { indexes, scopeKey, previousReferences, nextReferences } = input;
   removeScopeFromIndexes(indexes, scopeKey, previousReferences);
-  addScopeToIndexes(indexes, scopeKey, nextReferences, feedItems);
+  addScopeToIndexes(indexes, scopeKey, nextReferences);
 }
 
 export function buildProjectionIndexes(
   scopes: Record<string, LoadedMixedScope>,
-  feedItems: Record<string, ApplicationFeedItem>,
 ) {
   const indexes = emptyProjectionIndexes();
   for (const [scopeKey, scope] of Object.entries(scopes)) {
-    addScopeToIndexes(indexes, scopeKey, scope.references, feedItems);
+    addScopeToIndexes(indexes, scopeKey, scope.references);
   }
   return indexes;
 }
@@ -275,11 +216,8 @@ export function isBookmarkProjectionChange(
 ) {
   if (!previousBookmark) return true;
   if (
-    previousBookmark.canonicalUrl !== bookmark.canonicalUrl ||
-    previousBookmark.platform !== bookmark.platform ||
     previousBookmark.contentType !== bookmark.contentType ||
     previousBookmark.orientation !== bookmark.orientation ||
-    previousBookmark.contentId !== bookmark.contentId ||
     previousBookmark.isSaved !== bookmark.isSaved ||
     previousBookmark.isRead !== bookmark.isRead ||
     previousBookmark.createdAt.getTime() !== bookmark.createdAt.getTime() ||
@@ -320,7 +258,9 @@ function getViewMembershipIndex(views: ApplicationView[]) {
   if (views === indexedViews && cachedViewMembershipIndex) {
     return cachedViewMembershipIndex;
   }
-  const compatibleViews = views.filter((view) => view.id !== INBOX_VIEW_ID);
+  const compatibleViews = views.filter(
+    (view) => view.id !== UNCATEGORIZED_VIEW_ID,
+  );
   const viewIdsByTagId = new Map<number, number[]>();
   for (const view of compatibleViews) {
     for (const tagId of view.categoryIds) {
@@ -394,7 +334,7 @@ export function matchingLoadedScopeKeys(
 
   if (matchingIds.size === 0) {
     const uncategorizedKey = getMixedScopeKey(
-      { type: "view", viewId: INBOX_VIEW_ID },
+      { type: "view", viewId: UNCATEGORIZED_VIEW_ID },
       contentStatus,
     );
     if (scopes[uncategorizedKey]) keys.add(uncategorizedKey);
@@ -407,9 +347,10 @@ export function matchesScope(
   scope: MixedContentScope,
   views: ApplicationView[],
 ) {
+  if (scope.type === "feed") return false;
   if (scope.type === "tag") return bookmark.tagIds.includes(scope.tagId);
   const { index, matchingIds } = matchingCustomViewIds(bookmark, views);
-  if (scope.viewId === INBOX_VIEW_ID) {
+  if (scope.viewId === UNCATEGORIZED_VIEW_ID) {
     return matchingIds.size === 0;
   }
   const view = index.compatibleViewsById.get(scope.viewId);
@@ -418,17 +359,6 @@ export function matchesScope(
     matchingIds.has(view.id) &&
     isInsideTimeWindow(bookmark.createdAt, view.daysWindow),
   );
-}
-
-function feedItemNormalizedAt(
-  item: ApplicationFeedItem,
-  contentStatus: ContentStatusFilter,
-) {
-  return selectContentStatusOrderValue(contentStatus, {
-    published: item.postedAt,
-    saved: item.isWatchLaterUpdatedAt ?? item.postedAt,
-    archived: item.isWatchedUpdatedAt ?? item.postedAt,
-  });
 }
 
 function bookmarkNormalizedAt(
@@ -515,9 +445,6 @@ export function projectLocalMixedContentOrder(input: {
         new Set([assignment.categoryId]),
       );
   }
-  const bookmarkCanonicalUrls = new Set(
-    bookmarkValues.map((bookmark) => canonicalize(bookmark.canonicalUrl)),
-  );
   const entries: Array<{
     id: string;
     entityKind: "bookmark" | "feed-item";
@@ -528,11 +455,10 @@ export function projectLocalMixedContentOrder(input: {
   for (const id of feedItemIds) {
     const item = feedItems[id];
     if (!item) continue;
-    if (bookmarkCanonicalUrls.has(canonicalize(item.url))) continue;
     entries.push({
       id,
       entityKind: "feed-item",
-      normalizedAt: feedItemNormalizedAt(item, contentStatus),
+      normalizedAt: selectFeedItemOrderCoordinate(contentStatus, item),
       sectionPlacement: usesGlobalEntityIdTieBreak
         ? 0
         : localSectionPlacement({
@@ -623,18 +549,4 @@ export function bookmarkReference(
       : null,
     normalizedAt,
   };
-}
-
-export function collisionScopeKeys(
-  canonicalUrl: string,
-  indexes: ProjectionIndexes,
-) {
-  const keys = new Set<string>();
-  for (const feedItemId of indexes.feedItemIdsByCanonical[
-    canonicalize(canonicalUrl)
-  ] ?? []) {
-    for (const key of indexes.feedItemScopeKeys[feedItemId] ?? [])
-      keys.add(key);
-  }
-  return keys;
 }

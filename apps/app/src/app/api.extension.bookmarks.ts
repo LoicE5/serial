@@ -23,14 +23,17 @@ import {
   createExtensionBookmarkView,
 } from "~/server/bookmarks/extensionOrganization";
 import {
+  publishBookmarkConsolidationDeletions,
   publishBookmarkDeletion,
   publishBookmarkUpsert,
-} from "~/server/mixed-content/sync";
+} from "~/server/mixed-content/events";
 import {
   extensionPreflightResponse,
   extensionJsonResponse as jsonResponse,
   prepareExtensionJsonRequest,
 } from "~/server/http/extensionApi";
+import { ALL_CONTENT_STATUS_KEYS } from "~/lib/reconciliation";
+import { organizationInvalidationSummary } from "~/server/reconciliation/invalidation";
 
 export function preflightResponse() {
   return extensionPreflightResponse(["POST", "PATCH", "DELETE"]);
@@ -53,19 +56,16 @@ const DEFAULT_ROUTE_DEPENDENCIES: ExtensionBookmarkRouteDependencies = {
     const removedBookmarkIds =
       result.removedBookmarkIds ??
       (result.removedBookmarkId ? [result.removedBookmarkId] : []);
-    await Promise.all(
-      removedBookmarkIds.map((removedBookmarkId) =>
-        publishBookmarkDeletion({
-          userId,
-          id: removedBookmarkId,
-          canonicalUrl: result.bookmark.canonicalUrl,
-        }),
-      ),
-    );
+    await publishBookmarkConsolidationDeletions({
+      userId,
+      bookmarkIds: removedBookmarkIds,
+      canonicalUrl: result.bookmark.canonicalUrl,
+    });
     return publishBookmarkUpsert({
       database: db,
       userId,
       bookmarkId: result.bookmark.id,
+      contentStatusKeys: ALL_CONTENT_STATUS_KEYS,
     });
   },
   workspace: loadExtensionBookmarkWorkspace,
@@ -251,6 +251,7 @@ export async function mutateExtensionBookmark(
       database: db,
       userId: authenticatedUser.id,
       bookmarkId: mutation.bookmarkId,
+      invalidation: organizationInvalidationSummary(),
     });
     if (!bookmark) throw new BookmarkNotFoundError("Bookmark not found");
     return jsonResponse({
@@ -307,6 +308,7 @@ export async function removeExtensionBookmark(
       userId: authenticatedUser.id,
       id: deleted.id,
       canonicalUrl: deleted.canonicalUrl,
+      invalidation: organizationInvalidationSummary(),
     });
     return jsonResponse({ bookmarkId: deleted.id });
   } catch (error) {
