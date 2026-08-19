@@ -13,9 +13,11 @@ import {
   MAX_VIEW_SHORTCUTS,
   VIEW_SHORTCUT_KEYS,
 } from "~/lib/constants/shortcuts";
-import { getNavigationAvailability } from "~/lib/data/navigation/store";
 import { Skeleton } from "~/components/ui/skeleton";
-import { isContentStatusAvailable } from "~/lib/content-status";
+import {
+  getViewContentAvailability,
+  mixedContentStore,
+} from "~/lib/data/mixed-content/store";
 
 const VIEW_FILTER_SKELETON_WIDTHS = ["w-16", "w-22", "w-18", "w-26"];
 
@@ -30,7 +32,8 @@ function ViewFilterChipSkeletons() {
 }
 
 export function ViewFilterChips() {
-  const { views, viewAvailability, hasFetchedViews } = useViews();
+  const { views, hasFetchedViews } = useViews();
+  const mixedScopes = mixedContentStore.useScopes();
   const [viewFilter] = useAtom(viewFilterIdAtom);
   const contentStatusFilter = useAtomValue(contentStatusFilterAtom);
 
@@ -72,10 +75,12 @@ export function ViewFilterChips() {
         return (
           <ToggleGroupItem
             className={clsx("relative", {
-              "opacity-50": !isContentStatusAvailable(
-                getNavigationAvailability(viewAvailability, view.id),
-                contentStatusFilter,
-              ),
+              "opacity-50":
+                getViewContentAvailability(
+                  mixedScopes,
+                  view.id,
+                  contentStatusFilter,
+                ) === false,
             })}
             key={view.id}
             value={view.id.toString()}

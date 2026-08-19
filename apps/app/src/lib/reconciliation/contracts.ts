@@ -17,6 +17,8 @@ export const REQUIRED_RECONCILIATION_DOMAINS = [
   "navigation",
 ] as const;
 
+export const MAX_TARGETED_RECONCILIATION_TARGETS = 16;
+
 export type RequiredReconciliationDomain =
   (typeof REQUIRED_RECONCILIATION_DOMAINS)[number];
 
@@ -136,6 +138,7 @@ export type ReconciliationDomainFailure = {
     | "load-organization"
     | "resolve-selection"
     | "load-active-scope"
+    | "load-view-page"
     | "load-navigation";
   domain: RequiredReconciliationDomain;
   target?: ReconciliationScopeTarget;

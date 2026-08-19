@@ -14,7 +14,7 @@ import {
   viewFilterIdAtom,
   viewsAtom,
 } from "~/lib/data/atoms";
-import { navigationSnapshotStore } from "~/lib/data/navigation/store";
+import { mixedContentStore } from "~/lib/data/mixed-content/store";
 import { viewsStore } from "~/lib/data/views/store";
 
 vi.mock("~/components/ButtonWithShortcut", () => ({
@@ -24,6 +24,10 @@ vi.mock("~/components/ButtonWithShortcut", () => ({
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
 const NOW = new Date("2026-08-02T12:00:00.000Z");
+const DEFAULT_STATUS = {
+  saveStatus: "inbox",
+  archiveStatus: "unread",
+} as const satisfies ContentStatusFilter;
 
 function view(id: number, name: string): ApplicationView {
   return {
@@ -42,6 +46,34 @@ function view(id: number, name: string): ApplicationView {
     isDefault: false,
     viewSections: [],
   };
+}
+
+function setViewPage(
+  viewId: number,
+  hasContent: boolean,
+  contentStatus: ContentStatusFilter = DEFAULT_STATUS,
+) {
+  mixedContentStore.getState().applyPage({
+    scope: { type: "view", viewId },
+    contentStatus,
+    replacesScope: true,
+    page: {
+      references: hasContent
+        ? [
+            {
+              entityKind: "feed-item",
+              entityId: `item-${viewId}`,
+              sectionPlacement: null,
+              normalizedAt: NOW,
+            },
+          ]
+        : [],
+      feedItems: [],
+      bookmarks: [],
+      cursor: null,
+      hasMore: false,
+    },
+  });
 }
 
 function renderViewFilterChips(
@@ -64,10 +96,7 @@ function renderViewFilterChips(
   jotaiStore.set(viewFilterIdAtom, 1);
   jotaiStore.set(
     contentStatusFilterAtom,
-    input.contentStatus ?? {
-      saveStatus: "inbox",
-      archiveStatus: "unread",
-    },
+    input.contentStatus ?? DEFAULT_STATUS,
   );
 
   const container = document.createElement("div");
@@ -97,31 +126,14 @@ function chipFromMarkup(markup: string, label: string) {
 }
 
 afterEach(() => {
-  navigationSnapshotStore.getState().reset();
+  mixedContentStore.getState().reset();
   viewsStore.getState().reset();
 });
 
 describe("View filter loading", () => {
-  it("keeps cached View chips and their previous dimming while revalidating", () => {
-    navigationSnapshotStore.getState().set({
-      views: {
-        1: {
-          inbox: { unread: true, archived: false },
-          saved: { unread: false, archived: false },
-        },
-        2: {
-          inbox: { unread: false, archived: false },
-          saved: { unread: false, archived: false },
-        },
-      },
-      tags: {},
-      feeds: {},
-      viewFeeds: {},
-    });
-    navigationSnapshotStore.getState().reset();
-    navigationSnapshotStore.setState({
-      fetchStatus: "fetching",
-    });
+  it("uses retained mixed pages while reconciliation is in flight", () => {
+    setViewPage(1, true);
+    setViewPage(2, false);
 
     const markup = renderViewFilterChips();
 
@@ -146,44 +158,13 @@ describe("View filter loading", () => {
     for (const width of ["w-16", "w-22", "w-18", "w-26"]) {
       expect(markup).toContain(`h-8 ${width}`);
     }
-
-    const renderedMarkup = renderViewFilterChips();
-    expect(chipFromMarkup(renderedMarkup, "Reading").classList).toContain(
-      "h-8",
-    );
   });
 
-  it("applies fresh View dimming after successful revalidation", () => {
-    navigationSnapshotStore.getState().set({
-      views: {
-        1: {
-          inbox: { unread: true, archived: false },
-          saved: { unread: false, archived: false },
-        },
-        2: {
-          inbox: { unread: false, archived: false },
-          saved: { unread: false, archived: false },
-        },
-      },
-      tags: {},
-      feeds: {},
-      viewFeeds: {},
-    });
-    navigationSnapshotStore.getState().set({
-      views: {
-        1: {
-          inbox: { unread: false, archived: false },
-          saved: { unread: false, archived: false },
-        },
-        2: {
-          inbox: { unread: true, archived: false },
-          saved: { unread: false, archived: false },
-        },
-      },
-      tags: {},
-      feeds: {},
-      viewFeeds: {},
-    });
+  it("updates dimming from replacement first pages", () => {
+    setViewPage(1, true);
+    setViewPage(2, false);
+    setViewPage(1, false);
+    setViewPage(2, true);
 
     const markup = renderViewFilterChips();
 
@@ -193,26 +174,15 @@ describe("View filter loading", () => {
     );
   });
 
-  it("maps Saved + Archived to nested availability", () => {
-    navigationSnapshotStore.getState().set({
-      views: {
-        1: {
-          inbox: { unread: true, archived: false },
-          saved: { unread: true, archived: false },
-        },
-        2: {
-          inbox: { unread: false, archived: true },
-          saved: { unread: false, archived: true },
-        },
-      },
-      tags: {},
-      feeds: {},
-      viewFeeds: {},
-    });
+  it("maps Saved + Archived to its retained View page", () => {
+    const contentStatus = {
+      saveStatus: "saved",
+      archiveStatus: "archived",
+    } as const satisfies ContentStatusFilter;
+    setViewPage(1, false, contentStatus);
+    setViewPage(2, true, contentStatus);
 
-    const markup = renderViewFilterChips({
-      contentStatus: { saveStatus: "saved", archiveStatus: "archived" },
-    });
+    const markup = renderViewFilterChips({ contentStatus });
 
     expect(chipFromMarkup(markup, "Reading").classList).toContain("opacity-50");
     expect(chipFromMarkup(markup, "Research").classList).not.toContain(
@@ -220,30 +190,15 @@ describe("View filter loading", () => {
     );
   });
 
-  it("retains previous View dimming after failed revalidation", () => {
-    navigationSnapshotStore.getState().set({
-      views: {
-        1: {
-          inbox: { unread: true, archived: false },
-          saved: { unread: false, archived: false },
-        },
-        2: {
-          inbox: { unread: false, archived: false },
-          saved: { unread: false, archived: false },
-        },
-      },
-      tags: {},
-      feeds: {},
-      viewFeeds: {},
-    });
-    navigationSnapshotStore.getState().reset();
+  it("does not dim an unknown View cell", () => {
+    setViewPage(1, true);
 
     const markup = renderViewFilterChips();
 
     expect(chipFromMarkup(markup, "Reading").classList).not.toContain(
       "opacity-50",
     );
-    expect(chipFromMarkup(markup, "Research").classList).toContain(
+    expect(chipFromMarkup(markup, "Research").classList).not.toContain(
       "opacity-50",
     );
   });

@@ -3,6 +3,7 @@ import {
   getReconciliationTargetKey,
   getRequiredTargetsForFullReconciliation,
   getTargetDomain,
+  MAX_TARGETED_RECONCILIATION_TARGETS,
   RECONCILIATION_HYDRATION_DOMAINS,
   REQUIRED_RECONCILIATION_DOMAINS,
 } from "./contracts";
@@ -14,6 +15,7 @@ import type {
   ReconciliationTarget,
   RequiredReconciliationDomain,
 } from "./contracts";
+import { DEFAULT_CONTENT_STATUS_FILTER } from "~/lib/content-status";
 
 export type ReconciliationTargetStatus =
   "unverified" | "syncing" | "verified" | "dirty";
@@ -47,6 +49,7 @@ type FullEpoch = {
   intent: Extract<ReconciliationRequestIntent, { type: "full" }>;
   selectedScope: ReconciliationScopeTarget | null;
   requiredTargetKeys: string[];
+  failedTargetKeys: string[];
   completed: boolean;
   established: boolean;
 };
@@ -166,6 +169,7 @@ export type ReconciliationCoordinatorEvent<TAuthoritative, TLiveEvent> =
       at: number;
       failed?: boolean;
       failedTargets?: ReconciliationTarget[];
+      epochComplete?: boolean;
     }
   | {
       type: "automatic-rss-owner-resolved";
@@ -243,17 +247,38 @@ function uniqueTargets(targets: readonly ReconciliationTarget[]) {
   ];
 }
 
-function mergeRequestIntents(
+function fullIntentFor<TAuthoritative, TLiveEvent>(
+  state: ReconciliationCoordinatorState<TAuthoritative, TLiveEvent>,
+): Extract<ReconciliationRequestIntent, { type: "full" }> {
+  return state.activeScope
+    ? { type: "full", selectedScope: state.activeScope }
+    : { type: "full", coldContentStatus: DEFAULT_CONTENT_STATUS_FILTER };
+}
+
+function boundedIntent<TAuthoritative, TLiveEvent>(
+  state: ReconciliationCoordinatorState<TAuthoritative, TLiveEvent>,
+  intent: ReconciliationRequestIntent,
+): ReconciliationRequestIntent {
+  if (intent.type === "full") return intent;
+  const targets = uniqueTargets(intent.targets);
+  return targets.length > MAX_TARGETED_RECONCILIATION_TARGETS
+    ? fullIntentFor(state)
+    : { type: "targeted", targets };
+}
+
+function mergeRequestIntents<TAuthoritative, TLiveEvent>(
+  state: ReconciliationCoordinatorState<TAuthoritative, TLiveEvent>,
   current: ReconciliationRequestIntent | null,
   incoming: ReconciliationRequestIntent,
 ): ReconciliationRequestIntent {
+  incoming = boundedIntent(state, incoming);
   if (!current) return incoming;
   if (incoming.type === "full") return incoming;
   if (current.type === "full") return current;
-  return {
+  return boundedIntent(state, {
     type: "targeted",
     targets: uniqueTargets([...current.targets, ...incoming.targets]),
-  };
+  });
 }
 
 function targetState(
@@ -345,6 +370,7 @@ function startRequest<TAuthoritative, TLiveEvent>(
         intent,
         selectedScope: "selectedScope" in intent ? intent.selectedScope : null,
         requiredTargetKeys: targets.map(getReconciliationTargetKey),
+        failedTargetKeys: [],
         completed: false,
         established: false,
       },
@@ -361,11 +387,11 @@ function enqueueRequest<TAuthoritative, TLiveEvent>(
   state: ReconciliationCoordinatorState<TAuthoritative, TLiveEvent>,
   intent: ReconciliationRequestIntent,
 ): ReconciliationCoordinatorTransition<TAuthoritative, TLiveEvent> {
-  if (!state.inFlight) return startRequest(state, intent);
+  if (!state.inFlight) return startRequest(state, boundedIntent(state, intent));
   return {
     state: withDerivedTrust({
       ...state,
-      trailingIntent: mergeRequestIntents(state.trailingIntent, intent),
+      trailingIntent: mergeRequestIntents(state, state.trailingIntent, intent),
     }),
     commands: [],
   };
@@ -378,7 +404,7 @@ function repairIntentFor<TAuthoritative, TLiveEvent>(
   return { type: "targeted", targets: uniqueTargets(targets) };
 }
 
-function bindColdFullScope<TAuthoritative, TLiveEvent>(
+function bindFullScopeTarget<TAuthoritative, TLiveEvent>(
   state: ReconciliationCoordinatorState<TAuthoritative, TLiveEvent>,
   reconciliationId: string,
   target: ReconciliationTarget,
@@ -387,7 +413,6 @@ function bindColdFullScope<TAuthoritative, TLiveEvent>(
   const request = state.requests[reconciliationId];
   if (
     request?.intent.type !== "full" ||
-    "selectedScope" in request.intent ||
     request.targets.some(
       (candidate) =>
         getReconciliationTargetKey(candidate) ===
@@ -407,9 +432,11 @@ function bindColdFullScope<TAuthoritative, TLiveEvent>(
       [targetKey]: currentTarget.revision,
     },
   };
+  const activatesColdSelection =
+    !("selectedScope" in request.intent) && state.activeScope === null;
   let nextState: ReconciliationCoordinatorState<TAuthoritative, TLiveEvent> = {
     ...state,
-    activeScope: target,
+    activeScope: activatesColdSelection ? target : state.activeScope,
   };
   nextState = withTargetState(nextState, {
     ...currentTarget,
@@ -423,7 +450,9 @@ function bindColdFullScope<TAuthoritative, TLiveEvent>(
       nextState.latestFullEpoch?.reconciliationId === reconciliationId
         ? {
             ...nextState.latestFullEpoch,
-            selectedScope: target,
+            selectedScope: activatesColdSelection
+              ? target
+              : nextState.latestFullEpoch.selectedScope,
             requiredTargetKeys: [
               ...nextState.latestFullEpoch.requiredTargetKeys,
               targetKey,
@@ -550,7 +579,9 @@ function fullEpochIsApplied<TAuthoritative, TLiveEvent>(
   state: ReconciliationCoordinatorState<TAuthoritative, TLiveEvent>,
 ) {
   const fullEpoch = state.latestFullEpoch;
-  if (!fullEpoch?.completed) return false;
+  if (!fullEpoch?.completed || fullEpoch.failedTargetKeys.length > 0) {
+    return false;
+  }
   return (
     REQUIRED_RECONCILIATION_DOMAINS.every(
       (domain) => state.domains[domain].status === "verified",
@@ -683,7 +714,7 @@ export function transitionReconciliation<TAuthoritative, TLiveEvent>(
         commands: [],
       };
     case "authoritative-received": {
-      state = bindColdFullScope(state, event.reconciliationId, event.target);
+      state = bindFullScopeTarget(state, event.reconciliationId, event.target);
       if (
         !requestRevisionIsCurrent(state, event.reconciliationId, event.target)
       ) {
@@ -802,9 +833,13 @@ export function transitionReconciliation<TAuthoritative, TLiveEvent>(
     }
     case "request-settled": {
       let nextState = state;
+      let mayEstablishFullParity = false;
+      const failedTargetKeys = new Set(
+        event.failedTargets?.map(getReconciliationTargetKey) ?? [],
+      );
       if (event.failedTargets && event.failedTargets.length > 0) {
         for (const target of event.failedTargets) {
-          nextState = bindColdFullScope(
+          nextState = bindFullScopeTarget(
             nextState,
             event.reconciliationId,
             target,
@@ -815,19 +850,49 @@ export function transitionReconciliation<TAuthoritative, TLiveEvent>(
       if (
         nextState.latestFullEpoch?.reconciliationId ===
           event.reconciliationId &&
-        event.failed !== true &&
-        (!event.failedTargets || event.failedTargets.length === 0)
+        event.epochComplete === true
       ) {
-        nextState = withEstablishedFullParity(
-          {
-            ...nextState,
-            latestFullEpoch: {
-              ...nextState.latestFullEpoch,
-              completed: true,
-            },
+        nextState = {
+          ...nextState,
+          latestFullEpoch: {
+            ...nextState.latestFullEpoch,
+            failedTargetKeys: [...failedTargetKeys],
+            completed: true,
           },
-          event.at,
+        };
+        mayEstablishFullParity = true;
+      } else if (
+        event.epochComplete === true &&
+        nextState.latestFullEpoch?.completed &&
+        nextState.latestFullEpoch.failedTargetKeys.length > 0
+      ) {
+        const request = nextState.requests[event.reconciliationId];
+        const repairedTargetKeys = new Set(
+          request?.targets
+            .filter((target) => {
+              const targetKey = getReconciliationTargetKey(target);
+              const current = nextState.targets[targetKey];
+              return (
+                !failedTargetKeys.has(targetKey) &&
+                current?.status === "verified" &&
+                current.appliedReconciliationId === event.reconciliationId
+              );
+            })
+            .map(getReconciliationTargetKey) ?? [],
         );
+        nextState = {
+          ...nextState,
+          latestFullEpoch: {
+            ...nextState.latestFullEpoch,
+            failedTargetKeys: nextState.latestFullEpoch.failedTargetKeys.filter(
+              (targetKey) => !repairedTargetKeys.has(targetKey),
+            ),
+          },
+        };
+        mayEstablishFullParity = repairedTargetKeys.size > 0;
+      }
+      if (mayEstablishFullParity) {
+        nextState = withEstablishedFullParity(nextState, event.at);
       }
       if (nextState.inFlight?.reconciliationId !== event.reconciliationId) {
         return { state: withDerivedTrust(nextState), commands: [] };

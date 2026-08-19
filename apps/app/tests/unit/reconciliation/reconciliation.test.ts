@@ -255,6 +255,7 @@ describe("reconciliation coordinator", () => {
       type: "request-settled",
       reconciliationId: request.reconciliationId,
       at: 6,
+      epochComplete: true,
     });
     expect(harness.state.serverParityAppliedAt).toBe(6);
     expect(harness.state.trustedUpToDate).toBe(false);
@@ -303,6 +304,7 @@ describe("reconciliation coordinator", () => {
       reconciliationId: request.reconciliationId,
       at: 3,
       failedTargets: [NAVIGATION],
+      epochComplete: true,
     });
 
     expect(commands).toEqual([]);
@@ -392,6 +394,59 @@ describe("reconciliation coordinator", () => {
     expect(trailing).toHaveLength(1);
     expect(startedRequest(trailing).intent.type).toBe("full");
     expect(harness.state.trailingIntent).toBeNull();
+  });
+
+  it("promotes more than 16 stale View repairs to one full reconciliation", () => {
+    const harness = coordinatorHarness();
+    hydrateAll(harness.send);
+    const request = startedRequest(
+      harness.send({
+        type: "request-reconciliation",
+        intent: { type: "full", selectedScope: ACTIVE_SCOPE },
+      }),
+    );
+    const targets = Array.from({ length: 17 }, (_, index) => ({
+      type: "scope" as const,
+      scope: { type: "view" as const, viewId: 100 + index },
+      contentStatus: {
+        saveStatus: "inbox" as const,
+        archiveStatus: "unread" as const,
+      },
+    }));
+
+    for (const target of targets) {
+      harness.send({
+        type: "authoritative-received",
+        reconciliationId: request.reconciliationId,
+        target,
+        requiresHydration: ["active-scope"],
+        payload: "initial-page",
+      });
+      harness.send({ type: "targets-dirtied", targets: [target] });
+      expect(
+        harness.send({
+          type: "authoritative-received",
+          reconciliationId: request.reconciliationId,
+          target,
+          requiresHydration: ["active-scope"],
+          payload: "stale-page",
+        }),
+      ).toEqual([]);
+    }
+
+    expect(harness.state.trailingIntent).toEqual({
+      type: "full",
+      selectedScope: ACTIVE_SCOPE,
+    });
+    expect(
+      startedRequest(
+        harness.send({
+          type: "request-settled",
+          reconciliationId: request.reconciliationId,
+          at: 1,
+        }),
+      ).intent,
+    ).toEqual({ type: "full", selectedScope: ACTIVE_SCOPE });
   });
 
   it("does not flush a buffered result after a newer request supersedes it", () => {

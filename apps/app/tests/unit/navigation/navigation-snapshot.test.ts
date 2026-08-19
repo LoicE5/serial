@@ -135,11 +135,10 @@ describe("navigation snapshot", () => {
       now: NOW,
     });
 
-    expect(snapshot.views[20]?.inbox.unread).toBe(true);
     expect(snapshot.viewFeeds[20]?.[1]?.inbox.unread).toBe(true);
   });
 
-  it("reports complete View, Tag, global Feed, and per-View Feed availability without loading content pages", async () => {
+  it("reports Tag, global Feed, and per-View Feed availability without loading content pages", async () => {
     await Promise.all([
       seedFeed(1),
       seedFeed(2),
@@ -213,18 +212,7 @@ describe("navigation snapshot", () => {
       now: NOW,
     });
 
-    expect(snapshot.views[21]).toEqual({
-      inbox: { unread: true, archived: true },
-      saved: { unread: false, archived: false },
-    });
-    expect(snapshot.views[22]).toEqual({
-      inbox: { unread: false, archived: false },
-      saved: { unread: false, archived: false },
-    });
-    expect(snapshot.views[UNCATEGORIZED_VIEW_ID]).toEqual({
-      inbox: { unread: true, archived: false },
-      saved: { unread: true, archived: false },
-    });
+    expect(snapshot).not.toHaveProperty("views");
     expect(snapshot.tags[11]).toEqual({
       inbox: { unread: true, archived: true },
       saved: { unread: false, archived: false },
@@ -274,7 +262,7 @@ describe("navigation snapshot", () => {
     });
   });
 
-  it("applies each View's time and content filters while keeping Feed availability global", async () => {
+  it("keeps Feed availability global while preserving per-View Feed filters", async () => {
     await seedFeed(1);
     await database.update(feeds).set({ platform: "youtube" });
     await database.insert(feedItems).values([
@@ -355,13 +343,10 @@ describe("navigation snapshot", () => {
       now: NOW,
     });
 
-    expect(snapshot.views[30]?.inbox.unread).toBe(false);
-    expect(snapshot.views[32]?.inbox.unread).toBe(true);
-    expect(snapshot.views[33]?.inbox.unread).toBe(true);
     expect(snapshot.feeds[1]?.inbox.unread).toBe(true);
   });
 
-  it("derives View availability from memberships without ownership leaks or canonical suppression", async () => {
+  it("omits the former View projection without ownership leaks", async () => {
     await database.insert(user).values({
       id: "other-user",
       name: "Other User",
@@ -485,26 +470,9 @@ describe("navigation snapshot", () => {
       now: NOW,
     });
 
-    expect(snapshot.views[40]).toEqual({
-      inbox: { unread: true, archived: true },
-      saved: { unread: true, archived: true },
-    });
-    expect(snapshot.views[41]).toEqual({
-      inbox: { unread: true, archived: false },
-      saved: { unread: false, archived: true },
-    });
-    expect(snapshot.views[42]).toEqual({
-      inbox: { unread: true, archived: false },
-      saved: { unread: false, archived: true },
-    });
-    expect(snapshot.views[43]).toEqual({
-      inbox: { unread: true, archived: false },
-      saved: { unread: false, archived: false },
-    });
-    expect(snapshot.views[44]).toEqual({
-      inbox: { unread: false, archived: false },
-      saved: { unread: false, archived: false },
-    });
+    expect(snapshot).not.toHaveProperty("views");
+    expect(snapshot.viewFeeds[40]?.[40]?.inbox.unread).toBe(true);
+    expect(snapshot.viewFeeds[44]?.[44]).toBeUndefined();
   });
 
   it("reports Saved availability independently for unread and archived content", async () => {
@@ -550,10 +518,6 @@ describe("navigation snapshot", () => {
       now: NOW,
     });
 
-    expect(snapshot.views[31]?.saved).toEqual({
-      unread: false,
-      archived: true,
-    });
     expect(snapshot.viewFeeds[31]?.[1]?.saved).toEqual({
       unread: false,
       archived: true,
@@ -570,10 +534,6 @@ describe("navigation snapshot", () => {
       now: NOW,
     });
 
-    expect(snapshot.views[31]?.saved).toEqual({
-      unread: true,
-      archived: true,
-    });
     expect(snapshot.viewFeeds[31]?.[1]?.saved).toEqual({
       unread: true,
       archived: false,
@@ -594,10 +554,6 @@ describe("navigation snapshot", () => {
       now: NOW,
     });
 
-    expect(snapshot.views[31]?.saved).toEqual({
-      unread: true,
-      archived: true,
-    });
     expect(snapshot.viewFeeds[31]?.[1]?.saved).toEqual({
       unread: false,
       archived: true,
