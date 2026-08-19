@@ -7,13 +7,72 @@ import { ArticleImageLightbox } from "~/components/feed/read/ArticleImageLightbo
 
 function renderReaderNodes(...nodes: ReactNode[]) {
   return renderToStaticMarkup(
-    createElement("main", null, ...flattenReaderImages(nodes)),
+    createElement("div", null, ...flattenReaderImages(nodes)),
   );
 }
 
+function expectInOrder(markup: string, ...values: string[]) {
+  const positions = values.map((value) => markup.indexOf(value));
+
+  expect(positions.every((position) => position >= 0)).toBe(true);
+  expect(positions).toEqual([...positions].sort((left, right) => left - right));
+}
+
 describe("reader content images", () => {
+  it("preserves an image between paragraphs in a wrapped article", () => {
+    const markup = renderReaderNodes(
+      createElement(
+        "article",
+        null,
+        createElement("p", null, "Paragraph before image"),
+        createElement(ArticleImageLightbox, {
+          src: "https://example.com/image.jpg",
+          alt: "Article illustration",
+        }),
+        createElement("p", null, "Paragraph after image"),
+      ),
+    );
+
+    expectInOrder(
+      markup,
+      "Paragraph before image",
+      "Open image preview: Article illustration",
+      "Paragraph after image",
+    );
+  });
+
+  it("preserves multiple images among content in a main wrapper", () => {
+    const markup = renderReaderNodes(
+      createElement(
+        "main",
+        null,
+        createElement("p", null, "Introduction"),
+        createElement(ArticleImageLightbox, {
+          src: "https://example.com/first.jpg",
+          alt: "First illustration",
+        }),
+        createElement("p", null, "Discussion"),
+        createElement(ArticleImageLightbox, {
+          src: "https://example.com/second.jpg",
+          alt: "Second illustration",
+        }),
+        createElement("p", null, "Conclusion"),
+      ),
+    );
+
+    expectInOrder(
+      markup,
+      "Introduction",
+      "Open image preview: First illustration",
+      "Discussion",
+      "Open image preview: Second illustration",
+      "Conclusion",
+    );
+  });
+
   it("removes navigation wrapped around an image", () => {
     const markup = renderReaderNodes(
+      createElement("p", null, "Before linked image"),
       createElement(
         "a",
         { href: "https://example.com/image-target" },
@@ -30,30 +89,45 @@ describe("reader content images", () => {
         ),
         "\n",
       ),
+      createElement("p", null, "After linked image"),
     );
 
     expect(markup).toContain('aria-label="Open image preview: Linked preview"');
     expect(markup).not.toContain("image-target");
+    expect(markup.match(/Open image preview: Linked preview/g)).toHaveLength(1);
+    expectInOrder(
+      markup,
+      "Before linked image",
+      "Open image preview: Linked preview",
+      "After linked image",
+    );
   });
 
-  it("preserves linked text next to a non-navigating image", () => {
+  it("splits a mixed anchor around a non-navigating image", () => {
     const markup = renderReaderNodes(
       createElement(
         "a",
         { href: "https://example.com/article" },
+        "Read before the image",
         createElement(ArticleImageLightbox, {
           src: "https://example.com/image.jpg",
           alt: "Mixed preview",
         }),
-        "Read the article",
+        "Read after the image",
       ),
     );
 
-    expect(markup.indexOf("Open image preview: Mixed preview")).toBeLessThan(
-      markup.indexOf("Read the article"),
+    expectInOrder(
+      markup,
+      "Read before the image",
+      "Open image preview: Mixed preview",
+      "Read after the image",
     );
     expect(markup).toContain(
-      '<a href="https://example.com/article">Read the article</a>',
+      '<a href="https://example.com/article">Read before the image</a>',
+    );
+    expect(markup).toContain(
+      '<a href="https://example.com/article">Read after the image</a>',
     );
   });
 
@@ -68,6 +142,32 @@ describe("reader content images", () => {
 
     expect(markup).toContain(
       '<a href="https://example.com/article">Read the article</a>',
+    );
+  });
+
+  it("keeps a figure and its caption together", () => {
+    const markup = renderReaderNodes(
+      createElement(
+        "article",
+        null,
+        createElement(
+          "figure",
+          null,
+          createElement(ArticleImageLightbox, {
+            src: "https://example.com/diagram.jpg",
+            alt: "System diagram",
+          }),
+          createElement("figcaption", null, "How the system fits together"),
+        ),
+      ),
+    );
+
+    expect(markup).toContain("<figure>");
+    expect(markup).toContain("</figcaption></figure>");
+    expectInOrder(
+      markup,
+      "Open image preview: System diagram",
+      "How the system fits together",
     );
   });
 });
