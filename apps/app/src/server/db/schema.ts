@@ -318,6 +318,9 @@ export const feedItems = sqliteTable(
     progress: integer("progress", { mode: "number" }).notNull().default(0),
     duration: integer("duration", { mode: "number" }).notNull().default(0),
     orientation: text("orientation", { length: 64 }),
+    orientationCheckedAt: integer("orientation_checked_at", {
+      mode: "timestamp",
+    }),
     postedAt: integer("posted_at", { mode: "timestamp" }).notNull(),
     createdAt: integer("created_at", { mode: "timestamp" })
       .$default(() => new Date())
@@ -361,13 +364,18 @@ export const feedItems = sqliteTable(
       example.isWatched,
       example.isWatchedUpdatedAt,
     ),
+    index("feed_item_feed_id_orientation_checked_at_idx").on(
+      example.feedId,
+      example.orientation,
+      example.orientationCheckedAt,
+    ),
   ],
 );
 export const feedItemSchema = createSelectSchema(feedItems);
 export type DatabaseFeedItem = typeof feedItems.$inferSelect;
 
 export const applicationFeedItemSchema = feedItemSchema
-  .omit({ normalizedUrl: true })
+  .omit({ normalizedUrl: true, orientationCheckedAt: true })
   .merge(
     z.object({
       platform: contentPlatformSchema,
@@ -377,6 +385,17 @@ export const applicationFeedItemSchema = feedItemSchema
   )
   .required();
 export type ApplicationFeedItem = z.infer<typeof applicationFeedItemSchema>;
+
+export const youtubeVideoClassifications = sqliteTable(
+  "youtube_video_classification",
+  {
+    videoId: text("video_id", { length: 11 }).primaryKey(),
+    orientation: text("orientation", {
+      enum: ["horizontal", "vertical"],
+    }).notNull(),
+    classifiedAt: integer("classified_at", { mode: "timestamp" }).notNull(),
+  },
+);
 
 export const contentCategories = sqliteTable(
   "content_categories",
@@ -854,6 +873,7 @@ export type AppConfigKeys = {
   "enabled-signup-providers": string; // JSON array, e.g. '["email","oauth"]'
   "admin-notify-on-signup": "true" | "false";
   "admin-notify-email": string; // email address to notify
+  "youtube-shorts-probe-cooldown-until": string; // epoch milliseconds
 };
 
 export type AppConfigKey = keyof AppConfigKeys;

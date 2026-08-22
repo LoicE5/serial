@@ -11,7 +11,7 @@ function isBlackPixel(value: number) {
 export function checkFeedItemIsVerticalFromUrl(
   url: string,
 ): ApplicationFeedItem["orientation"] {
-  return url.includes("/shorts/") ? "vertical" : "horizontal";
+  return url.includes("/shorts/") ? "vertical" : null;
 }
 
 export async function checkFeedItemIsVerticalFromThumbnail(
