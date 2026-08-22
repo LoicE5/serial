@@ -216,6 +216,18 @@ describe("doesFeedItemPassFilters – Uncategorized View", () => {
     },
   );
 
+  it("keeps a horizontal video Uncategorized when an all-feeds Shorts View claims its Short", () => {
+    const shortsView = makeView(10, { contentFilter: 4 });
+    const short = makeItem(1, "youtube", { orientation: "vertical" });
+    const horizontal = makeItem(1, "youtube", {
+      orientation: "horizontal",
+    });
+    const options = { customViews: [shortsView] };
+
+    expect(passes(short, uncategorizedView, options)).toBe(false);
+    expect(passes(horizontal, uncategorizedView, options)).toBe(true);
+  });
+
   it("includes a feed with no categories and no direct view assignment", () => {
     const feed = makeFeed(1);
     const item = makeItem(1);
@@ -406,10 +418,10 @@ describe("doesFeedItemPassFilters – custom view", () => {
     ).toBe(false);
   });
 
-  it("keeps an explicitly empty custom View empty", () => {
-    const feed = makeFeed(1);
-    const item = makeItem(1);
-    const view = makeView(10);
+  it("includes a Short in an empty-source Shorts View", () => {
+    const feed = makeFeed(1, "youtube");
+    const item = makeItem(1, "youtube", { orientation: "vertical" });
+    const view = makeView(10, { contentFilter: 4 });
 
     expect(
       passes(item, view, {
@@ -417,7 +429,7 @@ describe("doesFeedItemPassFilters – custom view", () => {
         feedCategories: [],
         customViews: [view],
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("excludes a feed via content-type filter even if it's directly assigned", () => {

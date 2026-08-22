@@ -102,6 +102,8 @@ async function seedBookmark(input: {
   effectiveUrl?: string;
   title?: string;
   author?: string;
+  contentType?: "text" | "video";
+  orientation?: "horizontal" | "vertical";
 }) {
   const canonicalUrl =
     input.canonicalUrl ?? `https://bookmarks.example/${input.id}`;
@@ -113,6 +115,8 @@ async function seedBookmark(input: {
     effectiveUrl: input.effectiveUrl ?? canonicalUrl,
     title: input.title,
     author: input.author,
+    contentType: input.contentType ?? "text",
+    orientation: input.orientation,
     isSaved: input.isSaved ?? true,
     isRead: input.isRead ?? false,
     createdAt: input.createdAt ?? NOW,
@@ -123,13 +127,18 @@ async function seedBookmark(input: {
   });
 }
 
-async function seedView(id: number, name: string) {
+async function seedView(
+  id: number,
+  name: string,
+  overrides: Partial<typeof views.$inferInsert> = {},
+) {
   await database.insert(views).values({
     id,
     userId: "user-one",
     name,
     contentFilter: 3,
     layout: "list",
+    ...overrides,
   });
 }
 
@@ -317,83 +326,93 @@ describe("mixed-content projection", () => {
     }
   });
 
-  it("includes Feed items only through explicit View or Tag membership, including unfiltered Views", async () => {
-    await seedFeed(1);
-    await seedFeed(2);
+  it("applies an empty-source Shorts View to existing and newly added Feeds", async () => {
+    await seedFeed(1, { platform: "youtube" });
     await seedFeedItem({
-      id: "assigned-feed-item",
+      id: "existing-short",
       feedId: 1,
-      url: "https://feeds.example/assigned",
+      url: "https://feeds.example/existing-short",
+      contentType: "video",
+      orientation: "vertical",
     });
-    await seedFeedItem({
-      id: "unassigned-feed-item",
-      feedId: 2,
-      url: "https://feeds.example/unassigned",
-    });
-    await seedView(10, "Assigned");
-    await seedView(11, "Unfiltered but empty");
-    await database.insert(viewFeeds).values({ viewId: 10, feedId: 1 });
+    await seedView(10, "All Shorts", { contentFilter: 4 });
 
-    const assignedView = await queryMixedContentPage({
+    const existing = await queryMixedContentPage({
       database,
       userId: "user-one",
       scope: { type: "view", viewId: 10 },
       contentStatus: { saveStatus: "inbox", archiveStatus: "unread" },
       limit: 20,
     });
-    expect(
-      assignedView.references.map((reference) => reference.entityId),
-    ).toEqual(["assigned-feed-item"]);
+    expect(existing.references.map(({ entityId }) => entityId)).toEqual([
+      "existing-short",
+    ]);
 
-    const emptyView = await queryMixedContentPage({
+    await seedFeed(2, { platform: "youtube" });
+    await seedFeedItem({
+      id: "new-short",
+      feedId: 2,
+      url: "https://feeds.example/new-short",
+      contentType: "video",
+      orientation: "vertical",
+    });
+    await seedFeedItem({
+      id: "new-horizontal",
+      feedId: 2,
+      url: "https://feeds.example/new-horizontal",
+      contentType: "video",
+      orientation: "horizontal",
+    });
+
+    const allShorts = await queryMixedContentPage({
       database,
       userId: "user-one",
-      scope: { type: "view", viewId: 11 },
+      scope: { type: "view", viewId: 10 },
       contentStatus: { saveStatus: "inbox", archiveStatus: "unread" },
       limit: 20,
     });
-    expect(emptyView.references).toEqual([]);
+    expect(allShorts.references.map(({ entityId }) => entityId).sort()).toEqual(
+      ["existing-short", "new-short"],
+    );
 
-    const inbox = await queryMixedContentPage({
+    const uncategorized = await queryMixedContentPage({
       database,
       userId: "user-one",
       scope: { type: "view", viewId: UNCATEGORIZED_VIEW_ID },
       contentStatus: { saveStatus: "inbox", archiveStatus: "unread" },
       limit: 20,
     });
-    expect(inbox.references.map((reference) => reference.entityId)).toEqual([
-      "unassigned-feed-item",
+    expect(uncategorized.references.map(({ entityId }) => entityId)).toEqual([
+      "new-horizontal",
     ]);
   });
 
-  it("includes Bookmarks only through explicit View or Tag membership, including unfiltered Views", async () => {
-    await seedView(10, "Assigned");
-    await seedView(11, "Unfiltered but empty");
-    await seedBookmark({ id: "assigned" });
-    await seedBookmark({ id: "unassigned" });
+  it("keeps Bookmark membership explicit for an empty-source feed View", async () => {
+    await seedView(11, "All Shorts", { contentFilter: 4 });
+    await seedBookmark({
+      id: "assigned",
+      contentType: "video",
+      orientation: "vertical",
+    });
+    await seedBookmark({
+      id: "unassigned",
+      contentType: "video",
+      orientation: "vertical",
+    });
     await database
       .insert(bookmarkViews)
-      .values({ bookmarkId: "assigned", viewId: 10 });
+      .values({ bookmarkId: "assigned", viewId: 11 });
 
     const assignedView = await queryMixedContentPage({
-      database,
-      userId: "user-one",
-      scope: { type: "view", viewId: 10 },
-      contentStatus: { saveStatus: "saved", archiveStatus: "unread" },
-      limit: 20,
-    });
-    expect(
-      assignedView.references.map((reference) => reference.entityId),
-    ).toEqual(["assigned"]);
-
-    const emptyView = await queryMixedContentPage({
       database,
       userId: "user-one",
       scope: { type: "view", viewId: 11 },
       contentStatus: { saveStatus: "saved", archiveStatus: "unread" },
       limit: 20,
     });
-    expect(emptyView.references).toEqual([]);
+    expect(
+      assignedView.references.map((reference) => reference.entityId),
+    ).toEqual(["assigned"]);
 
     const inbox = await queryMixedContentPage({
       database,
