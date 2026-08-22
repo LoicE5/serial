@@ -45,7 +45,6 @@ export default defineConfig(({ mode }) => {
       // },
     }),
     nitro({
-      preset: "node",
       serverDir: "server",
       experimental: { vite: {}, tasks: true },
       rollupConfig: { external: ["jsdom"] },
