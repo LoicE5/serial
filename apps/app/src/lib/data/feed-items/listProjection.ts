@@ -29,6 +29,7 @@ export type FeedItemFilterIndex = {
   feedIdsByViewId: ReadonlyMap<number, ReadonlySet<number>>;
   customViewsByCategoryId: ReadonlyMap<number, readonly ApplicationView[]>;
   customViewsByFeedId: ReadonlyMap<number, readonly ApplicationView[]>;
+  views: readonly ApplicationView[];
 };
 
 function addToSetMap(
@@ -102,6 +103,7 @@ export function createFeedItemFilterIndex(
     feedIdsByViewId,
     customViewsByCategoryId,
     customViewsByFeedId,
+    views,
   };
 }
 
@@ -181,8 +183,19 @@ export function createFeedItemFilterPredicate({
           ?.some((view) =>
             contentFilterAllowsDescriptor(view.contentFilter, item),
           ) ?? false;
+      const wouldAppearViaAllFeedsView = filterIndex.views.some(
+        (view) =>
+          view.id !== UNCATEGORIZED_VIEW_ID &&
+          view.feedIds.length === 0 &&
+          view.categoryIds.length === 0 &&
+          contentFilterAllowsDescriptor(view.contentFilter, item),
+      );
 
-      if (wouldAppearViaCategory || wouldAppearViaDirectAssignment) {
+      if (
+        wouldAppearViaCategory ||
+        wouldAppearViaDirectAssignment ||
+        wouldAppearViaAllFeedsView
+      ) {
         return false;
       }
 
@@ -192,6 +205,7 @@ export function createFeedItemFilterPredicate({
     if (
       !!viewFilter &&
       viewFilter.id !== UNCATEGORIZED_VIEW_ID &&
+      (viewFilter.categoryIds.length > 0 || viewFilter.feedIds.length > 0) &&
       !viewFeedIds?.has(item.feedId)
     ) {
       return false;

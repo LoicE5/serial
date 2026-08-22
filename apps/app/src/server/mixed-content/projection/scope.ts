@@ -170,6 +170,33 @@ function feedUncategorizedCondition(
       )
       .where(and(eq(feedCategories.feedId, feeds.id), compatibleView)),
   );
+  const unfiltered = exists(
+    database
+      .select({ value: sql<number>`1` })
+      .from(views)
+      .where(
+        and(
+          eq(views.userId, userId),
+          compatibleView,
+          not(
+            exists(
+              database
+                .select({ value: sql<number>`1` })
+                .from(viewFeeds)
+                .where(eq(viewFeeds.viewId, views.id)),
+            ),
+          ),
+          not(
+            exists(
+              database
+                .select({ value: sql<number>`1` })
+                .from(viewCategories)
+                .where(eq(viewCategories.viewId, views.id)),
+            ),
+          ),
+        ),
+      ),
+  );
   const hasUnclaimedItem = exists(
     database
       .select({ value: sql<number>`1` })
@@ -181,7 +208,7 @@ function feedUncategorizedCondition(
         ),
       ),
   );
-  return or(and(not(direct), not(tagged)), hasUnclaimedItem);
+  return or(and(not(direct), not(tagged), not(unfiltered)), hasUnclaimedItem);
 }
 
 function feedItemUncategorizedCondition(
@@ -217,7 +244,34 @@ function feedItemUncategorizedCondition(
       )
       .where(and(eq(feedCategories.feedId, feedItems.feedId), compatibleView)),
   );
-  return and(not(direct), not(tagged));
+  const unfiltered = exists(
+    database
+      .select({ value: sql<number>`1` })
+      .from(views)
+      .where(
+        and(
+          eq(views.userId, userId),
+          compatibleView,
+          not(
+            exists(
+              database
+                .select({ value: sql<number>`1` })
+                .from(viewFeeds)
+                .where(eq(viewFeeds.viewId, views.id)),
+            ),
+          ),
+          not(
+            exists(
+              database
+                .select({ value: sql<number>`1` })
+                .from(viewCategories)
+                .where(eq(viewCategories.viewId, views.id)),
+            ),
+          ),
+        ),
+      ),
+  );
+  return and(not(direct), not(tagged), not(unfiltered));
 }
 
 function bookmarkUncategorizedCondition(
@@ -283,7 +337,7 @@ export function feedScopeCondition(input: {
   const targetView = scopeData.targetView!;
   const membership =
     scopeData.directFeedIds.length === 0 && scopeData.categoryIds.length === 0
-      ? sql`0`
+      ? undefined
       : or(
           scopeData.directFeedIds.length > 0
             ? inArray(feeds.id, scopeData.directFeedIds)
