@@ -170,6 +170,53 @@ function feedUncategorizedCondition(
       )
       .where(and(eq(feedCategories.feedId, feeds.id), compatibleView)),
   );
+  const hasUnclaimedItem = exists(
+    database
+      .select({ value: sql<number>`1` })
+      .from(feedItems)
+      .where(
+        and(
+          eq(feedItems.feedId, feeds.id),
+          feedItemUncategorizedCondition(database, userId),
+        ),
+      ),
+  );
+  return or(and(not(direct), not(tagged)), hasUnclaimedItem);
+}
+
+function feedItemUncategorizedCondition(
+  database: MixedContentDatabase,
+  userId: string,
+) {
+  const compatibleView = contentFilterColumnAllowsDescriptor({
+    filter: views.contentFilter,
+    contentType: feedItems.contentType,
+    orientation: feedItems.orientation,
+  });
+  const direct = exists(
+    database
+      .select({ value: sql<number>`1` })
+      .from(viewFeeds)
+      .innerJoin(
+        views,
+        and(eq(views.id, viewFeeds.viewId), eq(views.userId, userId)),
+      )
+      .where(and(eq(viewFeeds.feedId, feedItems.feedId), compatibleView)),
+  );
+  const tagged = exists(
+    database
+      .select({ value: sql<number>`1` })
+      .from(feedCategories)
+      .innerJoin(
+        viewCategories,
+        eq(viewCategories.categoryId, feedCategories.categoryId),
+      )
+      .innerJoin(
+        views,
+        and(eq(views.id, viewCategories.viewId), eq(views.userId, userId)),
+      )
+      .where(and(eq(feedCategories.feedId, feedItems.feedId), compatibleView)),
+  );
   return and(not(direct), not(tagged));
 }
 
@@ -268,6 +315,21 @@ export function feedScopeCondition(input: {
         )
       : undefined;
   return and(membership, contentFilter, timeWindow);
+}
+
+export function feedItemScopeCondition(input: {
+  database: MixedContentDatabase;
+  userId: string;
+  scope: MixedContentScope;
+  scopeData: ScopeData;
+}) {
+  if (
+    input.scope.type === "view" &&
+    input.scope.viewId === UNCATEGORIZED_VIEW_ID
+  ) {
+    return feedItemUncategorizedCondition(input.database, input.userId);
+  }
+  return feedScopeCondition(input);
 }
 
 export function bookmarkScopeCondition(input: {

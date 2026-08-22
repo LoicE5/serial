@@ -67,6 +67,8 @@ async function seedFeedItem(input: {
   isWatchLater?: boolean;
   isWatchedUpdatedAt?: Date | null;
   isWatchLaterUpdatedAt?: Date | null;
+  contentType?: "text" | "video";
+  orientation?: "horizontal" | "vertical";
 }) {
   await database.insert(feedItems).values({
     id: input.id,
@@ -79,7 +81,8 @@ async function seedFeedItem(input: {
     postedAt: input.postedAt ?? NOW,
     createdAt: input.postedAt ?? NOW,
     updatedAt: NOW,
-    orientation: "horizontal",
+    contentType: input.contentType ?? "text",
+    orientation: input.orientation ?? "horizontal",
     isWatched: input.isWatched ?? false,
     isWatchLater: input.isWatchLater ?? false,
     isWatchedUpdatedAt: input.isWatchedUpdatedAt ?? null,
@@ -138,6 +141,81 @@ beforeEach(async () => {
 afterEach(() => cleanup());
 
 describe("mixed-content projection", () => {
+  it("routes each YouTube item between Shorts and Uncategorized for direct, Tag, unread, and archived scopes", async () => {
+    await Promise.all([
+      seedFeed(1, { platform: "youtube" }),
+      seedFeed(2, { platform: "youtube" }),
+    ]);
+    await database.insert(views).values({
+      id: 10,
+      userId: "user-one",
+      name: "Shorts",
+      contentFilter: 4,
+      layout: "list",
+    });
+    await database.insert(contentCategories).values({
+      id: 1,
+      userId: "user-one",
+      name: "YouTube",
+    });
+    await database.insert(viewFeeds).values({ viewId: 10, feedId: 1 });
+    await database.insert(feedCategories).values({ feedId: 2, categoryId: 1 });
+    await database.insert(viewCategories).values({
+      viewId: 10,
+      categoryId: 1,
+    });
+
+    for (const feedId of [1, 2]) {
+      for (const archived of [false, true]) {
+        for (const orientation of ["vertical", "horizontal"] as const) {
+          const id = `${feedId}-${orientation}-${archived ? "archived" : "unread"}`;
+          // oxlint-disable-next-line react-doctor/async-await-in-loop
+          await seedFeedItem({
+            id,
+            feedId,
+            url: `https://items.example/${id}`,
+            contentType: "video",
+            orientation,
+            isWatched: archived,
+            isWatchedUpdatedAt: archived ? NOW : null,
+          });
+        }
+      }
+    }
+
+    for (const archived of [false, true]) {
+      const contentStatus = {
+        saveStatus: "inbox" as const,
+        archiveStatus: archived ? ("archived" as const) : ("unread" as const),
+      };
+      // oxlint-disable-next-line react-doctor/async-await-in-loop
+      const shorts = await queryMixedContentPage({
+        database,
+        userId: "user-one",
+        scope: { type: "view", viewId: 10 },
+        contentStatus,
+        limit: 20,
+      });
+      // oxlint-disable-next-line react-doctor/async-await-in-loop
+      const uncategorized = await queryMixedContentPage({
+        database,
+        userId: "user-one",
+        scope: { type: "view", viewId: UNCATEGORIZED_VIEW_ID },
+        contentStatus,
+        limit: 20,
+      });
+      const suffix = archived ? "archived" : "unread";
+
+      expect(shorts.references.map(({ entityId }) => entityId).sort()).toEqual([
+        `1-vertical-${suffix}`,
+        `2-vertical-${suffix}`,
+      ]);
+      expect(
+        uncategorized.references.map(({ entityId }) => entityId).sort(),
+      ).toEqual([`1-horizontal-${suffix}`, `2-horizontal-${suffix}`]);
+    }
+  });
+
   it("selects each save/archive cell for direct View and Tag-derived membership", async () => {
     await seedFeed(1);
     await seedView(10, "Status matrix");

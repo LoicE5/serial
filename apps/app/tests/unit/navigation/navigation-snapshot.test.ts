@@ -87,6 +87,47 @@ beforeEach(async () => {
 afterEach(() => cleanup());
 
 describe("navigation snapshot", () => {
+  it("keeps Uncategorized availability item-scoped for a Shorts-assigned YouTube Feed", async () => {
+    await seedFeed(1);
+    await database.update(feeds).set({ platform: "youtube" });
+    await Promise.all([
+      seedFeedItem({
+        id: "vertical-short",
+        feedId: 1,
+        contentType: "video",
+        orientation: "vertical",
+      }),
+      seedFeedItem({
+        id: "archived-horizontal-video",
+        feedId: 1,
+        contentType: "video",
+        orientation: "horizontal",
+        isWatched: true,
+      }),
+    ]);
+    await database.insert(views).values({
+      id: 20,
+      userId: "navigation-user",
+      name: "Shorts",
+      contentFilter: 4,
+      daysWindow: 0,
+      layout: "list",
+    });
+    await database.insert(viewFeeds).values({ viewId: 20, feedId: 1 });
+
+    const snapshot = await queryNavigationSnapshot({
+      database,
+      userId: "navigation-user",
+      now: NOW,
+    });
+
+    expect(snapshot.viewFeeds[20]?.[1]?.inbox.unread).toBe(true);
+    expect(snapshot.viewFeeds[UNCATEGORIZED_VIEW_ID]?.[1]?.inbox).toEqual({
+      unread: false,
+      archived: true,
+    });
+  });
+
   it("keeps Feed availability when a matching Bookmark has different status", async () => {
     await seedFeed(1);
     await database.insert(views).values({

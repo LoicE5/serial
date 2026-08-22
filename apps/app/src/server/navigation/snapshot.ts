@@ -29,7 +29,10 @@ import {
   viewFeeds,
   views,
 } from "~/server/db/schema";
-import { feedScopeCondition } from "~/server/mixed-content/projection/scope";
+import {
+  feedItemScopeCondition,
+  feedScopeCondition,
+} from "~/server/mixed-content/projection/scope";
 
 type NavigationDatabase = typeof defaultDatabase;
 type SqlColumn = Parameters<typeof eq>[0];
@@ -349,6 +352,7 @@ async function queryUncategorizedViewFeedAvailability(input: {
         .where(
           and(
             eq(feedItems.feedId, feeds.id),
+            feedItemScopeCondition(uncategorizedScope),
             contentStatusCondition({
               contentStatus,
               isRead: feedItems.isWatched,

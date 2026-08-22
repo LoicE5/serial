@@ -1,5 +1,4 @@
 import { UNCATEGORIZED_VIEW_ID } from "../views/constants";
-import { isFeedCompatibleWithContentFilter } from "./filters";
 import type {
   ApplicationFeedItem,
   ApplicationView,
@@ -173,20 +172,14 @@ export function createFeedItemFilterPredicate({
           filterIndex.customViewsByCategoryId
             .get(categoryId)
             ?.some((view) =>
-              isFeedCompatibleWithContentFilter(
-                item.platform,
-                view.contentFilter,
-              ),
+              contentFilterAllowsDescriptor(view.contentFilter, item),
             ) ?? false,
       );
       const wouldAppearViaDirectAssignment =
         filterIndex.customViewsByFeedId
           .get(item.feedId)
           ?.some((view) =>
-            isFeedCompatibleWithContentFilter(
-              item.platform,
-              view.contentFilter,
-            ),
+            contentFilterAllowsDescriptor(view.contentFilter, item),
           ) ?? false;
 
       if (wouldAppearViaCategory || wouldAppearViaDirectAssignment) {

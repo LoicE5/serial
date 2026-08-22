@@ -9,7 +9,7 @@ import {
   or,
   sql,
 } from "drizzle-orm";
-import { bookmarkScopeCondition, feedScopeCondition } from "./scope";
+import { bookmarkScopeCondition, feedItemScopeCondition } from "./scope";
 import type { SQL } from "drizzle-orm";
 import type {
   MixedContentCursor,
@@ -252,7 +252,7 @@ export async function queryFeedCandidates(input: {
       and(
         eq(feeds.userId, input.userId),
         feedContentStatusCondition(input.contentStatus),
-        feedScopeCondition(input),
+        feedItemScopeCondition(input),
         input.sectionPlacement === undefined || !input.usesSectionOrder
           ? undefined
           : eq(placement, input.sectionPlacement),
