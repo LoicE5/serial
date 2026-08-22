@@ -146,6 +146,17 @@ describe("readFeedHttp", () => {
     ).rejects.toThrow("Feed request exceeded 1 redirect");
   });
 
+  it("can return the first redirect without following it", async () => {
+    const response = await readLocalFeedHttp(`${baseUrl}/redirect-a`, {
+      followRedirects: false,
+      method: "HEAD",
+    });
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe("/redirect-b");
+    expect(response.text).toBe("");
+  });
+
   it("aborts the whole redirect-and-body attempt at its duration budget", async () => {
     await expect(
       readLocalFeedHttp(`${baseUrl}/slow`, { totalDurationMs: 20 }),

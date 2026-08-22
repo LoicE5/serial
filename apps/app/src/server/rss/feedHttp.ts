@@ -12,6 +12,7 @@ import {
 } from "~/server/http/publicHttp";
 
 export type FeedHttpReadOptions = {
+  followRedirects?: boolean;
   headers?: HeadersInit;
   method?: "GET" | "HEAD";
   maxBodyBytes?: number;
@@ -125,7 +126,10 @@ export async function readFeedHttp(
         );
         assertHeadersWithinBudget(responseHeaders, maxHeaderBytes);
 
-        if (REDIRECT_STATUSES.has(response.status)) {
+        if (
+          REDIRECT_STATUSES.has(response.status) &&
+          options.followRedirects !== false
+        ) {
           if (redirectCount >= maxRedirects) {
             await response.body?.cancel();
             const redirectLabel = maxRedirects === 1 ? "redirect" : "redirects";

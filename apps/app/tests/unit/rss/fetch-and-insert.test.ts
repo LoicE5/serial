@@ -7,6 +7,40 @@ import type { Server } from "node:http";
 import type { DatabaseFeed } from "~/server/db/schema";
 import type * as FeedHttpModule from "~/server/rss/feedHttp";
 import { fetchAndInsertFeedData } from "~/server/rss/fetchFeeds";
+import { reclassifyStoredYouTubeFeedItems } from "~/server/rss/reclassifyYouTubeFeedItems";
+import { createYouTubeOrientationProbeRun } from "~/server/rss/youtubeOrientation";
+
+vi.mock("~/server/rss/youtubeOrientation", () => ({
+  YOUTUBE_ORIENTATION_RETRY_MS: 24 * 60 * 60 * 1_000,
+  createYouTubeOrientationProbeRun: vi.fn(() => ({
+    classifyUrls: (urls: string[]) =>
+      Promise.resolve(
+        new Map(
+          urls.map((url) => [
+            url,
+            {
+              attempted: true,
+              checkedAt: null,
+              orientation:
+                url.includes("/shorts/") || url.includes("v=vd14EElCRvs")
+                  ? "vertical"
+                  : "horizontal",
+            },
+          ]),
+        ),
+      ),
+  })),
+  parseYouTubeVideoUrl: (url: string) => {
+    const parsed = new URL(url);
+    const videoId = parsed.searchParams.get("v");
+    if (videoId) return { kind: "watch", videoId };
+    const shortId = parsed.pathname.split("/")[2];
+    return shortId ? { kind: "shorts", videoId: shortId } : null;
+  },
+}));
+vi.mock("~/server/rss/reclassifyYouTubeFeedItems", () => ({
+  reclassifyStoredYouTubeFeedItems: vi.fn(() => Promise.resolve([])),
+}));
 
 vi.mock("~/server/rss/feedHttp", async (importOriginal) => {
   const actual = await importOriginal<typeof FeedHttpModule>();
@@ -183,6 +217,53 @@ function createMockDb(existingItems: unknown[] = []) {
 }
 
 describe("fetchAndInsertFeedData with real RSS server", () => {
+  it("classifies a YouTube RSS /watch URL representing a Short as vertical", async () => {
+    setServerContent("v1");
+    const { db, insertValuesCalls } = createMockDb();
+
+    for await (const result of fetchAndInsertFeedData({ db: db as any }, [
+      makeFeed(),
+    ])) {
+      expect(result.status).toBe("success");
+    }
+
+    const insertedItems = insertValuesCalls[0] as Array<
+      Record<string, unknown>
+    >;
+    const short = insertedItems.find(
+      (item) => item.url === "https://www.youtube.com/watch?v=vd14EElCRvs",
+    );
+    expect(short).toMatchObject({ orientation: "vertical" });
+  });
+
+  it("continues ingesting with null orientation when YouTube probing is unavailable", async () => {
+    setServerContent("v1");
+    vi.mocked(createYouTubeOrientationProbeRun).mockReturnValueOnce({
+      classifyUrls: (urls: string[]) =>
+        Promise.resolve(
+          new Map(
+            urls.map((url) => [
+              url,
+              { attempted: false, checkedAt: null, orientation: null },
+            ]),
+          ),
+        ),
+    } as never);
+    const { db, insertValuesCalls } = createMockDb();
+
+    for await (const result of fetchAndInsertFeedData({ db: db as any }, [
+      makeFeed(),
+    ])) {
+      expect(result.status).toBe("success");
+    }
+
+    expect(
+      (insertValuesCalls[0] as Array<Record<string, unknown>>).every(
+        (item) => item.orientation === null,
+      ),
+    ).toBe(true);
+  });
+
   it("inserts feed items on first fetch and stores etag/lastModified", async () => {
     setServerContent("v1");
     const feed = makeFeed();
@@ -227,6 +308,52 @@ describe("fetchAndInsertFeedData with real RSS server", () => {
     expect(feedUpdate).toHaveProperty("nextFetchAt");
     expect(feedUpdate).not.toHaveProperty("etag");
     expect(feedUpdate).not.toHaveProperty("lastModifiedHeader");
+  });
+
+  it("returns stored-item reclassifications even when YouTube RSS returns 304", async () => {
+    setServerContent("v1");
+    vi.mocked(reclassifyStoredYouTubeFeedItems).mockResolvedValueOnce([
+      {
+        id: "existing-short",
+        feedId: 1,
+        contentId: "vd14EElCRvs",
+        title: "Existing Short",
+        author: "Author",
+        url: "https://www.youtube.com/watch?v=vd14EElCRvs",
+        thumbnail: "",
+        content: "",
+        contentSnippet: "",
+        contentType: "video",
+        isWatched: false,
+        isWatchLater: false,
+        progress: 0,
+        duration: 0,
+        orientation: "vertical",
+        postedAt: new Date(),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        isWatchedUpdatedAt: null,
+        isWatchLaterUpdatedAt: null,
+        contentHash: null,
+        platform: "youtube",
+      },
+    ]);
+    const { db } = createMockDb();
+
+    const results = [];
+    for await (const result of fetchAndInsertFeedData({ db: db as any }, [
+      makeFeed({ etag: ETAG_V1 }),
+    ])) {
+      results.push(result);
+    }
+
+    expect(results).toMatchObject([
+      {
+        status: "success",
+        feedItems: [{ id: "existing-short", orientation: "vertical" }],
+      },
+    ]);
+    expect(db.insert).not.toHaveBeenCalled();
   });
 
   it("skips insert on second fetch when Last-Modified matches (304)", async () => {
@@ -336,6 +463,8 @@ describe("fetchAndInsertFeedData with content update", () => {
       (item) => ({
         url: item.url as string,
         contentHash: item.contentHash as string,
+        orientation: item.orientation,
+        orientationCheckedAt: item.orientationCheckedAt,
       }),
     );
 
@@ -423,6 +552,8 @@ describe("fetchAndInsertFeedData content diffing", () => {
       (item) => ({
         url: item.url as string,
         contentHash: item.contentHash as string,
+        orientation: item.orientation,
+        orientationCheckedAt: item.orientationCheckedAt,
       }),
     );
     const twoExisting = allItems.slice(0, 2);
@@ -459,6 +590,8 @@ describe("fetchAndInsertFeedData content diffing", () => {
     ).map((item) => ({
       url: item.url as string,
       contentHash: item.contentHash as string,
+      orientation: item.orientation,
+      orientationCheckedAt: item.orientationCheckedAt,
     }));
 
     // Second fetch with all items already in DB
@@ -495,6 +628,8 @@ describe("fetchAndInsertFeedData content diffing", () => {
     const existingItems = insertedItems.map((item) => ({
       url: item.url as string,
       contentHash: item.contentHash as string,
+      orientation: item.orientation,
+      orientationCheckedAt: item.orientationCheckedAt,
     }));
     existingItems[0]!.contentHash = "stale-hash-that-wont-match";
 

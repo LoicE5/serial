@@ -20,9 +20,16 @@ import {
 import { computeItemHash } from "./hash";
 import { boundFeedItems } from "./feedBounds";
 import { readFeedHttp } from "./feedHttp";
+import { reclassifyStoredYouTubeFeedItems } from "./reclassifyYouTubeFeedItems";
 import { isAuthorizedTestRssUrl } from "./testRssOrigin";
+import {
+  createYouTubeOrientationProbeRun,
+  parseYouTubeVideoUrl,
+  YOUTUBE_ORIENTATION_RETRY_MS,
+} from "./youtubeOrientation";
 import type { ApplicationFeedItem, DatabaseFeed } from "../db/schema";
 import type { db as Database } from "../db";
+import type { YouTubeOrientationProbeRun } from "./youtubeOrientation";
 import type {
   ConditionalHeaders,
   FeedFetchResult,
@@ -166,6 +173,8 @@ async function insertFeedItems(
   feedId: number,
   items: RSSContent[],
   databaseFeeds: DatabaseFeed[],
+  youtubeProbeRun: YouTubeOrientationProbeRun,
+  now: Date,
 ): Promise<ApplicationFeedItem[]> {
   if (!items.length) {
     return [];
@@ -174,6 +183,43 @@ async function insertFeedItems(
   const targetFeed = databaseFeeds.find((feed) => feed.id === feedId);
   const feedContentType =
     targetFeed?.platform === "website" ? CONTENT_TYPE.TEXT : CONTENT_TYPE.VIDEO;
+  const incomingUrls = items.map((item) => item.url);
+  const existingItems = await dbSemaphore.run(() =>
+    context.db
+      .select({
+        url: feedItems.url,
+        contentHash: feedItems.contentHash,
+        normalizedUrl: feedItems.normalizedUrl,
+        orientation: feedItems.orientation,
+        orientationCheckedAt: feedItems.orientationCheckedAt,
+      })
+      .from(feedItems)
+      .where(
+        and(eq(feedItems.feedId, feedId), inArray(feedItems.url, incomingUrls)),
+      )
+      .all(),
+  );
+  const existingByUrl = new Map(existingItems.map((item) => [item.url, item]));
+  const retryBefore = new Date(now.getTime() - YOUTUBE_ORIENTATION_RETRY_MS);
+  const urlsToClassify =
+    targetFeed?.platform === "youtube"
+      ? incomingUrls.filter((url) => {
+          const reference = parseYouTubeVideoUrl(url);
+          if (reference?.kind === "shorts") return true;
+          const existing = existingByUrl.get(url);
+          return (
+            reference?.kind === "watch" &&
+            (!existing ||
+              (existing.orientation === null &&
+                (!existing.orientationCheckedAt ||
+                  existing.orientationCheckedAt <= retryBefore)))
+          );
+        })
+      : [];
+  const youtubeOrientationOutcomes =
+    targetFeed?.platform === "youtube"
+      ? await youtubeProbeRun.classifyUrls(urlsToClassify)
+      : null;
   const feedItemList: Array<typeof feedItems.$inferInsert> = items.map(
     (item) => {
       let normalizedUrl: string | null = null;
@@ -183,6 +229,14 @@ async function insertFeedItems(
         // Invalid item URLs retain their existing Feed behavior but cannot
         // keep the normalized URL stable for identity and cache matching.
       }
+      const existing = existingByUrl.get(item.url);
+      const orientationOutcome = youtubeOrientationOutcomes?.get(item.url);
+      const preserveExistingOrientation =
+        targetFeed?.platform === "youtube" &&
+        existing !== undefined &&
+        (!orientationOutcome ||
+          (orientationOutcome.orientation === null &&
+            !orientationOutcome.attempted));
       return {
         feedId,
         contentId: item.id,
@@ -195,29 +249,21 @@ async function insertFeedItems(
         url: item.url,
         normalizedUrl,
         postedAt: new Date(item.publishedDate),
-        orientation: checkFeedItemIsVerticalFromUrl(item.url),
+        orientation: preserveExistingOrientation
+          ? existing.orientation
+          : (orientationOutcome?.orientation ??
+            (targetFeed?.platform === "youtube"
+              ? null
+              : (checkFeedItemIsVerticalFromUrl(item.url) ?? "horizontal"))),
+        orientationCheckedAt: preserveExistingOrientation
+          ? existing.orientationCheckedAt
+          : (orientationOutcome?.checkedAt ?? null),
       } satisfies typeof feedItems.$inferInsert;
     },
   );
 
-  // Diff against existing hashes to avoid unnecessary writes.
-  const incomingUrls = feedItemList.map((item) => item.url);
-  const existingItems = await dbSemaphore.run(() =>
-    context.db
-      .select({
-        url: feedItems.url,
-        contentHash: feedItems.contentHash,
-        normalizedUrl: feedItems.normalizedUrl,
-      })
-      .from(feedItems)
-      .where(
-        and(eq(feedItems.feedId, feedId), inArray(feedItems.url, incomingUrls)),
-      )
-      .all(),
-  );
-
-  const existingByUrl = new Map(existingItems.map((item) => [item.url, item]));
-
+  // Diff against existing hashes and classification state to avoid
+  // unnecessary writes without relying on orientation being part of the hash.
   const feedItemListWithHash = feedItemList.map((item) => ({
     ...item,
     contentHash: computeItemHash(item),
@@ -230,7 +276,10 @@ async function insertFeedItems(
     // when the Feed content itself is otherwise unchanged.
     return (
       existing.contentHash !== incoming.contentHash ||
-      (existing.normalizedUrl ?? null) !== incoming.normalizedUrl
+      (existing.normalizedUrl ?? null) !== incoming.normalizedUrl ||
+      existing.orientation !== incoming.orientation ||
+      (existing.orientationCheckedAt?.getTime() ?? null) !==
+        (incoming.orientationCheckedAt?.getTime() ?? null)
     );
   });
 
@@ -255,6 +304,7 @@ async function insertFeedItems(
             "normalizedUrl",
             "createdAt",
             "orientation",
+            "orientationCheckedAt",
             "postedAt",
             "thumbnail",
             "title",
@@ -282,22 +332,43 @@ export async function* fetchAndInsertFeedData(
   databaseFeeds: DatabaseFeed[],
 ) {
   const now = new Date();
+  const youtubeProbeRun = createYouTubeOrientationProbeRun(context.db, {
+    now: () => now,
+  });
 
   const processFeed = async (feed: DatabaseFeed): Promise<FeedResult> => {
     try {
-      // Check if we should skip this feed based on nextFetchAt
-      if (feed.nextFetchAt && feed.nextFetchAt > now) {
+      if (!feed.isActive) {
         return {
           status: "skipped",
           id: feed.id,
         };
       }
 
-      if (!feed.isActive) {
-        return {
-          status: "skipped",
-          id: feed.id,
-        };
+      // Existing YouTube rows are reclassified independently of RSS fetches,
+      // including due-date skips, shared-cache hits, and 304 responses.
+      const reclassifiedItems =
+        feed.platform === "youtube"
+          ? await reclassifyStoredYouTubeFeedItems(
+              context,
+              feed,
+              youtubeProbeRun,
+              { now },
+            )
+          : [];
+
+      // Check if we should skip this feed based on nextFetchAt
+      if (feed.nextFetchAt && feed.nextFetchAt > now) {
+        return reclassifiedItems.length > 0
+          ? {
+              status: "success",
+              feedItems: reclassifiedItems,
+              id: feed.id,
+            }
+          : {
+              status: "skipped",
+              id: feed.id,
+            };
       }
 
       // Check cross-user cache
@@ -367,11 +438,13 @@ export async function* fetchAndInsertFeedData(
           feed.id,
           boundFeedItems(cachedResult.data.items),
           databaseFeeds,
+          youtubeProbeRun,
+          now,
         );
 
         return {
           status: "success",
-          feedItems: applicationFeedItems,
+          feedItems: [...reclassifiedItems, ...applicationFeedItems],
           id: feed.id,
           fromCache: true,
         };
@@ -429,10 +502,16 @@ export async function* fetchAndInsertFeedData(
             })
             .where(eq(feeds.id, feed.id)),
         );
-        return {
-          status: "skipped",
-          id: feed.id,
-        };
+        return reclassifiedItems.length > 0
+          ? {
+              status: "success",
+              feedItems: reclassifiedItems,
+              id: feed.id,
+            }
+          : {
+              status: "skipped",
+              id: feed.id,
+            };
       }
 
       // At this point feedData is a full RSSFeedWithMetadata (not notModified)
@@ -494,11 +573,13 @@ export async function* fetchAndInsertFeedData(
         feed.id,
         completedFeed.items,
         databaseFeeds,
+        youtubeProbeRun,
+        now,
       );
 
       return {
         status: "success",
-        feedItems: applicationFeedItems,
+        feedItems: [...reclassifiedItems, ...applicationFeedItems],
         id: feed.id,
       };
     } catch (e) {

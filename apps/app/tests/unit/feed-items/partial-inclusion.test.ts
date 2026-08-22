@@ -8,6 +8,7 @@ import type {
   DatabaseFeedCategory,
 } from "~/server/db/schema";
 import type { ContentPlatform } from "~/lib/content/descriptor";
+import type { ContentStatusFilter } from "~/lib/content-status";
 import {
   createFeedItemFilterIndex,
   createFeedItemFilterPredicate,
@@ -119,6 +120,7 @@ function passes(
     feeds?: DatabaseFeed[];
     feedCategories?: DatabaseFeedCategory[];
     customViews?: ApplicationView[];
+    contentStatusFilter?: ContentStatusFilter;
   } = {},
 ): boolean {
   const feedCategories = opts.feedCategories ?? [];
@@ -129,7 +131,10 @@ function passes(
       : customViews;
   const filterIndex = createFeedItemFilterIndex(feedCategories, views);
   const doesFeedItemPassFilters = createFeedItemFilterPredicate({
-    contentStatusFilter: { saveStatus: "inbox", archiveStatus: "unread" },
+    contentStatusFilter: opts.contentStatusFilter ?? {
+      saveStatus: "inbox",
+      archiveStatus: "unread",
+    },
     categoryFilter: -1,
     feedFilter: -1,
     viewFilter,
@@ -169,6 +174,48 @@ describe("isFeedCompatibleWithContentFilter", () => {
 // ---------- doesFeedItemPassFilters: Uncategorized View ----------
 
 describe("doesFeedItemPassFilters – Uncategorized View", () => {
+  it.each([
+    { assignment: "direct", archived: false },
+    { assignment: "category", archived: false },
+    { assignment: "direct", archived: true },
+    { assignment: "category", archived: true },
+  ] as const)(
+    "only lets a Shorts View claim matching $assignment-assigned items when archived=$archived",
+    ({ assignment, archived }) => {
+      const shortsView = makeView(10, {
+        contentFilter: 4,
+        feedIds: assignment === "direct" ? [1] : [],
+        categoryIds: assignment === "category" ? [100] : [],
+      });
+      const feedCategories =
+        assignment === "category" ? [{ feedId: 1, categoryId: 100 }] : [];
+      const contentStatusFilter: ContentStatusFilter = {
+        saveStatus: "inbox",
+        archiveStatus: archived ? "archived" : "unread",
+      };
+      const vertical = makeItem(1, "youtube", {
+        id: `vertical-${assignment}-${archived}`,
+        orientation: "vertical",
+        isWatched: archived,
+      });
+      const horizontal = makeItem(1, "youtube", {
+        id: `horizontal-${assignment}-${archived}`,
+        orientation: "horizontal",
+        isWatched: archived,
+      });
+      const options = {
+        feedCategories,
+        customViews: [shortsView],
+        contentStatusFilter,
+      };
+
+      expect(passes(vertical, shortsView, options)).toBe(true);
+      expect(passes(horizontal, shortsView, options)).toBe(false);
+      expect(passes(vertical, uncategorizedView, options)).toBe(false);
+      expect(passes(horizontal, uncategorizedView, options)).toBe(true);
+    },
+  );
+
   it("includes a feed with no categories and no direct view assignment", () => {
     const feed = makeFeed(1);
     const item = makeItem(1);
