@@ -45,11 +45,9 @@ export default defineConfig(({ mode }) => {
       // },
     }),
     nitro({
-      preset: "node",
       serverDir: "server",
       experimental: { vite: {}, tasks: true },
-      rollupConfig: { external: ["jsdom"] },
-      rolldownConfig: { external: ["jsdom"] },
+      traceDeps: ["jsdom"],
       scheduledTasks: {
         ...scheduleTask(
           { "* * * * *": ["feeds:background-refresh"] },
