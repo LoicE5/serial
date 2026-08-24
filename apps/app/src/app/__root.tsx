@@ -16,6 +16,7 @@ import { BASE_SIGNED_OUT_URL } from "~/lib/constants";
 import { fetchConfigCss } from "~/server/auth/endpoints";
 import { SERIAL_PUBLIC_CONFIG_KEY } from "~/lib/public-config";
 import { fetchPublicConfig } from "~/server/public-config";
+import "@fontsource-variable/atkinson-hyperlegible-next/wght.css";
 
 import appCss from "~/styles/globals.css?url";
 
