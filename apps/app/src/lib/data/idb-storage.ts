@@ -88,10 +88,17 @@ export function createIDBStorage<T>(): PersistStorage<T> {
   window.addEventListener("pagehide", flushPending);
 
   return {
+    // A rejected getItem would leave zustand persist permanently un-hydrated
+    // (it never fires finish-hydration listeners on error), which wedges the
+    // reconciliation hydration domains. Treat an unreadable cache (Safari
+    // private mode, blocked upgrade, deleted database) as an empty one.
     getItem: (name: string) =>
       withCurrentIndexedDbSchema(
         async () => (await get<StorageValue<T>>(name)) ?? null,
-      ),
+      ).catch((err: unknown) => {
+        console.error(`Failed to read persisted state for ${name}`, err);
+        return null;
+      }),
 
     setItem: (name: string, value: StorageValue<T>) => {
       pendingName = name;

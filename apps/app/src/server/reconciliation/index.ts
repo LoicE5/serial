@@ -43,8 +43,10 @@ import { workerPool } from "~/lib/workerPool";
 
 type ReconciliationDatabase = typeof defaultDatabase;
 // Interim width pending measurement at the real account shape; hosted Turso
-// enforces no server-side concurrency limit, and local databases are
-// protected by dbSemaphore.
+// enforces no server-side concurrency limit. On local databases dbSemaphore
+// caps the matrix at 5 in-flight cells, though each permit covers a cell's
+// 2-3 parallel statements, so statement-level concurrency can exceed the
+// permit count.
 const VIEW_PAGE_BUILD_CONCURRENCY = 10;
 
 type Outcome<T> = { ok: true; value: T } | { ok: false; error: unknown };

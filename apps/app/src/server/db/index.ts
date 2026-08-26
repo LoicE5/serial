@@ -49,14 +49,21 @@ import * as schema from "./schema";
 //   });
 // }
 
+// Hosted Turso enforces no server-side concurrency limit (probed clean at 200
+// concurrent requests), so raise the client's internal request queue (default
+// 20) to a wide safety bound; with dbSemaphore unlimited in Turso mode, this
+// queue is the one deliberate process-wide cap on burst load. Zero is not
+// usable here: the client coerces `0` back to the default via `|| 20`. Local
+// libsql-server keeps the default queue as a backstop for its small internal
+// connection pool.
+const TURSO_CLIENT_CONCURRENCY = 100;
+
 const client = createClient({
   url: env.DATABASE_URL,
   authToken: env.DATABASE_AUTH_TOKEN,
-  // Hosted Turso enforces no server-side concurrency limit, so disable the
-  // client's internal request queue (default 20) and let dbSemaphore be the
-  // only throttle. Local libsql-server keeps the default queue as a backstop
-  // for its small internal connection pool.
-  concurrency: env.DATABASE_URL.includes(".turso.io") ? 0 : undefined,
+  concurrency: env.DATABASE_URL.includes(".turso.io")
+    ? TURSO_CLIENT_CONCURRENCY
+    : undefined,
 });
 
 // export const client = createLoggingClient(baseClient);

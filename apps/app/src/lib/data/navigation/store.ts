@@ -95,6 +95,12 @@ const vanillaNavigationSnapshotStore = createStore<NavigationSnapshotStore>()(
       version: 1,
       partialize: (state) => ({ snapshot: state.snapshot }),
       merge: (persistedState, currentState) => {
+        // A fetch or reconciliation chunk may land before the async IDB read
+        // settles; the live snapshot is fresher than the persisted one, so
+        // rehydration must not overwrite it.
+        if (currentState.fetchStatus === "success") {
+          return currentState;
+        }
         const merged = {
           ...currentState,
           ...(persistedState as Partial<NavigationSnapshotStore>),
