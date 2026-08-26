@@ -52,6 +52,11 @@ import * as schema from "./schema";
 const client = createClient({
   url: env.DATABASE_URL,
   authToken: env.DATABASE_AUTH_TOKEN,
+  // Hosted Turso enforces no server-side concurrency limit, so disable the
+  // client's internal request queue (default 20) and let dbSemaphore be the
+  // only throttle. Local libsql-server keeps the default queue as a backstop
+  // for its small internal connection pool.
+  concurrency: env.DATABASE_URL.includes(".turso.io") ? 0 : undefined,
 });
 
 // export const client = createLoggingClient(baseClient);

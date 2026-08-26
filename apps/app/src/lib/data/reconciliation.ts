@@ -562,6 +562,7 @@ const activeScopeStores = [feedItemsStore, mixedContentStore].map(
   asPersistedStore,
 );
 const bookmarkStores = [bookmarksStore].map(asPersistedStore);
+const navigationStores = [navigationSnapshotStore].map(asPersistedStore);
 const cacheUsableStores = [...organizationStores, ...activeScopeStores];
 let hydrationCleanups: Array<() => void> = [];
 let lifecycleStarted = false;
@@ -607,11 +608,11 @@ export const dataReconciliation = {
     atoms.set(contentStatusFilterAtom, DEFAULT_CONTENT_STATUS_FILTER);
     atoms.set(dateFilterAtom, 0);
     loadingActor.send({ type: "INITIAL_LOAD_START" });
-    runtime.hydrationComplete("navigation");
     hydrationCleanups = [
       observeDomainHydration("organization", organizationStores),
       observeDomainHydration("active-scope", activeScopeStores),
       observeDomainHydration("bookmarks", bookmarkStores),
+      observeDomainHydration("navigation", navigationStores),
       observeHydration(cacheUsableStores, () => runtime.cacheUsable()),
     ];
     if (runtime.getState().sseConnected || initialSubscriptionAttemptFailed) {

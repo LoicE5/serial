@@ -1,5 +1,7 @@
 import { createStore } from "zustand";
+import { persist } from "zustand/middleware";
 import { createSelectorHooks } from "../createSelectorHooks";
+import { createIDBStorage } from "../idb-storage";
 import type {
   NavigationAvailability,
   NavigationSnapshot,
@@ -26,53 +28,84 @@ type NavigationSnapshotStore = {
   fetch: () => Promise<void>;
 };
 
+export type PersistedNavigationSnapshotState = Pick<
+  NavigationSnapshotStore,
+  "snapshot"
+>;
+
+function snapshotHasContent(snapshot: NavigationSnapshot) {
+  return (
+    Object.keys(snapshot.tags).length > 0 ||
+    Object.keys(snapshot.feeds).length > 0 ||
+    Object.keys(snapshot.viewFeeds).length > 0
+  );
+}
+
 let activeFetch: Promise<void> | null = null;
 let refetchRequested = false;
 let requestGeneration = 0;
 
 const vanillaNavigationSnapshotStore = createStore<NavigationSnapshotStore>()(
-  (set, get) => ({
-    snapshot: EMPTY_SNAPSHOT,
-    fetchStatus: "idle",
-    reset: () => {
-      requestGeneration++;
-      refetchRequested = false;
-      set({ snapshot: EMPTY_SNAPSHOT, fetchStatus: "idle" });
-    },
-    set: (snapshot) => {
-      set({ snapshot, fetchStatus: "success" });
-    },
-    fetch: async () => {
-      if (activeFetch) {
-        refetchRequested = true;
-        return activeFetch;
-      }
-      activeFetch = (async () => {
-        do {
-          refetchRequested = false;
-          const fetchGeneration = requestGeneration;
-          set({ fetchStatus: "fetching" });
-          try {
-            const snapshot =
-              await orpcRouterClient.initial.getNavigationSnapshot();
-            if (fetchGeneration === requestGeneration) {
-              get().set(snapshot);
+  persist<NavigationSnapshotStore, [], [], PersistedNavigationSnapshotState>(
+    (set, get) => ({
+      snapshot: EMPTY_SNAPSHOT,
+      fetchStatus: "idle",
+      reset: () => {
+        requestGeneration++;
+        refetchRequested = false;
+        set({ snapshot: EMPTY_SNAPSHOT, fetchStatus: "idle" });
+      },
+      set: (snapshot) => {
+        set({ snapshot, fetchStatus: "success" });
+      },
+      fetch: async () => {
+        if (activeFetch) {
+          refetchRequested = true;
+          return activeFetch;
+        }
+        activeFetch = (async () => {
+          do {
+            refetchRequested = false;
+            const fetchGeneration = requestGeneration;
+            set({ fetchStatus: "fetching" });
+            try {
+              const snapshot =
+                await orpcRouterClient.initial.getNavigationSnapshot();
+              if (fetchGeneration === requestGeneration) {
+                get().set(snapshot);
+              }
+            } catch (error) {
+              if (fetchGeneration === requestGeneration) {
+                set({ fetchStatus: "idle" });
+              }
+              throw error;
             }
-          } catch (error) {
-            if (fetchGeneration === requestGeneration) {
-              set({ fetchStatus: "idle" });
-            }
-            throw error;
-          }
-        } while (refetchRequested);
-      })();
-      try {
-        await activeFetch;
-      } finally {
-        activeFetch = null;
-      }
+          } while (refetchRequested);
+        })();
+        try {
+          await activeFetch;
+        } finally {
+          activeFetch = null;
+        }
+      },
+    }),
+    {
+      name: "serial-navigation-snapshot-store",
+      storage: createIDBStorage<PersistedNavigationSnapshotState>(),
+      version: 1,
+      partialize: (state) => ({ snapshot: state.snapshot }),
+      merge: (persistedState, currentState) => {
+        const merged = {
+          ...currentState,
+          ...(persistedState as Partial<NavigationSnapshotStore>),
+        };
+        if (snapshotHasContent(merged.snapshot)) {
+          merged.fetchStatus = "success";
+        }
+        return merged;
+      },
     },
-  }),
+  ),
 );
 
 export const navigationSnapshotStore = createSelectorHooks(
