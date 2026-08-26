@@ -251,6 +251,27 @@ async function* reconcileFull(input: {
   );
   const ownerPromise = outcome(resolveAutomaticRssOwner({ database, userId }));
 
+  // Navigation stays concurrent with the View matrix and is yielded at the
+  // earliest stream boundary where it has resolved (after the active scope,
+  // or ahead of a completed wave's pages), so the sidebar can paint without
+  // lengthening the first response. A navigation failure is deferred until
+  // after the matrix and owner chunks so the rest of the epoch still
+  // streams, matching the pre-reorder failure semantics.
+  let navigationOutcome: Awaited<typeof navigationPromise> | null = null;
+  void navigationPromise.then((result) => {
+    navigationOutcome = result;
+  });
+  let navigationYielded = false;
+  const settledNavigationChunks = (): ReconciliationChunk[] => {
+    const settled = navigationOutcome;
+    if (navigationYielded || !settled?.ok) return [];
+    navigationYielded = true;
+    return [
+      { type: "navigation-snapshot", snapshot: settled.value },
+      { type: "domain-complete", domain: "navigation" },
+    ];
+  };
+
   const organization = await organizationPromise;
   if (!organization.ok) {
     yield event(
@@ -334,6 +355,10 @@ async function* reconcileFull(input: {
     target: scopeInput.target,
   });
 
+  for (const chunk of settledNavigationChunks()) {
+    yield event(request.reconciliationId, chunk);
+  }
+
   const matrixTargets = viewPageTargets(organization.value, scopeInput.target);
   for (
     let start = 0;
@@ -362,6 +387,9 @@ async function* reconcileFull(input: {
         ),
       })),
     );
+    for (const chunk of settledNavigationChunks()) {
+      yield event(request.reconciliationId, chunk);
+    }
     for (const { target, result } of pages) {
       if (!result.ok) {
         yield event(
@@ -412,14 +440,18 @@ async function* reconcileFull(input: {
     );
     return;
   }
-  yield event(request.reconciliationId, {
-    type: "navigation-snapshot",
-    snapshot: navigation.value,
-  });
-  yield event(request.reconciliationId, {
-    type: "domain-complete",
-    domain: "navigation",
-  });
+  if (!navigationYielded) {
+    navigationYielded = true;
+    yield event(request.reconciliationId, {
+      type: "navigation-snapshot",
+      snapshot: navigation.value,
+    });
+    yield event(request.reconciliationId, {
+      type: "domain-complete",
+      domain: "navigation",
+    });
+  }
+
   yield event(request.reconciliationId, {
     type: "epoch-complete",
     requiredDomains: [...REQUIRED_RECONCILIATION_DOMAINS],
