@@ -336,14 +336,17 @@ export function createNormalizedIDBStorage<T>(
               (key) => typeof key === "string" && key.startsWith(prefix),
             );
             await deleteInBatches(matchingKeys);
-            staleKeysPossible = false;
           }
           await writeNormalized({
             name: current.name,
-            previous: lastValue,
+            previous: staleKeysPossible ? null : lastValue,
             next: current.value,
             options,
           });
+          // Cleared only after the rewrite succeeds: a partially-failed
+          // rewrite can itself orphan records, so the next flush must sweep
+          // again.
+          staleKeysPossible = false;
           lastValue = current.value;
         }),
       )
