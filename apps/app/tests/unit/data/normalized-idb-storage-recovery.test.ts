@@ -174,6 +174,40 @@ describe("normalized IndexedDB storage recovery", () => {
     expect(restored?.state.dict).toEqual({ a: { id: "a" } });
   });
 
+  it("sweeps records landed by a partially-failed write", async () => {
+    const adapter = createNormalizedIDBStorage<TestState>({
+      recordFields: ["dict"],
+    });
+    adapter.setItem(STORE, storageValue(["a"]));
+    await settleFlush();
+
+    // Persist enough records that the upsert splits into two setMany
+    // batches, and fail the second: the first batch lands on disk while
+    // lastValue still describes the pre-write state.
+    const idb = await import("idb-keyval");
+    const many = Array.from({ length: 150 }, (_, index) => `n${index}`);
+    vi.mocked(idb.setMany)
+      .mockImplementationOnce((entries) => {
+        for (const [key, value] of entries) indexedDb.entries.set(key, value);
+        return Promise.resolve();
+      })
+      .mockImplementationOnce((entries) => {
+        for (const [key, value] of entries) indexedDb.entries.set(key, value);
+        return Promise.reject(new Error("simulated partial write failure"));
+      });
+    adapter.setItem(STORE, storageValue(many));
+    await settleFlush();
+
+    adapter.setItem(STORE, storageValue(["a"]));
+    await settleFlush();
+
+    const reader = createNormalizedIDBStorage<TestState>({
+      recordFields: ["dict"],
+    });
+    const restored = await reader.getItem(STORE);
+    expect(restored?.state.dict).toEqual({ a: { id: "a" } });
+  });
+
   it("keeps a migrated legacy snapshot when deleting the legacy key fails", async () => {
     indexedDb.entries.set(STORE, storageValue(["a", "b"]));
     const idb = await import("idb-keyval");
