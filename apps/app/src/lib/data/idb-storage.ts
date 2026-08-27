@@ -53,8 +53,13 @@ export function createIDBStorage<T>(): PersistStorage<T> {
               `[idb-storage] ${isDOMException ? err.name : "Unknown error"} writing "${name}" — clearing cache so next load does a full refresh`,
             );
             // Wipe all keys so the next page load starts with empty stores
-            // and triggers a full SSE fetch instead of rehydrating stale data.
-            void clear();
+            // and triggers a full SSE fetch instead of rehydrating stale
+            // data. clear() is likely to reject under the same
+            // broken-connection state that triggered this handler; don't let
+            // that become unhandled.
+            clear().catch((clearError: unknown) => {
+              console.warn("[idb-storage] clear failed:", clearError);
+            });
           } else {
             console.warn("[idb-storage] write failed:", name, err);
           }

@@ -293,6 +293,11 @@ export function createNormalizedIDBStorage<T>(
   }
 
   let lastValue: StorageValue<T> | null = null;
+  // Set when a read failed: IDB may still hold records that the diffing
+  // write (which believes `previous` is empty) would never delete, and the
+  // prefix-scan reader would resurrect them on the next load. The next flush
+  // sweeps all prefixed keys before rewriting.
+  let staleKeysPossible = false;
   let pending: { name: string; value: StorageValue<T> } | null = null;
   let writeTimeout: ReturnType<typeof setTimeout> | null = null;
   let writeChain = Promise.resolve();
@@ -307,7 +312,11 @@ export function createNormalizedIDBStorage<T>(
       console.warn(
         `[normalized-idb-storage] ${error.name} writing "${name}" — clearing cached data`,
       );
-      void clear();
+      // clear() is likely to reject under the same broken-connection state
+      // that triggered this handler; don't let that become unhandled.
+      clear().catch((clearError: unknown) => {
+        console.warn("[normalized-idb-storage] clear failed:", clearError);
+      });
     } else {
       console.warn("[normalized-idb-storage] write failed:", name, error);
     }
@@ -321,6 +330,14 @@ export function createNormalizedIDBStorage<T>(
     writeChain = writeChain
       .then(() =>
         withCurrentIndexedDbSchema(async () => {
+          if (staleKeysPossible) {
+            const prefix = normalizedPrefix(current.name);
+            const matchingKeys = (await keys<IDBValidKey>()).filter(
+              (key) => typeof key === "string" && key.startsWith(prefix),
+            );
+            await deleteInBatches(matchingKeys);
+            staleKeysPossible = false;
+          }
           await writeNormalized({
             name: current.name,
             previous: lastValue,
@@ -365,12 +382,22 @@ export function createNormalizedIDBStorage<T>(
             next: legacy,
             options,
           });
-          await del(name);
+          // The migrated snapshot is already in hand and fully written; a
+          // failure deleting the legacy key must not discard it. The next
+          // load reads the normalized root and retries the delete.
+          await del(name).catch((error: unknown) => {
+            console.warn(
+              "[normalized-idb-storage] legacy cleanup failed:",
+              name,
+              error,
+            );
+          });
           lastValue = legacy;
         }
         return legacy;
       }).catch((error: unknown) => {
         console.warn("[normalized-idb-storage] read failed:", name, error);
+        staleKeysPossible = true;
         return null;
       }),
     setItem: (name, value) => {
