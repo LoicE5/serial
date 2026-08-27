@@ -2,8 +2,8 @@
 // @vitest-environment-options { "url": "https://serial.test/" }
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createNormalizedIDBStorage } from "~/lib/data/normalized-idb-storage";
 import type { StorageValue } from "zustand/middleware";
+import { createNormalizedIDBStorage } from "~/lib/data/normalized-idb-storage";
 
 const indexedDb = vi.hoisted(() => ({
   entries: new Map<IDBValidKey, unknown>(),
@@ -112,7 +112,9 @@ describe("normalized IndexedDB storage recovery", () => {
   it("keeps a migrated legacy snapshot when deleting the legacy key fails", async () => {
     indexedDb.entries.set(STORE, storageValue(["a", "b"]));
     const idb = await import("idb-keyval");
-    vi.mocked(idb.del).mockRejectedValueOnce(new Error("simulated del failure"));
+    vi.mocked(idb.del).mockRejectedValueOnce(
+      new Error("simulated del failure"),
+    );
 
     const adapter = createNormalizedIDBStorage<TestState>({
       recordFields: ["dict"],
