@@ -3,6 +3,10 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StorageValue } from "zustand/middleware";
+import {
+  INDEXED_DB_SCHEMA_KEY,
+  INDEXED_DB_SCHEMA_VERSION,
+} from "~/lib/data/indexed-db-schema";
 import { createNormalizedIDBStorage } from "~/lib/data/normalized-idb-storage";
 
 const indexedDb = vi.hoisted(() => ({
@@ -68,6 +72,10 @@ async function settleFlush() {
 describe("normalized IndexedDB storage recovery", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    // The schema gate is a module-level singleton whose first ensure() calls
+    // clear() when the version key is missing. Seed it so each test is
+    // self-sufficient regardless of execution order or filtering.
+    indexedDb.entries.set(INDEXED_DB_SCHEMA_KEY, INDEXED_DB_SCHEMA_VERSION);
   });
 
   afterEach(() => {
@@ -107,6 +115,37 @@ describe("normalized IndexedDB storage recovery", () => {
     expect(
       storedKeys().filter((key) => String(key).includes("dict")),
     ).toHaveLength(1);
+  });
+
+  it("rewrites in full after a failed read even when the adapter had already flushed", async () => {
+    // The truncation regression: a flush completes (lastValue is non-null),
+    // then a concurrent read fails. The next flush must not diff against
+    // lastValue after sweeping, or unchanged keys are deleted and never
+    // rewritten.
+    const adapter = createNormalizedIDBStorage<TestState>({
+      recordFields: ["dict"],
+    });
+    adapter.setItem(STORE, storageValue(["a", "b"]));
+    await settleFlush();
+
+    indexedDb.failRootReads = true;
+    await expect(adapter.getItem(STORE)).resolves.toBeNull();
+    indexedDb.failRootReads = false;
+
+    // "a" is unchanged relative to lastValue; a diff against lastValue would
+    // skip rewriting it after the sweep deleted its key.
+    adapter.setItem(STORE, storageValue(["a", "b", "c"]));
+    await settleFlush();
+
+    const reader = createNormalizedIDBStorage<TestState>({
+      recordFields: ["dict"],
+    });
+    const restored = await reader.getItem(STORE);
+    expect(restored?.state.dict).toEqual({
+      a: { id: "a" },
+      b: { id: "b" },
+      c: { id: "c" },
+    });
   });
 
   it("keeps a migrated legacy snapshot when deleting the legacy key fails", async () => {

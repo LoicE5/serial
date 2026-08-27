@@ -317,6 +317,10 @@ export function createNormalizedIDBStorage<T>(
       clear().catch((clearError: unknown) => {
         console.warn("[normalized-idb-storage] clear failed:", clearError);
       });
+      // The cache no longer matches lastValue; a later same-session flush
+      // must fully rewrite rather than diff against vanished state.
+      lastValue = null;
+      staleKeysPossible = true;
     } else {
       console.warn("[normalized-idb-storage] write failed:", name, error);
     }
@@ -376,6 +380,12 @@ export function createNormalizedIDBStorage<T>(
           lastValue = normalized;
           return normalized;
         }
+
+        // No root does not mean no keys: a torn write (records land, root
+        // doesn't) leaves orphans the diffing write would never delete, so
+        // the next flush must sweep. On a genuinely empty cache the sweep
+        // finds nothing.
+        staleKeysPossible = true;
 
         const legacy = (await get<StorageValue<T>>(name)) ?? null;
         if (legacy) {
