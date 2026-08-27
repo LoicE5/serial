@@ -57,7 +57,9 @@ export const useClearAllUserData = () => {
     // Wipe all persisted state from IndexedDB immediately.
     // The reset() calls handle in-memory state but write through a 2-second
     // throttle — clear() bypasses that so nothing survives sign-out.
-    void clear();
+    clear().catch((error: unknown) => {
+      console.warn("Failed to clear persisted state on sign-out", error);
+    });
   };
 };
 
