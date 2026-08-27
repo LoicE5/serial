@@ -386,8 +386,10 @@ export function createNormalizedIDBStorage<T>(
             options,
           });
           // The migrated snapshot is already in hand and fully written; a
-          // failure deleting the legacy key must not discard it. The next
-          // load reads the normalized root and retries the delete.
+          // failure deleting the legacy key must not discard it. The stale
+          // legacy blob then leaks until a clear() or schema bump (the next
+          // load short-circuits on the normalized root and never retries the
+          // delete), which is an acceptable cost for never dropping data.
           await del(name).catch((error: unknown) => {
             console.warn(
               "[normalized-idb-storage] legacy cleanup failed:",
@@ -425,6 +427,9 @@ export function createNormalizedIDBStorage<T>(
         await del(name);
       }).catch((error: unknown) => {
         console.warn("[normalized-idb-storage] remove failed:", name, error);
+        // A partial deletion leaves keys the next diffing write would never
+        // remove; force the next flush to sweep.
+        staleKeysPossible = true;
       });
     },
   };
