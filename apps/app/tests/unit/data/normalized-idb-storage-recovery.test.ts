@@ -132,8 +132,8 @@ describe("normalized IndexedDB storage recovery", () => {
     await expect(adapter.getItem(STORE)).resolves.toBeNull();
     indexedDb.failRootReads = false;
 
-    // "a" is unchanged relative to lastValue; a diff against lastValue would
-    // skip rewriting it after the sweep deleted its key.
+    // A diff against lastValue would consider the root unchanged and skip
+    // rewriting it after the sweep deleted it, leaving the cache unreadable.
     adapter.setItem(STORE, storageValue(["a", "b", "c"]));
     await settleFlush();
 
@@ -146,6 +146,32 @@ describe("normalized IndexedDB storage recovery", () => {
       b: { id: "b" },
       c: { id: "c" },
     });
+  });
+
+  it("sweeps orphan record keys left by a torn write with no root", async () => {
+    const seeder = createNormalizedIDBStorage<TestState>({
+      recordFields: ["dict"],
+    });
+    seeder.setItem(STORE, storageValue(["a", "b"]));
+    await settleFlush();
+    // A torn write: records landed but the root (written last) did not.
+    indexedDb.entries.delete(`${STORE}::normalized:v1::root`);
+
+    // A fresh load sees no root; it must treat the cache as unknown, not
+    // as empty-and-clean.
+    const adapter = createNormalizedIDBStorage<TestState>({
+      recordFields: ["dict"],
+    });
+    await expect(adapter.getItem(STORE)).resolves.toBeNull();
+
+    adapter.setItem(STORE, storageValue(["a"]));
+    await settleFlush();
+
+    const reader = createNormalizedIDBStorage<TestState>({
+      recordFields: ["dict"],
+    });
+    const restored = await reader.getItem(STORE);
+    expect(restored?.state.dict).toEqual({ a: { id: "a" } });
   });
 
   it("keeps a migrated legacy snapshot when deleting the legacy key fails", async () => {

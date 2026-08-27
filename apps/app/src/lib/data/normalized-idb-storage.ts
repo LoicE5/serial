@@ -323,6 +323,9 @@ export function createNormalizedIDBStorage<T>(
       staleKeysPossible = true;
     } else {
       console.warn("[normalized-idb-storage] write failed:", name, error);
+      // A partially-applied write can leave records lastValue knows nothing
+      // about; the next flush must sweep and fully rewrite.
+      staleKeysPossible = true;
     }
   };
 
