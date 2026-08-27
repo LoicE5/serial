@@ -344,6 +344,11 @@ export function createNormalizedIDBStorage<T>(
   window.addEventListener("pagehide", flushPending);
 
   return {
+    // A rejected getItem would leave zustand persist permanently un-hydrated
+    // (it never fires finish-hydration listeners on error), which wedges the
+    // reconciliation hydration domains. This read path can also fail during
+    // the legacy migration writes below, so treat an unreadable cache as an
+    // empty one.
     getItem: (name) =>
       withCurrentIndexedDbSchema(async () => {
         const normalized = await readNormalized<T>(name, options);
@@ -364,6 +369,9 @@ export function createNormalizedIDBStorage<T>(
           lastValue = legacy;
         }
         return legacy;
+      }).catch((error: unknown) => {
+        console.warn("[normalized-idb-storage] read failed:", name, error);
+        return null;
       }),
     setItem: (name, value) => {
       pending = { name, value };
@@ -376,6 +384,8 @@ export function createNormalizedIDBStorage<T>(
       writeTimeout = null;
       pending = null;
       lastValue = null;
+      // zustand calls removeItem without awaiting, so a rejection here would
+      // surface as an unhandled rejection instead of a recoverable state.
       await withCurrentIndexedDbSchema(async () => {
         const prefix = normalizedPrefix(name);
         const matchingKeys = (await keys<IDBValidKey>()).filter(
@@ -383,6 +393,8 @@ export function createNormalizedIDBStorage<T>(
         );
         await deleteInBatches(matchingKeys);
         await del(name);
+      }).catch((error: unknown) => {
+        console.warn("[normalized-idb-storage] remove failed:", name, error);
       });
     },
   };

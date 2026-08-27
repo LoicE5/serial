@@ -96,7 +96,7 @@ export function createIDBStorage<T>(): PersistStorage<T> {
       withCurrentIndexedDbSchema(
         async () => (await get<StorageValue<T>>(name)) ?? null,
       ).catch((err: unknown) => {
-        console.error(`Failed to read persisted state for ${name}`, err);
+        console.warn("[idb-storage] read failed:", name, err);
         return null;
       }),
 
@@ -115,7 +115,13 @@ export function createIDBStorage<T>(): PersistStorage<T> {
       }
       pendingName = null;
       pendingValue = null;
-      await withCurrentIndexedDbSchema(() => del(name));
+      // zustand calls removeItem without awaiting, so a rejection here would
+      // surface as an unhandled rejection instead of a recoverable state.
+      await withCurrentIndexedDbSchema(() => del(name)).catch(
+        (err: unknown) => {
+          console.warn("[idb-storage] remove failed:", name, err);
+        },
+      );
     },
   };
 }

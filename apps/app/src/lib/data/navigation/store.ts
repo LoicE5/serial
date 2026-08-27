@@ -95,10 +95,12 @@ const vanillaNavigationSnapshotStore = createStore<NavigationSnapshotStore>()(
       version: 1,
       partialize: (state) => ({ snapshot: state.snapshot }),
       merge: (persistedState, currentState) => {
-        // A fetch or reconciliation chunk may land before the async IDB read
-        // settles; the live snapshot is fresher than the persisted one, so
-        // rehydration must not overwrite it.
-        if (currentState.fetchStatus === "success") {
+        // A fetch, reconciliation chunk, or sign-out reset may land before
+        // the async IDB read settles; the live state is fresher than the
+        // persisted one, so rehydration must not overwrite it. reset() bumps
+        // requestGeneration, so a nonzero value means the persisted snapshot
+        // predates a clear.
+        if (currentState.fetchStatus === "success" || requestGeneration > 0) {
           return currentState;
         }
         const merged = {
