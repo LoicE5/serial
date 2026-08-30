@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 import { getDatabaseConcurrencyLimit } from "~/lib/semaphore";
 
 describe("database concurrency policy", () => {
-  it("uses a finite ten-operation limit for hosted Turso", () => {
+  it("does not limit hosted Turso", () => {
     expect(
       getDatabaseConcurrencyLimit("libsql://serial-example.turso.io"),
-    ).toBe(10);
+    ).toBe(Number.POSITIVE_INFINITY);
   });
 
   it("keeps the tighter five-operation limit for local databases", () => {

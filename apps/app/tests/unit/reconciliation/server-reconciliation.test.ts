@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createBookmarkTestDatabase } from "../bookmarks/database";
 import type { ReconciliationInput } from "~/lib/reconciliation";
+import type { NavigationSnapshot } from "~/server/navigation/snapshot";
 import { getFeedItemReconciliationVersion } from "~/lib/reconciliation";
 import {
   bookmarks,
@@ -13,14 +14,24 @@ import {
 } from "~/server/db/schema";
 import { reconcileApplicationState } from "~/server/reconciliation";
 import * as mixedContentProjection from "~/server/mixed-content/projection";
+import * as navigationSnapshot from "~/server/navigation/snapshot";
 
 type MixedContentProjectionModule = typeof mixedContentProjection;
+type NavigationSnapshotModule = typeof navigationSnapshot;
 
 vi.mock("~/server/mixed-content/projection", async (importOriginal) => {
   const original = await importOriginal<MixedContentProjectionModule>();
   return {
     ...original,
     queryMixedContentPage: vi.fn(original.queryMixedContentPage),
+  };
+});
+
+vi.mock("~/server/navigation/snapshot", async (importOriginal) => {
+  const original = await importOriginal<NavigationSnapshotModule>();
+  return {
+    ...original,
+    queryNavigationSnapshot: vi.fn(original.queryNavigationSnapshot),
   };
 });
 
@@ -42,6 +53,12 @@ beforeEach(async () => {
   );
   vi.mocked(mixedContentProjection.queryMixedContentPage).mockImplementation(
     original.queryMixedContentPage,
+  );
+  const originalNavigation = await vi.importActual<NavigationSnapshotModule>(
+    "~/server/navigation/snapshot",
+  );
+  vi.mocked(navigationSnapshot.queryNavigationSnapshot).mockImplementation(
+    originalNavigation.queryNavigationSnapshot,
   );
   ({ database, cleanup } = await createBookmarkTestDatabase());
   await database.insert(user).values({
@@ -273,12 +290,22 @@ describe("server reconciliation", () => {
       "organization-snapshot",
       "domain-complete",
     ]);
-    expect(events.slice(-4).map(({ chunk }) => chunk.type)).toEqual([
-      "automatic-rss-owner",
-      "navigation-snapshot",
-      "domain-complete",
-      "epoch-complete",
-    ]);
+    const chunkTypes = events.map(({ chunk }) => chunk.type);
+    // Navigation streams concurrently with the View matrix: it arrives at
+    // the earliest boundary after the active first page and always before
+    // the epoch completes.
+    const navigationIndex = chunkTypes.indexOf("navigation-snapshot");
+    const firstPageIndex = chunkTypes.indexOf("active-first-page");
+    const ownerIndex = chunkTypes.indexOf("automatic-rss-owner");
+    const epochIndex = chunkTypes.indexOf("epoch-complete");
+    expect(navigationIndex).toBeGreaterThan(firstPageIndex);
+    expect(navigationIndex).toBeLessThan(epochIndex);
+    expect(chunkTypes[navigationIndex + 1]).toBe("domain-complete");
+    expect(ownerIndex).toBeGreaterThan(
+      chunkTypes.lastIndexOf("active-first-page"),
+    );
+    expect(ownerIndex).toBeLessThan(epochIndex);
+    expect(chunkTypes.at(-1)).toBe("epoch-complete");
     expect(events.every((event) => event.reconciliationId === "cold-1")).toBe(
       true,
     );
@@ -338,6 +365,133 @@ describe("server reconciliation", () => {
       type: "epoch-complete",
       requiredDomains: ["organization", "active-scope", "navigation"],
     });
+  });
+
+  it("defers a navigation failure until after the View matrix and owner chunk", async () => {
+    await database.insert(views).values({
+      id: 10,
+      userId: "reconciliation-user",
+      name: "Reading",
+      contentFilter: 3,
+      placement: 1,
+    });
+    vi.mocked(navigationSnapshot.queryNavigationSnapshot).mockRejectedValue(
+      new Error("navigation query unavailable"),
+    );
+
+    const events = await collect({
+      type: "full",
+      reconciliationId: "nav-failure",
+      selection: {
+        type: "cold",
+        contentStatus: { saveStatus: "inbox", archiveStatus: "unread" },
+        membershipRevision: 4,
+      },
+    });
+
+    const chunkTypes = events.map(({ chunk }) => chunk.type);
+    expect(
+      chunkTypes.filter((type) => type === "active-first-page"),
+    ).toHaveLength(8);
+    expect(chunkTypes).not.toContain("navigation-snapshot");
+    expect(chunkTypes).not.toContain("epoch-complete");
+    expect(chunkTypes.at(-2)).toBe("automatic-rss-owner");
+    expect(events.at(-1)?.chunk).toMatchObject({
+      type: "domain-error",
+      failure: {
+        phase: "load-navigation",
+        domain: "navigation",
+        message: "navigation query unavailable",
+      },
+    });
+  });
+
+  it("streams the View matrix and owner chunk without waiting on navigation", async () => {
+    await database.insert(views).values({
+      id: 10,
+      userId: "reconciliation-user",
+      name: "Reading",
+      contentFilter: 3,
+      placement: 1,
+    });
+    let resolveNavigation!: (snapshot: NavigationSnapshot) => void;
+    vi.mocked(navigationSnapshot.queryNavigationSnapshot).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveNavigation = resolve;
+        }),
+    );
+
+    const generator = reconcileApplicationState({
+      database,
+      userId: "reconciliation-user",
+      request: {
+        type: "full",
+        reconciliationId: "nav-deferred",
+        selection: {
+          type: "cold",
+          contentStatus: { saveStatus: "inbox", archiveStatus: "unread" },
+          membershipRevision: 4,
+        },
+      },
+    });
+
+    const beforeNavigation: string[] = [];
+    while (true) {
+      const { value, done } = await generator.next();
+      if (done) throw new Error("Stream ended before the owner chunk");
+      beforeNavigation.push(value.chunk.type);
+      if (value.chunk.type === "automatic-rss-owner") break;
+    }
+    expect(beforeNavigation).not.toContain("navigation-snapshot");
+    expect(
+      beforeNavigation.filter((type) => type === "active-first-page"),
+    ).toHaveLength(8);
+
+    resolveNavigation({ feeds: {}, tags: {}, viewFeeds: {} });
+    const afterNavigation: string[] = [];
+    for await (const event of generator) afterNavigation.push(event.chunk.type);
+    expect(afterNavigation).toEqual([
+      "navigation-snapshot",
+      "domain-complete",
+      "epoch-complete",
+    ]);
+  });
+
+  it("yields an already-resolved navigation before the first View-matrix page", async () => {
+    await database.insert(views).values({
+      id: 10,
+      userId: "reconciliation-user",
+      name: "Reading",
+      contentFilter: 3,
+      placement: 1,
+    });
+    vi.mocked(navigationSnapshot.queryNavigationSnapshot).mockResolvedValue({
+      feeds: {},
+      tags: {},
+      viewFeeds: {},
+    });
+
+    const events = await collect({
+      type: "full",
+      reconciliationId: "nav-early",
+      selection: {
+        type: "cold",
+        contentStatus: { saveStatus: "inbox", archiveStatus: "unread" },
+        membershipRevision: 4,
+      },
+    });
+
+    const chunkTypes = events.map(({ chunk }) => chunk.type);
+    const navigationIndex = chunkTypes.indexOf("navigation-snapshot");
+    const firstPageIndex = chunkTypes.indexOf("active-first-page");
+    const matrixStartIndex = chunkTypes.indexOf(
+      "active-first-page",
+      firstPageIndex + 1,
+    );
+    expect(navigationIndex).toBeGreaterThan(firstPageIndex);
+    expect(navigationIndex).toBeLessThan(matrixStartIndex);
+    expect(chunkTypes[navigationIndex + 1]).toBe("domain-complete");
   });
 
   it("terminates an unavailable explicit selection with structured scope context", async () => {

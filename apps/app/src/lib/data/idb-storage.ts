@@ -53,8 +53,13 @@ export function createIDBStorage<T>(): PersistStorage<T> {
               `[idb-storage] ${isDOMException ? err.name : "Unknown error"} writing "${name}" — clearing cache so next load does a full refresh`,
             );
             // Wipe all keys so the next page load starts with empty stores
-            // and triggers a full SSE fetch instead of rehydrating stale data.
-            void clear();
+            // and triggers a full SSE fetch instead of rehydrating stale
+            // data. clear() is likely to reject under the same
+            // broken-connection state that triggered this handler; don't let
+            // that become unhandled.
+            clear().catch((clearError: unknown) => {
+              console.warn("[idb-storage] clear failed:", clearError);
+            });
           } else {
             console.warn("[idb-storage] write failed:", name, err);
           }
@@ -88,10 +93,17 @@ export function createIDBStorage<T>(): PersistStorage<T> {
   window.addEventListener("pagehide", flushPending);
 
   return {
+    // A rejected getItem would leave zustand persist permanently un-hydrated
+    // (it never fires finish-hydration listeners on error), which wedges the
+    // reconciliation hydration domains. Treat an unreadable cache (Safari
+    // private mode, blocked upgrade, deleted database) as an empty one.
     getItem: (name: string) =>
       withCurrentIndexedDbSchema(
         async () => (await get<StorageValue<T>>(name)) ?? null,
-      ),
+      ).catch((err: unknown) => {
+        console.warn("[idb-storage] read failed:", name, err);
+        return null;
+      }),
 
     setItem: (name: string, value: StorageValue<T>) => {
       pendingName = name;
@@ -108,7 +120,13 @@ export function createIDBStorage<T>(): PersistStorage<T> {
       }
       pendingName = null;
       pendingValue = null;
-      await withCurrentIndexedDbSchema(() => del(name));
+      // zustand calls removeItem without awaiting, so a rejection here would
+      // surface as an unhandled rejection instead of a recoverable state.
+      await withCurrentIndexedDbSchema(() => del(name)).catch(
+        (err: unknown) => {
+          console.warn("[idb-storage] remove failed:", name, err);
+        },
+      );
     },
   };
 }

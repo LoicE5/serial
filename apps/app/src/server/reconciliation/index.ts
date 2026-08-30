@@ -38,9 +38,16 @@ import { queryNavigationSnapshot } from "~/server/navigation/snapshot";
 import { resolveAutomaticRssOwner } from "~/server/rss/automaticOwnership";
 import { ITEMS_PER_PAGE } from "~/server/api/constants";
 import { UNCATEGORIZED_VIEW_ID } from "~/lib/data/views/constants";
+import { dbSemaphore } from "~/lib/semaphore";
+import { workerPool } from "~/lib/workerPool";
 
 type ReconciliationDatabase = typeof defaultDatabase;
-const VIEW_PAGE_BUILD_CONCURRENCY = 4;
+// Interim width pending measurement at the real account shape; hosted Turso
+// enforces no server-side concurrency limit. On local databases dbSemaphore
+// caps the matrix at 5 in-flight cells, though each permit covers a cell's
+// 2-3 parallel statements, so statement-level concurrency can exceed the
+// permit count.
+const VIEW_PAGE_BUILD_CONCURRENCY = 10;
 
 type Outcome<T> = { ok: true; value: T } | { ok: false; error: unknown };
 
@@ -244,12 +251,35 @@ async function* reconcileFull(input: {
 }): AsyncGenerator<ReconciliationStreamEvent> {
   const { database, userId, request } = input;
   const organizationPromise = outcome(
-    loadOrganizationSnapshot({ database, userId }),
+    dbSemaphore.run(() => loadOrganizationSnapshot({ database, userId })),
   );
   const navigationPromise = outcome(
-    queryNavigationSnapshot({ database, userId }),
+    dbSemaphore.run(() => queryNavigationSnapshot({ database, userId })),
   );
-  const ownerPromise = outcome(resolveAutomaticRssOwner({ database, userId }));
+  const ownerPromise = outcome(
+    dbSemaphore.run(() => resolveAutomaticRssOwner({ database, userId })),
+  );
+
+  // Navigation stays concurrent with the View matrix and is yielded at the
+  // earliest stream boundary where it has resolved (after the active scope,
+  // or ahead of a completed wave's pages), so the sidebar can paint without
+  // lengthening the first response. A navigation failure is deferred until
+  // after the matrix and owner chunks so the rest of the epoch still
+  // streams, matching the pre-reorder failure semantics.
+  let navigationOutcome: Awaited<typeof navigationPromise> | null = null;
+  void navigationPromise.then((result) => {
+    navigationOutcome = result;
+  });
+  let navigationYielded = false;
+  const settledNavigationChunks = (): ReconciliationChunk[] => {
+    const settled = navigationOutcome;
+    if (navigationYielded || !settled?.ok) return [];
+    navigationYielded = true;
+    return [
+      { type: "navigation-snapshot", snapshot: settled.value },
+      { type: "domain-complete", domain: "navigation" },
+    ];
+  };
 
   const organization = await organizationPromise;
   if (!organization.ok) {
@@ -296,17 +326,19 @@ async function* reconcileFull(input: {
 
   const streamedVersions = emptyStreamedEntityVersions();
   const page = await outcome(
-    queryResolvedMixedContentPage({
-      database,
-      userId,
-      scope: scopeInput.target.scope,
-      scopeData: scopeDataFromOrganization(
-        organization.value,
-        scopeInput.target.scope,
-      ),
-      contentStatus: scopeInput.target.contentStatus,
-      limit: ITEMS_PER_PAGE,
-    }),
+    dbSemaphore.run(() =>
+      queryResolvedMixedContentPage({
+        database,
+        userId,
+        scope: scopeInput.target.scope,
+        scopeData: scopeDataFromOrganization(
+          organization.value,
+          scopeInput.target.scope,
+        ),
+        contentStatus: scopeInput.target.contentStatus,
+        limit: ITEMS_PER_PAGE,
+      }),
+    ),
   );
   if (!page.ok) {
     yield event(
@@ -334,20 +366,21 @@ async function* reconcileFull(input: {
     target: scopeInput.target,
   });
 
+  for (const chunk of settledNavigationChunks()) {
+    yield event(request.reconciliationId, chunk);
+  }
+
+  // Cells run through a bounded work queue: the next cell starts as soon as
+  // any slot frees, so one slow cell never holds idle slots the way the
+  // previous fixed waves did. Each cell is yielded as it completes.
   const matrixTargets = viewPageTargets(organization.value, scopeInput.target);
-  for (
-    let start = 0;
-    start < matrixTargets.length;
-    start += VIEW_PAGE_BUILD_CONCURRENCY
-  ) {
-    const batch = matrixTargets.slice(
-      start,
-      start + VIEW_PAGE_BUILD_CONCURRENCY,
-    );
-    const pages = await Promise.all(
-      batch.map(async (target) => ({
-        target,
-        result: await outcome(
+  const matrixPages = workerPool(
+    matrixTargets,
+    VIEW_PAGE_BUILD_CONCURRENCY,
+    async (target) => ({
+      target,
+      result: await outcome(
+        dbSemaphore.run(() =>
           queryResolvedMixedContentPage({
             database,
             userId,
@@ -360,38 +393,38 @@ async function* reconcileFull(input: {
             limit: ITEMS_PER_PAGE,
           }),
         ),
-      })),
-    );
-    for (const { target, result } of pages) {
-      if (!result.ok) {
-        yield event(
-          request.reconciliationId,
-          failure({
-            phase: "load-view-page",
-            domain: "active-scope",
-            target,
-            message: message(result.error),
-          }),
-        );
-        continue;
-      }
-      yield event(request.reconciliationId, {
-        type: "active-first-page",
-        page: activeFirstPage({
-          scopeInput: viewPageInput(
-            target,
-            request.selection.membershipRevision,
-          ),
-          page: result.value,
-          streamedVersions,
-        }),
-      });
-      yield event(request.reconciliationId, {
-        type: "domain-complete",
-        domain: "active-scope",
-        target,
-      });
+      ),
+    }),
+  );
+  for await (const { target, result } of matrixPages) {
+    for (const chunk of settledNavigationChunks()) {
+      yield event(request.reconciliationId, chunk);
     }
+    if (!result.ok) {
+      yield event(
+        request.reconciliationId,
+        failure({
+          phase: "load-view-page",
+          domain: "active-scope",
+          target,
+          message: message(result.error),
+        }),
+      );
+      continue;
+    }
+    yield event(request.reconciliationId, {
+      type: "active-first-page",
+      page: activeFirstPage({
+        scopeInput: viewPageInput(target, request.selection.membershipRevision),
+        page: result.value,
+        streamedVersions,
+      }),
+    });
+    yield event(request.reconciliationId, {
+      type: "domain-complete",
+      domain: "active-scope",
+      target,
+    });
   }
 
   const owner = await ownerPromise;
@@ -412,14 +445,18 @@ async function* reconcileFull(input: {
     );
     return;
   }
-  yield event(request.reconciliationId, {
-    type: "navigation-snapshot",
-    snapshot: navigation.value,
-  });
-  yield event(request.reconciliationId, {
-    type: "domain-complete",
-    domain: "navigation",
-  });
+  if (!navigationYielded) {
+    navigationYielded = true;
+    yield event(request.reconciliationId, {
+      type: "navigation-snapshot",
+      snapshot: navigation.value,
+    });
+    yield event(request.reconciliationId, {
+      type: "domain-complete",
+      domain: "navigation",
+    });
+  }
+
   yield event(request.reconciliationId, {
     type: "epoch-complete",
     requiredDomains: [...REQUIRED_RECONCILIATION_DOMAINS],
@@ -442,7 +479,7 @@ async function* reconcileTargeted(input: {
     if (target.target.type === "navigation") continue;
     if (target.target.type === "organization") {
       const organization = await outcome(
-        loadOrganizationSnapshot({ database, userId }),
+        dbSemaphore.run(() => loadOrganizationSnapshot({ database, userId })),
       );
       if (!organization.ok) {
         yield event(
@@ -469,13 +506,15 @@ async function* reconcileTargeted(input: {
     if (!("pageManifest" in target)) continue;
 
     const page = await outcome(
-      queryMixedContentPage({
-        database,
-        userId,
-        scope: target.target.scope,
-        contentStatus: target.target.contentStatus,
-        limit: ITEMS_PER_PAGE,
-      }),
+      dbSemaphore.run(() =>
+        queryMixedContentPage({
+          database,
+          userId,
+          scope: target.target.scope,
+          contentStatus: target.target.contentStatus,
+          limit: ITEMS_PER_PAGE,
+        }),
+      ),
     );
     if (!page.ok) {
       const isViewCell = target.target.scope.type === "view";
@@ -509,7 +548,7 @@ async function* reconcileTargeted(input: {
 
   if (navigationRequested) {
     const navigation = await outcome(
-      queryNavigationSnapshot({ database, userId }),
+      dbSemaphore.run(() => queryNavigationSnapshot({ database, userId })),
     );
     if (!navigation.ok) {
       yield event(

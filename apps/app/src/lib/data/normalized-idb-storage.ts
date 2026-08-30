@@ -293,6 +293,11 @@ export function createNormalizedIDBStorage<T>(
   }
 
   let lastValue: StorageValue<T> | null = null;
+  // Set when a read failed: IDB may still hold records that the diffing
+  // write (which believes `previous` is empty) would never delete, and the
+  // prefix-scan reader would resurrect them on the next load. The next flush
+  // sweeps all prefixed keys before rewriting.
+  let staleKeysPossible = false;
   let pending: { name: string; value: StorageValue<T> } | null = null;
   let writeTimeout: ReturnType<typeof setTimeout> | null = null;
   let writeChain = Promise.resolve();
@@ -307,9 +312,20 @@ export function createNormalizedIDBStorage<T>(
       console.warn(
         `[normalized-idb-storage] ${error.name} writing "${name}" — clearing cached data`,
       );
-      void clear();
+      // clear() is likely to reject under the same broken-connection state
+      // that triggered this handler; don't let that become unhandled.
+      clear().catch((clearError: unknown) => {
+        console.warn("[normalized-idb-storage] clear failed:", clearError);
+      });
+      // The cache no longer matches lastValue; a later same-session flush
+      // must fully rewrite rather than diff against vanished state.
+      lastValue = null;
+      staleKeysPossible = true;
     } else {
       console.warn("[normalized-idb-storage] write failed:", name, error);
+      // A partially-applied write can leave records lastValue knows nothing
+      // about; the next flush must sweep and fully rewrite.
+      staleKeysPossible = true;
     }
   };
 
@@ -321,12 +337,23 @@ export function createNormalizedIDBStorage<T>(
     writeChain = writeChain
       .then(() =>
         withCurrentIndexedDbSchema(async () => {
+          if (staleKeysPossible) {
+            const prefix = normalizedPrefix(current.name);
+            const matchingKeys = (await keys<IDBValidKey>()).filter(
+              (key) => typeof key === "string" && key.startsWith(prefix),
+            );
+            await deleteInBatches(matchingKeys);
+          }
           await writeNormalized({
             name: current.name,
-            previous: lastValue,
+            previous: staleKeysPossible ? null : lastValue,
             next: current.value,
             options,
           });
+          // Cleared only after the rewrite succeeds: a partially-failed
+          // rewrite can itself orphan records, so the next flush must sweep
+          // again.
+          staleKeysPossible = false;
           lastValue = current.value;
         }),
       )
@@ -344,6 +371,11 @@ export function createNormalizedIDBStorage<T>(
   window.addEventListener("pagehide", flushPending);
 
   return {
+    // A rejected getItem would leave zustand persist permanently un-hydrated
+    // (it never fires finish-hydration listeners on error), which wedges the
+    // reconciliation hydration domains. This read path can also fail during
+    // the legacy migration writes below, so treat an unreadable cache as an
+    // empty one.
     getItem: (name) =>
       withCurrentIndexedDbSchema(async () => {
         const normalized = await readNormalized<T>(name, options);
@@ -351,6 +383,12 @@ export function createNormalizedIDBStorage<T>(
           lastValue = normalized;
           return normalized;
         }
+
+        // No root does not mean no keys: a torn write (records land, root
+        // doesn't) leaves orphans the diffing write would never delete, so
+        // the next flush must sweep. On a genuinely empty cache the sweep
+        // finds nothing.
+        staleKeysPossible = true;
 
         const legacy = (await get<StorageValue<T>>(name)) ?? null;
         if (legacy) {
@@ -360,10 +398,25 @@ export function createNormalizedIDBStorage<T>(
             next: legacy,
             options,
           });
-          await del(name);
+          // The migrated snapshot is already in hand and fully written; a
+          // failure deleting the legacy key must not discard it. The stale
+          // legacy blob then leaks until a clear() or schema bump (the next
+          // load short-circuits on the normalized root and never retries the
+          // delete), which is an acceptable cost for never dropping data.
+          await del(name).catch((error: unknown) => {
+            console.warn(
+              "[normalized-idb-storage] legacy cleanup failed:",
+              name,
+              error,
+            );
+          });
           lastValue = legacy;
         }
         return legacy;
+      }).catch((error: unknown) => {
+        console.warn("[normalized-idb-storage] read failed:", name, error);
+        staleKeysPossible = true;
+        return null;
       }),
     setItem: (name, value) => {
       pending = { name, value };
@@ -376,6 +429,8 @@ export function createNormalizedIDBStorage<T>(
       writeTimeout = null;
       pending = null;
       lastValue = null;
+      // zustand calls removeItem without awaiting, so a rejection here would
+      // surface as an unhandled rejection instead of a recoverable state.
       await withCurrentIndexedDbSchema(async () => {
         const prefix = normalizedPrefix(name);
         const matchingKeys = (await keys<IDBValidKey>()).filter(
@@ -383,6 +438,11 @@ export function createNormalizedIDBStorage<T>(
         );
         await deleteInBatches(matchingKeys);
         await del(name);
+      }).catch((error: unknown) => {
+        console.warn("[normalized-idb-storage] remove failed:", name, error);
+        // A partial deletion leaves keys the next diffing write would never
+        // remove; force the next flush to sweep.
+        staleKeysPossible = true;
       });
     },
   };
