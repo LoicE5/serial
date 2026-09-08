@@ -6,6 +6,7 @@ import {
   Scripts,
 } from "@tanstack/react-router";
 import { SproutIcon } from "lucide-react";
+import { Analytics } from "@vercel/analytics/react";
 import { ThemeProvider } from "~/components/ThemeProvider";
 import { Toaster } from "~/components/ui/sonner";
 import { QueryProvider } from "~/lib/query-provider";
@@ -173,6 +174,7 @@ export function RootLayout() {
             <ReloadPrompt />
           </ThemeProvider>
         </QueryProvider>
+        <Analytics />
         <Scripts />
       </body>
     </html>
