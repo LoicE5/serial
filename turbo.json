@@ -3,7 +3,7 @@
   "tasks": {
     "build:artifact": {
       "dependsOn": ["^build:artifact"],
-      "outputs": [".output/**", "dist/**"],
+      "outputs": [".output/**", ".vercel/output/**", "dist/**"],
       "env": [
         "BACKGROUND_REFRESH_ENABLED",
         "PUBLIC_BASE_URL",

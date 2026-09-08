@@ -23,7 +23,7 @@
     "dev:email": "email dev --dir ./src/emails --port 4000",
     "prebuild": "pnpm typecheck && pnpm format && pnpm lint",
     "build:sw": "node --import=tsx ./scripts/generate-sw.ts",
-    "build:atomic": "vite build && cp instrument.server.mjs .output/server && pnpm build:sw",
+    "build:atomic": "vite build && node --import=tsx ./scripts/prepare-build-output.ts && pnpm build:sw",
     "build:artifact": "pnpm build:atomic",
     "build": "pnpm build:atomic && pnpm schema:migrate",
     "build:local": "concurrently --kill-others \"pnpm dev:db\" \"pnpm build\"",
