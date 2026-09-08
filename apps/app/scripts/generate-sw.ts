@@ -2,8 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { build } from "esbuild";
 import { injectManifest } from "workbox-build";
+import { getBuildOutput } from "./build-output";
 
-const OUTPUT_DIR = ".output/public";
+const { publicDirectory: OUTPUT_DIR } = getBuildOutput();
 const SW_SRC = "src/sw.ts";
 const SW_DEST = path.join(OUTPUT_DIR, "sw.js");
 const DIST_SW_DIR = "dist-sw";
