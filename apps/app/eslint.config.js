@@ -54,6 +54,7 @@ export default tseslint.config(
       "pnpm-lock.yaml",
       "src/server/db/migrations/",
       "node_modules/",
+      ".vercel/",
       ".output/",
       "dist/",
       "dist-sw/",
