@@ -1,8 +1,11 @@
 # Browser extension deployment
 
-`deploy-extension.yml` builds and submits Chrome and Firefox updates after an
-affected push reaches `main`. Store reviews remain asynchronous; accepted
-updates publish automatically. A manual workflow dispatch forces a release.
+`deploy-extension.yml` requests approval for Chrome and Firefox updates after
+an affected push reaches `main`. Henry approves the shared release in GitHub
+Actions before store-readiness checks, building, or submission starts. Store
+reviews remain asynchronous; accepted updates publish automatically. A manual
+workflow dispatch from `main` forces the affected check but still requires
+approval. App and website deployments remain automatic.
 
 The workflow uses a UTC calendar manifest version with four Chrome-compatible
 integer components:
@@ -108,6 +111,20 @@ Identity commands at <https://github.com/google-github-actions/auth>.
 
 ## GitHub repository configuration
 
+Create the `extension-release` environment under **Settings → Environments**:
+
+- Required reviewer: `hfellerhoff`.
+- Allow self-approval and administrator bypass, matching Posto's release gate.
+- No wait timer.
+- Deployment branches and tags: selected branches and tags, with one **branch**
+  rule for `main`. Do not add a tag rule or allow other branches.
+
+The workflow's **Approve extension release** job references this environment.
+The required-reviewer protection must be configured in GitHub; the workflow's
+environment declaration alone does not require approval. No secrets belong in
+this approval environment. Existing repository secrets and Google OIDC jobs
+remain where they are, preserving the current authentication setup.
+
 Create these Actions repository variables:
 
 | Variable                            | Value                                                                |
@@ -131,6 +148,12 @@ The affected check follows Turbo's dependency graph. Changes to the extension,
 its transitive workspace packages, repository build inputs, lockfile, or this
 deployment workflow/scripts trigger a release. Unrelated app and website changes
 do not.
+
+When **Approve extension release** is waiting, open the workflow run, choose
+**Review deployments**, select `extension-release`, then approve or reject it.
+One approval unlocks the shared release flow for both stores. A rejected or
+cancelled approval prevents both submissions. Only an affected extension run
+requests approval; app and website jobs do not use this environment.
 
 Chrome and Firefox share one release version and one readiness gate. If either
 store has a revision under review—or Chrome has one staged for publication—the
